@@ -32,6 +32,14 @@ fn sum_loop() -> Trace {
     t
 }
 
+#[cfg(all(target_arch = "x86_64", windows))]
+#[test]
+fn hand_built_loop_compiles() {
+    let t = sum_loop();
+    let code = unsafe { super::compiler::x64::compile(&t) }.expect("sum_loop should compile");
+    assert!(!code.bytes.is_empty());
+}
+
 #[test]
 fn hand_built_loop_validates() {
     let t = sum_loop();
