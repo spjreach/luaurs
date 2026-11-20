@@ -77,6 +77,8 @@ class Config:
     compiler: Path | None
     timeout: float
     ref_interp: bool = False
+    trace: bool = False
+    trace_hotloop: int | None = None
 
 
 def normalize(text: str) -> str:
@@ -85,11 +87,16 @@ def normalize(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.splitlines()).strip()
 
 
-def run(cmd: Sequence[str], timeout: float) -> Result:
+def run(cmd: Sequence[str], timeout: float, env: dict[str, str] | None = None) -> Result:
+    child_env = None
+    if env:
+        child_env = os.environ.copy()
+        child_env.update(env)
     try:
         proc = subprocess.run(
             list(cmd),
             cwd=ROOT,
+            env=child_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=timeout,
@@ -112,22 +119,30 @@ def evaluate(text: str, cfg: Config, path: Path) -> Outcome:
         "interp": run([str(cfg.ours), "--no-codegen", str(path)], cfg.timeout),
         "ref": run([str(cfg.ref), "--codegen", str(path)], cfg.timeout),
     }
+    if cfg.trace:
+        env = {"LUAU_TRACE": "1"}
+        if cfg.trace_hotloop is not None:
+            env["LUAU_TRACE_HOTLOOP"] = str(cfg.trace_hotloop)
+        results["trace"] = run([str(cfg.ours), "--codegen", str(path)], cfg.timeout, env)
     if cfg.ref_interp:
         results["ref-interp"] = run([str(cfg.ref), str(path)], cfg.timeout)
 
     ours_same = results["jit"] == results["interp"]
+    trace_same = not cfg.trace or results["trace"] == results["jit"]
     ref_same = results["jit"] == results["ref"]
     if any(result.timed_out for result in results.values()):
         category = "timeout"
     elif not ours_same:
         category = "jit-vs-interp"
+    elif not trace_same:
+        category = "trace-vs-jit"
     elif not ref_same:
         category = "ours-vs-ref"
     else:
         category = None
 
     note = ""
-    if ours_same and results["ref"].code != 0 and results["jit"].code == 0:
+    if ours_same and trace_same and results["ref"].code != 0 and results["jit"].code == 0:
         # The reference may not understand a newer Lua/Luau feature.  Do not
         # report that as a semantic mismatch; the program is simply out of scope.
         note = "reference rejected the program (unsupported feature?)"
@@ -804,6 +819,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--max-failures", type=int, default=5, help="stop after N mismatches")
     parser.add_argument("--no-shrink", action="store_true", help="do not reduce mismatches")
     parser.add_argument("--ref-interp", action="store_true", help="also run the reference interpreter")
+    parser.add_argument("--trace", action="store_true", help="also run with LUAU_TRACE=1 (tracing JIT)")
+    parser.add_argument("--trace-hotloop", type=int, default=None, help="LUAU_TRACE_HOTLOOP threshold for --trace")
     parser.add_argument("--verbose", action="store_true", help="print progress/details")
     args = parser.parse_args(argv)
 
@@ -813,6 +830,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         compiler=Path(args.compiler) if args.compiler else None,
         timeout=args.timeout,
         ref_interp=args.ref_interp,
+        trace=args.trace,
+        trace_hotloop=args.trace_hotloop,
     )
     for name, path in (("luaurs", cfg.ours), ("reference", cfg.ref)):
         if not path.exists():
