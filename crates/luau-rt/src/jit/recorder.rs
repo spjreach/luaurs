@@ -472,11 +472,12 @@ impl Recorder {
         out.snapshots.push(Snapshot { pc: rec.start_pc, entries: vec![], ref_limit: Ref(0) });
         let entry = SnapId(0);
 
-        // pre-roll: constants and slot loads
+        // pre-roll: slot loads. Constants stay in the body so their
+        // registers are only live within an iteration (they are redefined
+        // every time, which is cheap and avoids keeping them live to END).
         for (i, inst) in rec.insts.iter().enumerate() {
             let op = match &inst.op {
                 Op::SLoad { slot, guarded, .. } => Op::SLoad { slot: *slot, guarded: *guarded, snap: entry },
-                _ if inst.is_const() => inst.op.clone(),
                 _ => continue,
             };
             map[i] = Some(push(&mut out, Inst { op, ty: inst.ty }));
