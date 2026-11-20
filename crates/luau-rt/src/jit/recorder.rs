@@ -499,21 +499,17 @@ impl Recorder {
                 loads.insert(slot as usize, Ref(i as u32));
             }
         }
-        // loop-carried: read before written, and written by the iteration.
-        // TODO(before traces run): a slot written by the iteration but read
-        // only after its write is restored by exits after that write; an
-        // exit *before* it leaves the trace-entry value in the stack, which
-        // is wrong if the interpreter can read the slot at that exit's pc
-        // (bytecode liveness decides; such slots must be carried too)
-        let carried: Vec<(usize, Ref, Ref)> = loads
+        // loop-carried values: every slot the iteration writes. A slot that
+        // is also read gets its recorded SLoad as the PHI's pre; a slot the
+        // body writes without reading first still needs one: an exit before
+        // the write (e.g. a break out of the loop) must restore the
+        // previous iteration's value, not the trace-entry value - for those
+        // an entry SLoad is synthesized in the pre-roll below
+        let written_missing: Vec<(usize, Ref)> = written
             .iter()
-            .filter_map(|(&s, &ld)| written.get(&s).map(|&w| (s, ld, w)))
+            .filter(|(s, _)| !loads.contains_key(s))
+            .map(|(&s, &w)| (s, w))
             .collect();
-        for &(_, ld, w) in &carried {
-            if rec.ty(ld) != rec.ty(w) {
-                return Err(unsupported_type("loop-carried slot changes type"));
-            }
-        }
 
         let mut out = Trace::new(rec.id, rec.proto, rec.start_pc);
         let mut map: Vec<Option<Ref>> = vec![None; n];
@@ -536,14 +532,31 @@ impl Recorder {
             };
             map[i] = Some(push(&mut out, Inst { op, ty: inst.ty }));
         }
+        // entry values for the write-only carried slots (typed by the value
+        // the body writes: the guard only has to hold for the same tag)
+        let mut synth: HashMap<usize, Ref> = HashMap::new();
+        for &(s, w) in &written_missing {
+            let r = push(&mut out, Inst { op: Op::SLoad { slot: s as u16, guarded: true, snap: entry }, ty: rec.ty(w) });
+            synth.insert(s, r);
+        }
         let loop_ref = push(&mut out, Inst { op: Op::Loop, ty: IrType::Nil });
         // PHIs (their back operands are filled in after the body)
         let mut phis: Vec<(usize, Ref, Ref)> = Vec::new();
-        for &(s, ld, w) in &carried {
-            let pre = map[ld.index()].unwrap();
-            let phi = push(&mut out, Inst { op: Op::Phi { pre, back: pre }, ty: rec.ty(ld) });
-            // inside the body, the slot's entry value is the PHI
-            map[ld.index()] = Some(phi);
+        for (&s, &w) in written.iter() {
+            let (pre, recorded_load) = match loads.get(&s) {
+                Some(&ld) => {
+                    if rec.ty(ld) != rec.ty(w) {
+                        return Err(unsupported_type("loop-carried slot changes type"));
+                    }
+                    (map[ld.index()].unwrap(), true)
+                }
+                None => (synth[&s], false),
+            };
+            let phi = push(&mut out, Inst { op: Op::Phi { pre, back: pre }, ty: rec.ty(w) });
+            if recorded_load {
+                // inside the body, the slot's entry value is the PHI
+                map[loads[&s].index()] = Some(phi);
+            }
             phis.push((s, phi, w));
         }
         let phi_of: HashMap<usize, Ref> = phis.iter().map(|&(s, p, _)| (s, p)).collect();
