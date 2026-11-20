@@ -1367,9 +1367,6 @@ unsafe fn execute<const SS: bool>(L: *mut lua_State) {
                         }
                         index += 1;
                     }
-                    if found {
-                        continue;
-                    }
                     let sizenode = 1i32 << (*h).lsizenode;
                     while ((index - sizearray) as u32) < sizenode as u32 {
                         let n = (*h).node.add((index - sizearray) as usize);
@@ -1385,6 +1382,11 @@ unsafe fn execute<const SS: bool>(L: *mut lua_State) {
                     }
                     if !found {
                         pc = pc.add(1);
+                    } else if SS && crate::jit::state::trace_enabled() {
+                        let p = (*(*L).ci).p;
+                        if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                            pc = (*p).code.add(resume as usize);
+                        }
                     }
                 } else {
                     (*(*(*L).ci).p).execcount += 1;
@@ -1515,6 +1517,12 @@ unsafe fn execute<const SS: bool>(L: *mut lua_State) {
                 check_gc!();
                 (*(*(*L).ci).p).execcount += 1;
                 pc = pc.add(1).offset(id(insn));
+                if SS && crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        pc = (*p).code.add(resume as usize);
+                    }
+                }
             }
             x @ OP_LOAD_KX => {
                 let aux = *pc.add(1);

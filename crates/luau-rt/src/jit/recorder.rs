@@ -39,6 +39,9 @@ pub struct Recorder {
     b: IrBuilder,
     proto: *mut Proto,
     start_pc: u32,
+    /// last back edge in the proto whose target is `start_pc`: the loop body
+    /// is [start_pc, loop_end]; recording stops if the interpreter leaves it
+    loop_end: u32,
     id: TraceId,
     steps: usize,
     max_len: usize,
@@ -77,10 +80,12 @@ impl Recorder {
     pub unsafe fn new(id: TraceId, proto: *mut Proto, start_pc: u32, base: StkId, max_len: usize) -> Recorder {
         let nslots = (*proto).maxstacksize as usize;
         let _ = base;
+        let loop_end = find_loop_end(proto, start_pc);
         Recorder {
             b: IrBuilder::new(Trace::new(id, proto, start_pc), nslots, start_pc),
             proto,
             start_pc,
+            loop_end,
             id,
             steps: 0,
             max_len,
@@ -107,6 +112,11 @@ impl Recorder {
                 Ok(t) => Step::Closed(t),
                 Err(e) => Step::Abort(e),
             };
+        }
+        // outside the loop: a break, a goto out of the body or the loop's
+        // own exit path; the trace can't close there
+        if self.steps > 0 && (pc < self.start_pc || pc > self.loop_end) {
+            return Step::Abort(AbortReason::UnsupportedControlFlow);
         }
         self.steps += 1;
         if self.b.trace.insts.len() > self.max_len {
@@ -462,11 +472,12 @@ impl Recorder {
         out.snapshots.push(Snapshot { pc: rec.start_pc, entries: vec![], ref_limit: Ref(0) });
         let entry = SnapId(0);
 
-        // pre-roll: constants and slot loads
+        // pre-roll: slot loads. Constants stay in the body so their
+        // registers are only live within an iteration (they are redefined
+        // every time, which is cheap and avoids keeping them live to END).
         for (i, inst) in rec.insts.iter().enumerate() {
             let op = match &inst.op {
                 Op::SLoad { slot, guarded, .. } => Op::SLoad { slot: *slot, guarded: *guarded, snap: entry },
-                _ if inst.is_const() => inst.op.clone(),
                 _ => continue,
             };
             map[i] = Some(push(&mut out, Inst { op, ty: inst.ty }));
@@ -536,6 +547,29 @@ impl Recorder {
         super::ir::validate(&out).map_err(AbortReason::Internal)?;
         Ok(out)
     }
+}
+
+/// The last back edge in `p` whose target is `header`: the end of the loop
+/// whose body starts there. All three back-edge opcodes jump to
+/// `pc + 1 + D`. Returns `header` itself when no such instruction exists
+/// (recording then ends at the first step outside the header, which can't
+/// happen: the caller starts recording on a taken back edge).
+unsafe fn find_loop_end(p: *mut Proto, header: u32) -> u32 {
+    let code = (*p).code;
+    let n = (*p).sizecode as isize;
+    let mut last = header;
+    let mut pc: isize = header as isize;
+    while pc < n {
+        let insn = *code.offset(pc) as u32;
+        let op = op_of(insn);
+        if op == O::JumpBack as u8 || op == O::ForNLoop as u8 || op == O::ForGLoop as u8 {
+            if (pc + 1 + d_of(insn) as isize) as u32 == header {
+                last = pc as u32;
+            }
+        }
+        pc += O::try_from(op).map(|o| get_op_length(o) as isize).unwrap_or(1);
+    }
+    last
 }
 
 fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
