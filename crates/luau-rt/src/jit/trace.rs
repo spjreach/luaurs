@@ -45,11 +45,16 @@ pub struct Trace {
     pub state: TraceState,
     /// machine code, once compiled
     pub native: Option<super::compiler::CompiledTrace>,
+    /// side exits taken by the compiled code since it was installed; a
+    /// compiled trace that keeps failing its guards is dropped after
+    /// [`EXIT_STORM_LIMIT`](super::EXIT_STORM_LIMIT) of them so the loop is
+    /// re-recorded for the current types
+    pub side_exits: u32,
 }
 
 impl Trace {
     pub fn new(id: TraceId, proto: *mut Proto, start_pc: u32) -> Trace {
-        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None }
+        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0 }
     }
 
     pub fn inst(&self, r: Ref) -> &Inst {
