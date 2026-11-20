@@ -30,7 +30,6 @@ const LUALIBS: &[(&str, lua_CFunction)] = &[
     ("buffer", luaopen_buffer),
     ("vector", luaopen_vector),
     ("integer", luaopen_integer),
-    ("jit", crate::jit::lualib::luaopen_jit),
 ];
 
 pub unsafe fn luaL_openlibs(L: *mut lua_State) {
@@ -52,6 +51,7 @@ pub unsafe fn luaL_openextlibs(L: *mut lua_State) {
     crate::ltasklib::luaopen_task(L);
     crate::lsignal::luaopen_signal(L);
     crate::lregex::luaopen_regex(L);
+    crate::jit::lualib::luaopen_jit(L);
 }
 
 pub unsafe fn luaL_sandbox(L: *mut lua_State) {
