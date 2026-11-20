@@ -290,8 +290,17 @@ pub unsafe fn compile(t: &Trace) -> Result<Code, String> {
                 }
             }
             Op::GuardSame { a: v, k, snap } => {
-                a.cmp_rr(g(*v)?, g(*k)?);
-                a.jcc(Cond::NE, stub(*snap));
+                // Nil has no register; both nil is always equal and a
+                // mixed pair can never pass the guard.
+                let (vt, kt) = (t.ty(*v), t.ty(*k));
+                if vt == IrType::Nil && kt == IrType::Nil {
+                    // always equal
+                } else if vt == IrType::Nil || kt == IrType::Nil {
+                    a.jmp(stub(*snap));
+                } else {
+                    a.cmp_rr(g(*v)?, g(*k)?);
+                    a.jcc(Cond::NE, stub(*snap));
+                }
             }
             Op::GuardPlainTable { t: tb, store, snap } => {
                 let r = g(*tb)?;
