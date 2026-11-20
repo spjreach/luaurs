@@ -18,7 +18,8 @@ What you get:
 - **The full language.** It passes all 59 of Luau's own conformance tests, with the JIT on and
   with it off, and the compiler produces byte-for-byte the same bytecode as the C++ one.
 - **Speed.** On Luau's benchmark suite, the luaurs JIT beats the official C++ JIT on
-  **158 of 224 benchmarks** and is about **21% faster overall** (numbers below).
+  **158 of 222 benchmarks**, is within 3% on 202 of them, and is about **21% faster overall**
+  (numbers below).
 - **A Rust library.** Drop it into your Rust project, run Luau code and pass values back and
   forth in a few lines.
 - **Some extras for game-style scripts.** A `task` scheduler, `Signal` objects, a `Regex`
@@ -31,72 +32,66 @@ the C++ Luau JIT (`luau --codegen`). Each benchmark ran 3 times on the same Wind
 and the best time of each counts. "Speed vs C++" above 1 means luaurs is faster (bold when
 it's at least 3% faster).
 
-Over all 224 benchmarks (the ones below plus the micro, GC and "vibemark" sets):
+Over all 222 benchmarks that report a time (the ones below plus the micro, GC and "vibemark" sets):
 
 | | |
 |---|---|
-| luaurs faster | 158 of 224 |
+| luaurs faster | 158 of 222 (202 within 3%) |
 | Overall (geometric mean of time) | luaurs takes **0.79×** the time of C++ |
 | Best case | `sha3_int64`: about 5× faster |
-| Worst case | `air`, `murmur128_int64`: about 10% slower |
+| Worst case | `life`, `pcmmix`, proxy arithmetic: about 8–10% slower |
 
 <details>
 <summary><b>The main benchmark set, one by one</b></summary>
 
 | Benchmark | C++ Luau JIT (ms) | luaurs JIT (ms) | Speed vs C++ |
 |---|--:|--:|--:|
-| base64 | 10.80 | 9.02 | **1.20×** |
-| chess | 49.80 | 50.82 | 0.98× |
-| integers/blake2b_bit32 | 14.21 | 9.30 | **1.53×** |
-| integers/blake2b_int64 | 0.84 | 0.68 | **1.22×** |
-| integers/murmur128_bit32 | 45.33 | 33.62 | **1.35×** |
-| integers/murmur128_int64 | 0.85 | 0.94 | 0.90× |
-| integers/pollard_rho_bit32 | 90.26 | 35.13 | **2.57×** |
-| integers/pollard_rho_int64 | 1.62 | 1.50 | **1.08×** |
-| integers/sha3_bit32 | 20.38 | 10.67 | **1.91×** |
-| integers/sha3_int64 | 4.50 | 0.90 | **5.00×** |
-| integers/sha512_bit32 | 4.10 | 3.83 | **1.07×** |
-| integers/sha512_int64 | 3.02 | 1.48 | **2.05×** |
-| integers/xxh64_bit32 | 49.79 | 37.83 | **1.32×** |
-| integers/xxh64_int64 | 1.94 | 0.94 | **2.07×** |
-| life | 21.30 | 23.17 | 0.92× |
-| matrixmult | 7.43 | 5.69 | **1.31×** |
-| mesh-normal-scalar | 15.96 | 11.87 | **1.34×** |
-| mesh-normal-vector | 6.33 | 5.55 | **1.14×** |
-| pcmmix | 0.54 | 0.59 | 0.91× |
-| qsort | 41.69 | 39.78 | **1.05×** |
-| sha256 | 6.01 | 3.17 | **1.90×** |
-| shootout/ack | 27.89 | 26.96 | **1.03×** |
-| shootout/binary-trees | 16.72 | 15.63 | **1.07×** |
-| shootout/fannkuch-redux | 5.15 | 5.00 | **1.03×** |
-| shootout/fixpoint-fact | 38.06 | 38.42 | 0.99× |
-| shootout/heapsort | 11.09 | 8.48 | **1.31×** |
-| shootout/mandel | 37.22 | 38.06 | 0.98× |
-| shootout/n-body | 8.21 | 8.07 | 1.02× |
-| shootout/n-body-vector | 4.84 | 5.10 | 0.95× |
-| shootout/qt | 29.75 | 25.06 | **1.19×** |
-| shootout/queen | 0.75 | 0.56 | **1.35×** |
-| shootout/scimark | 21.23 | 19.83 | **1.07×** |
-| shootout/spectral-norm | 11.25 | 4.35 | **2.58×** |
-| sieve | 109.20 | 98.66 | **1.11×** |
-| sunspider/3d-cube | 3.25 | 3.08 | **1.05×** |
-| sunspider/3d-morph | 11.99 | 2.53 | **4.74×** |
-| sunspider/3d-raytrace | 3.63 | 2.80 | **1.30×** |
-| sunspider/controlflow-recursive | 2.95 | 2.35 | **1.25×** |
-| sunspider/crypto-aes | 5.67 | 5.69 | 1.00× |
-| sunspider/fannkuch | 6.88 | 6.30 | **1.09×** |
-| sunspider/math-cordic | 4.46 | 3.11 | **1.43×** |
-| sunspider/math-partial-sums | 6.43 | 3.02 | **2.13×** |
-| sunspider/n-body-oop | 10.63 | 11.10 | 0.96× |
-| tictactoe | 64.49 | 62.28 | **1.04×** |
-| trig | 23.70 | 5.77 | **4.11×** |
-| vector-math | 2.65 | 1.82 | **1.45×** |
-| voxelgen | 39.38 | 35.66 | **1.10×** |
-| zefbench/air | 726.20 | 806.95 | 0.90× |
-| zefbench/basic | 505.81 | 465.20 | **1.09×** |
-| zefbench/cdx | 561.31 | 530.48 | **1.06×** |
-| zefbench/richards | 713.79 | 642.14 | **1.11×** |
-
+| base64 | 10.82 | 9.42 | **1.15×** |
+| chess | 50.25 | 51.09 | 0.98× |
+| integers/blake2b_bit32 | 14.19 | 10.55 | **1.35×** |
+| integers/blake2b_int64 | 0.85 | 0.66 | **1.29×** |
+| integers/murmur128_bit32 | 45.48 | 33.99 | **1.34×** |
+| integers/murmur128_int64 | 0.84 | 0.67 | **1.25×** |
+| integers/pollard_rho_bit32 | 90.56 | 35.06 | **2.58×** |
+| integers/pollard_rho_int64 | 1.61 | 1.51 | **1.07×** |
+| integers/sha3_bit32 | 20.61 | 10.76 | **1.92×** |
+| integers/sha3_int64 | 4.11 | 0.87 | **4.70×** |
+| integers/sha512_bit32 | 4.12 | 3.86 | **1.07×** |
+| integers/sha512_int64 | 3.01 | 1.40 | **2.16×** |
+| integers/xxh64_bit32 | 49.78 | 37.97 | **1.31×** |
+| integers/xxh64_int64 | 1.95 | 0.82 | **2.37×** |
+| life | 21.36 | 23.14 | 0.92× |
+| matrixmult | 7.47 | 5.74 | **1.30×** |
+| mesh-normal-scalar | 17.22 | 12.97 | **1.33×** |
+| mesh-normal-vector | 6.56 | 5.77 | **1.14×** |
+| pcmmix | 0.54 | 0.58 | 0.93× |
+| qsort | 42.58 | 41.43 | 1.03× |
+| sha256 | 6.03 | 2.78 | **2.17×** |
+| shootout/ack | 28.22 | 27.13 | **1.04×** |
+| shootout/binary-trees | 16.72 | 15.92 | **1.05×** |
+| shootout/fannkuch-redux | 4.55 | 4.22 | **1.08×** |
+| shootout/fixpoint-fact | 37.01 | 38.25 | 0.97× |
+| shootout/heapsort | 11.08 | 8.48 | **1.31×** |
+| shootout/mandel | 37.11 | 38.01 | 0.98× |
+| shootout/n-body | 8.22 | 8.23 | 1.00× |
+| shootout/n-body-vector | 5.12 | 5.12 | 1.00× |
+| shootout/qt | 29.89 | 25.19 | **1.19×** |
+| shootout/queen | 0.76 | 0.56 | **1.37×** |
+| shootout/scimark | 21.34 | 21.53 | 0.99× |
+| shootout/spectral-norm | 11.21 | 4.35 | **2.58×** |
+| sieve | 109.03 | 100.77 | **1.08×** |
+| sunspider/3d-cube | 3.22 | 3.08 | **1.05×** |
+| sunspider/3d-morph | 11.98 | 2.56 | **4.68×** |
+| sunspider/3d-raytrace | 3.63 | 2.81 | **1.29×** |
+| sunspider/controlflow-recursive | 2.92 | 2.35 | **1.24×** |
+| sunspider/crypto-aes | 5.62 | 5.69 | 0.99× |
+| sunspider/fannkuch | 6.77 | 6.17 | **1.10×** |
+| sunspider/math-cordic | 4.39 | 3.06 | **1.43×** |
+| sunspider/math-partial-sums | 6.37 | 2.96 | **2.15×** |
+| sunspider/n-body-oop | 10.49 | 10.73 | 0.98× |
+| tictactoe | 63.41 | 61.10 | **1.04×** |
+| trig | 23.66 | 6.11 | **3.87×** |
+| vector-math | 2.67 | 1.78 | **1.50×** |
 </details>
 
 Your numbers will differ with your CPU, so run them yourself (see
@@ -344,17 +339,19 @@ To compare against C++ Luau yourself, build it with its JIT enabled, point `LUAU
 ## Roadmap
 
 The goal hasn't changed since day one: **be faster than C++ Luau everywhere**, not just on
-average. Right now luaurs wins 158 of 224 benchmarks; the rest are the to-do list.
+average. Right now luaurs wins 158 of 222 benchmarks; the rest are the to-do list.
 
-| Priority | Improvement |
-|---|---|
-| High | Close the remaining benchmark gaps (`air`, `murmur128_int64`, proxy `__index`, `pcmmix`, `life`, `table.find` loops, string interpolation: 4–11% behind) |
-| High | Expand JIT support beyond Windows x64 |
-| High | More JIT/interpreter differential tests |
-| High | Improve JIT deoptimization and fallback coverage |
-| Medium | Type checker integration |
-| Medium | More detailed JIT profiling tools |
-| Medium | Public API documentation and examples |
+| Priority | Improvement | Status |
+|---|---|---|
+| High | Close the remaining benchmark gaps: `life`, `pcmmix` (about 8%), `air` (about 7%), `table.find` loops over numbers, `n-body-vector`, `%s` string interpolation (5–8%) | In progress. Done so far: `murmur128_int64` (now 1.25× faster than C++), proxy `__index` (about 1.7× faster), `table.find` on tables and strings (now even) |
+| High | Keep integer (`int64`) loop variables in CPU registers across iterations | Planned (numbers and vectors already are) |
+| High | Expand JIT support beyond Windows x64 | Planned; Linux/macOS interpreter builds in progress |
+| High | More JIT/interpreter differential tests | Largely done: 84 of 96 opcodes covered; a random-program fuzzer against C++ Luau is running |
+| High | Improve JIT deoptimization and fallback coverage | Ongoing (type-change and metamethod bail tests added) |
+| Medium | Type checker integration | Planned |
+| Medium | More detailed JIT profiling tools | Planned |
+| Medium | Public API documentation and examples | Largely done: examples in `crates/luaurs/examples/`, userdata, tracebacks, `Vec`/`HashMap` conversions |
+| Medium | Publish the crates on crates.io | In progress |
 
 ## Current limits
 
