@@ -244,6 +244,21 @@ bash tools/jitdiff.sh     # tests/jit: the JIT must print exactly what the inter
 To compare against C++ Luau yourself, build it with its JIT enabled, point `LUAU_REF` at its
 `luau.exe`, and run `bash tools/benchrep.sh .`.
 
+## Roadmap
+
+The goal hasn't changed since day one: **be faster than C++ Luau everywhere**, not just on
+average. Right now luaurs wins 158 of 224 benchmarks; the rest are the to-do list.
+
+| Priority | Improvement |
+|---|---|
+| High | Close the remaining benchmark gaps (`air`, `murmur128_int64`, proxy `__index`, `pcmmix`, `life`, `table.find` loops, string interpolation: 4–11% behind) |
+| High | Expand JIT support beyond Windows x64 |
+| High | More JIT/interpreter differential tests |
+| High | Improve JIT deoptimization and fallback coverage |
+| Medium | Type checker integration |
+| Medium | More detailed JIT profiling tools |
+| Medium | Public API documentation and examples |
+
 ## Current limits
 
 - The JIT only runs on **x64 Windows** for now. Elsewhere your code runs in the interpreter.
