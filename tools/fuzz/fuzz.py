@@ -130,8 +130,15 @@ def evaluate(text: str, cfg: Config, path: Path) -> Outcome:
     ours_same = results["jit"] == results["interp"]
     trace_same = not cfg.trace or results["trace"] == results["jit"]
     ref_same = results["jit"] == results["ref"]
+    note = ""
     if any(result.timed_out for result in results.values()):
-        category = "timeout"
+        # A program that hangs in every engine is not a differential finding;
+        # shrinking it can even turn it into a different infinite loop.
+        if all(result.timed_out for result in results.values()):
+            category = None
+            note = "all variants timed out (skipped)"
+        else:
+            category = "timeout"
     elif not ours_same:
         category = "jit-vs-interp"
     elif not trace_same:
@@ -141,8 +148,7 @@ def evaluate(text: str, cfg: Config, path: Path) -> Outcome:
     else:
         category = None
 
-    note = ""
-    if ours_same and trace_same and results["ref"].code != 0 and results["jit"].code == 0:
+    if not note and ours_same and trace_same and results["ref"].code != 0 and results["jit"].code == 0:
         # The reference may not understand a newer Lua/Luau feature.  Do not
         # report that as a semantic mismatch; the program is simply out of scope.
         note = "reference rejected the program (unsupported feature?)"
@@ -866,7 +872,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(different_outputs(outcome) or "<none>")
 
             reduced = program
-            if not args.no_shrink:
+            if not args.no_shrink and outcome.category != "timeout":
                 check_path = tmpdir / "shrink.lua"
 
                 def check(candidate: str) -> bool:
