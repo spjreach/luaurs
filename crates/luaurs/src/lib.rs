@@ -33,13 +33,18 @@ use luau_compiler::CompileOptions;
 use luau_rt::lapi::*;
 use luau_rt::laux::*;
 use luau_rt::ldo::lua_resume;
-use luau_rt::linit::{luaL_newstate, luaL_openextlibs, luaL_openlibs, luaL_sandbox, luaL_sandboxthread};
-use luau_rt::ltasklib as task;
+use luau_rt::linit::{
+    luaL_newstate, luaL_openextlibs, luaL_openlibs, luaL_sandbox, luaL_sandboxthread,
+};
 use luau_rt::lobject::*;
 use luau_rt::lstate::lua_close;
+use luau_rt::ltasklib as task;
 use luau_rt::lvmload::luau_load;
-use std::cell::Cell;
+use std::any::{Any, TypeId};
+use std::cell::{Cell, Ref as CellRef, RefCell, RefMut as CellRefMut};
+use std::collections::HashMap;
 use std::fmt;
+use std::marker::PhantomData;
 use std::rc::{Rc, Weak};
 
 // -- errors ----------------------------------------------------------------------
@@ -49,17 +54,37 @@ use std::rc::{Rc, Weak};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Error {
     pub message: String,
+    /// Luau stack trace for runtime errors, when one is available.
+    pub traceback: Option<String>,
 }
 
 impl Error {
     pub fn new(message: impl Into<String>) -> Error {
-        Error { message: message.into() }
+        Error {
+            message: message.into(),
+            traceback: None,
+        }
+    }
+}
+
+impl Error {
+    fn runtime(message: String, traceback: String) -> Error {
+        Error {
+            message,
+            traceback: Some(traceback),
+        }
     }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
+        f.write_str(&self.message)?;
+        if let Some(traceback) = &self.traceback {
+            if !traceback.is_empty() {
+                write!(f, "\n{traceback}")?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -89,7 +114,13 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Options {
-        Options { codegen: true, optimization_level: 1, debug_level: 1, sandbox: false, task_library: true }
+        Options {
+            codegen: true,
+            optimization_level: 1,
+            debug_level: 1,
+            sandbox: false,
+            task_library: true,
+        }
     }
 }
 
@@ -137,7 +168,13 @@ impl Luau {
                 luaL_sandbox(L);
                 luaL_sandboxthread(L);
             }
-            Luau { inner: Rc::new(Inner { L, opts, depth: Cell::new(0) }) }
+            Luau {
+                inner: Rc::new(Inner {
+                    L,
+                    opts,
+                    depth: Cell::new(0),
+                }),
+            }
         }
     }
 
@@ -151,7 +188,11 @@ impl Luau {
     }
 
     fn compile_options(&self) -> CompileOptions {
-        CompileOptions { optimization_level: self.inner.opts.optimization_level, debug_level: self.inner.opts.debug_level, ..Default::default() }
+        CompileOptions {
+            optimization_level: self.inner.opts.optimization_level,
+            debug_level: self.inner.opts.debug_level,
+            ..Default::default()
+        }
     }
 
     /// Compiles source to Luau bytecode.
@@ -166,7 +207,12 @@ impl Luau {
 
     /// Prepares a chunk of source code (or bytecode, see [`Chunk::bytecode`]).
     pub fn load(&self, source: impl AsRef<[u8]>) -> Chunk<'_> {
-        Chunk { lua: self, source: source.as_ref().to_vec(), name: "=chunk".to_string(), is_bytecode: false }
+        Chunk {
+            lua: self,
+            source: source.as_ref().to_vec(),
+            name: "=chunk".to_string(),
+            is_bytecode: false,
+        }
     }
 
     /// The global table.
@@ -177,7 +223,7 @@ impl Luau {
         }
     }
 
-    pub fn set_global(&self, name: &str, value: impl Into<Value>) -> Result<()> {
+    pub fn set_global(&self, name: &str, value: impl IntoValue) -> Result<()> {
         self.globals().set(name, value)
     }
 
@@ -192,6 +238,35 @@ impl Luau {
         }
     }
 
+    /// Exposes a Rust value as full userdata owned by the Luau garbage collector.
+    /// The returned handle can borrow the value and attach a Luau metatable.
+    pub fn create_userdata<T: 'static>(&self, value: T) -> UserData<T> {
+        unsafe {
+            let L = self.L();
+            let slot = lua_newuserdatadtor(L, std::mem::size_of::<UserDataCell>(), drop_userdata)
+                as *mut UserDataCell;
+            slot.write(UserDataCell {
+                magic: USERDATA_MAGIC,
+                type_id: TypeId::of::<T>(),
+                value: RefCell::new(Box::new(value)),
+            });
+            lua_createtable(L, 0, 1);
+            lua_pushstring(L, "RustUserData");
+            lua_setfield(L, -2, "__type");
+            lua_setmetatable(L, -2);
+            UserData {
+                reference: Ref::pop(self),
+                marker: PhantomData,
+            }
+        }
+    }
+
+    /// Converts supported Rust values, including vectors and string-keyed maps,
+    /// into Luau values. Tables are allocated in this state.
+    pub fn to_value<T: IntoValue>(&self, value: T) -> Result<Value> {
+        value.into_value(self)
+    }
+
     /// A Luau function implemented by a Rust closure. Errors it returns are
     /// raised as Luau errors.
     pub fn create_function<F>(&self, f: F) -> Function
@@ -200,8 +275,12 @@ impl Luau {
     {
         unsafe {
             let L = self.L();
-            let cb: Box<Callback> = Box::new(Callback { f: Box::new(f), lua: Rc::downgrade(&self.inner) });
-            let slot = lua_newuserdatadtor(L, std::mem::size_of::<*mut Callback>(), drop_callback) as *mut *mut Callback;
+            let cb: Box<Callback> = Box::new(Callback {
+                f: Box::new(f),
+                lua: Rc::downgrade(&self.inner),
+            });
+            let slot = lua_newuserdatadtor(L, std::mem::size_of::<*mut Callback>(), drop_callback)
+                as *mut *mut Callback;
             *slot = Box::into_raw(cb);
             lua_pushcclosurek(L, trampoline, Some("rust function"), 1, None);
             Function(Ref::pop(self))
@@ -219,6 +298,7 @@ impl Luau {
             lua_pop(L, 1);
             match r {
                 task::MainOutcome::Done => Ok(()),
+                task::MainOutcome::Error => Err(runtime_error(T)),
                 _ => Err(Error::new("scheduler error")),
             }
         }
@@ -286,11 +366,11 @@ impl Luau {
             // suspended in task.wait etc.: keep running scheduled work
             match task::run_scheduler(L, T) {
                 task::MainOutcome::Done => Ok(Vec::new()),
-                task::MainOutcome::Error => Err(Error::new(error_message(T))),
+                task::MainOutcome::Error => Err(runtime_error(T)),
                 task::MainOutcome::Unexpected => Err(Error::new("thread yielded unexpectedly")),
             }
         } else {
-            Err(Error::new(error_message(T)))
+            Err(runtime_error(T))
         };
         lua_pop(L, 1);
         // the runtime buffers `print`; keep its output in order with the host's
@@ -304,6 +384,16 @@ unsafe fn error_message(T: *mut lua_State) -> String {
         Some(s) => String::from_utf8_lossy(s).into_owned(),
         None => "(error object is not a string)".to_string(),
     }
+}
+
+unsafe fn runtime_error(T: *mut lua_State) -> Error {
+    let message = error_message(T);
+    luaL_traceback(T, T, None, 0);
+    let traceback = lua_tolstring(T, -1)
+        .map(|s| String::from_utf8_lossy(s).into_owned())
+        .unwrap_or_default();
+    lua_pop(T, 1);
+    Error::runtime(message, traceback)
 }
 
 // -- chunks ------------------------------------------------------------------------
@@ -320,7 +410,11 @@ impl<'a> Chunk<'a> {
     /// The chunk name used in error messages and tracebacks.
     pub fn name(mut self, name: impl Into<String>) -> Self {
         let n = name.into();
-        self.name = if n.starts_with('=') || n.starts_with('@') { n } else { format!("={n}") };
+        self.name = if n.starts_with('=') || n.starts_with('@') {
+            n
+        } else {
+            format!("={n}")
+        };
         self
     }
 
@@ -340,7 +434,11 @@ impl<'a> Chunk<'a> {
 
     unsafe fn push_function(&self) -> Result<()> {
         let L = self.lua.L();
-        let bc = if self.is_bytecode { self.source.clone() } else { self.lua.compile(&self.source)? };
+        let bc = if self.is_bytecode {
+            self.source.clone()
+        } else {
+            self.lua.compile(&self.source)?
+        };
         if luau_load(L, self.name.as_bytes(), &bc, 0) != 0 {
             let msg = error_message(L);
             lua_pop(L, 1);
@@ -396,12 +494,18 @@ impl Ref {
         let L = lua.L();
         let id = lua_ref(L, -1);
         lua_pop(L, 1);
-        Ref { lua: lua.clone(), id }
+        Ref {
+            lua: lua.clone(),
+            id,
+        }
     }
 
     unsafe fn at(lua: &Luau, L: *mut lua_State, idx: i32) -> Ref {
         let id = lua_ref(L, idx);
-        Ref { lua: lua.clone(), id }
+        Ref {
+            lua: lua.clone(),
+            id,
+        }
     }
 
     unsafe fn push(&self) {
@@ -446,6 +550,21 @@ impl PartialEq for Ref {
 }
 
 // -- values ------------------------------------------------------------------------
+
+const USERDATA_MAGIC: u64 = 0x4c55_4155_5253_5544;
+
+struct UserDataCell {
+    magic: u64,
+    type_id: TypeId,
+    value: RefCell<Box<dyn Any>>,
+}
+
+unsafe fn drop_userdata(_L: *mut lua_State, p: *mut u8) {
+    // A Rust destructor must not unwind through Luau's C-style GC frames.
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        std::ptr::drop_in_place(p as *mut UserDataCell);
+    }));
+}
 
 /// A Luau string (arbitrary bytes).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -573,7 +692,11 @@ pub trait FromValue: Sized {
 }
 
 fn conv_err<T>(v: &Value, want: &str) -> Result<T> {
-    Err(Error::new(format!("cannot convert {} to {}", v.type_name(), want)))
+    Err(Error::new(format!(
+        "cannot convert {} to {}",
+        v.type_name(),
+        want
+    )))
 }
 
 impl FromValue for Value {
@@ -650,6 +773,206 @@ impl<T: FromValue> FromValue for Option<T> {
     }
 }
 
+/// A typed, GC-rooted handle to Rust-owned Luau userdata.
+pub struct UserData<T: 'static> {
+    reference: Ref,
+    marker: PhantomData<fn() -> T>,
+}
+
+impl<T: 'static> Clone for UserData<T> {
+    fn clone(&self) -> Self {
+        Self {
+            reference: self.reference.clone(),
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<T: 'static> fmt::Debug for UserData<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UserData")
+            .field("type_name", &std::any::type_name::<T>())
+            .finish()
+    }
+}
+
+impl<T: 'static> UserData<T> {
+    fn cell(&self) -> Result<&UserDataCell> {
+        unsafe {
+            self.reference.push();
+            let L = self.reference.lua.L();
+            let ptr = lua_touserdata(L, -1) as *mut UserDataCell;
+            let valid = !ptr.is_null()
+                && lua_objlen(L, -1) >= std::mem::size_of::<UserDataCell>() as i32
+                && (*ptr).magic == USERDATA_MAGIC
+                && (*ptr).type_id == TypeId::of::<T>();
+            lua_pop(L, 1);
+            if valid {
+                Ok(&*ptr)
+            } else {
+                Err(Error::new("userdata has a different Rust type"))
+            }
+        }
+    }
+
+    /// Borrows the Rust value immutably.
+    pub fn borrow(&self) -> Result<CellRef<'_, T>> {
+        let cell = self.cell()?;
+        CellRef::filter_map(
+            cell.value
+                .try_borrow()
+                .map_err(|_| Error::new("userdata is already mutably borrowed"))?,
+            |v| v.downcast_ref::<T>(),
+        )
+        .map_err(|_| Error::new("userdata has a different Rust type"))
+    }
+
+    /// Borrows the Rust value mutably.
+    pub fn borrow_mut(&self) -> Result<CellRefMut<'_, T>> {
+        let cell = self.cell()?;
+        CellRefMut::filter_map(
+            cell.value
+                .try_borrow_mut()
+                .map_err(|_| Error::new("userdata is already borrowed"))?,
+            |v| v.downcast_mut::<T>(),
+        )
+        .map_err(|_| Error::new("userdata has a different Rust type"))
+    }
+
+    /// Replaces the object's metatable. The table is rooted for as long as it is used.
+    pub fn set_metatable(&self, metatable: &Table) -> Result<()> {
+        unsafe {
+            let L = self.reference.lua.L();
+            self.reference.push();
+            metatable.0.push();
+            lua_setmetatable(L, -2);
+            lua_pop(L, 1);
+        }
+        Ok(())
+    }
+}
+
+impl<T: 'static> IntoValue for UserData<T> {
+    fn into_value(self, _: &Luau) -> Result<Value> {
+        Ok(Value::Other(self.reference))
+    }
+}
+
+impl<T: 'static> FromValue for UserData<T> {
+    fn from_value(v: Value, _: &Luau) -> Result<Self> {
+        match v {
+            Value::Other(reference) => {
+                let value = UserData {
+                    reference,
+                    marker: PhantomData,
+                };
+                value.cell()?;
+                Ok(value)
+            }
+            _ => conv_err(&v, "userdata"),
+        }
+    }
+}
+
+/// State-aware conversion into Luau values.
+pub trait IntoValue {
+    fn into_value(self, lua: &Luau) -> Result<Value>;
+}
+
+macro_rules! into_value_via_from {
+    ($($t:ty),* $(,)?) => {$ (
+        impl IntoValue for $t {
+            fn into_value(self, _: &Luau) -> Result<Value> { Ok(self.into()) }
+        }
+    )*};
+}
+into_value_via_from!(
+    Value,
+    bool,
+    f64,
+    f32,
+    i64,
+    i32,
+    u32,
+    i16,
+    u16,
+    i8,
+    u8,
+    usize,
+    isize,
+    String,
+    Table,
+    Function,
+    ()
+);
+
+impl IntoValue for LuauString {
+    fn into_value(self, _: &Luau) -> Result<Value> {
+        Ok(Value::String(self))
+    }
+}
+
+impl IntoValue for &str {
+    fn into_value(self, _: &Luau) -> Result<Value> {
+        Ok(Value::from(self))
+    }
+}
+
+impl<T: IntoValue> IntoValue for Option<T> {
+    fn into_value(self, lua: &Luau) -> Result<Value> {
+        match self {
+            Some(value) => value.into_value(lua),
+            None => Ok(Value::Nil),
+        }
+    }
+}
+
+impl<T: IntoValue> IntoValue for Vec<T> {
+    fn into_value(self, lua: &Luau) -> Result<Value> {
+        let table = lua.create_table();
+        for (i, item) in self.into_iter().enumerate() {
+            table.raw_set((i + 1) as f64, item.into_value(lua)?)?;
+        }
+        Ok(Value::Table(table))
+    }
+}
+
+impl<T: IntoValue> IntoValue for HashMap<String, T> {
+    fn into_value(self, lua: &Luau) -> Result<Value> {
+        let table = lua.create_table();
+        for (key, item) in self {
+            table.raw_set(key, item.into_value(lua)?)?;
+        }
+        Ok(Value::Table(table))
+    }
+}
+
+impl<T: FromValue> FromValue for Vec<T> {
+    fn from_value(v: Value, lua: &Luau) -> Result<Self> {
+        let table = Table::from_value(v, lua)?;
+        table
+            .sequence()
+            .into_iter()
+            .map(|item| T::from_value(item, lua))
+            .collect()
+    }
+}
+
+impl<T: FromValue> FromValue for HashMap<String, T> {
+    fn from_value(v: Value, lua: &Luau) -> Result<Self> {
+        let table = Table::from_value(v, lua)?;
+        table
+            .pairs()
+            .into_iter()
+            .map(|(k, value)| {
+                let key = String::from_value(k, lua)?;
+                let value = T::from_value(value, lua)?;
+                Ok((key, value))
+            })
+            .collect()
+    }
+}
+
 /// Function arguments: `()`, a single value, a tuple, or a `Vec<Value>`.
 pub trait IntoArgs {
     fn into_args(self) -> Vec<Value>;
@@ -694,8 +1017,9 @@ impl fmt::Debug for Table {
 
 impl Table {
     /// `t[key] = value` (metamethods apply).
-    pub fn set(&self, key: impl Into<Value>, value: impl Into<Value>) -> Result<()> {
-        let (k, v) = (key.into(), value.into());
+    pub fn set(&self, key: impl IntoValue, value: impl IntoValue) -> Result<()> {
+        let lua = &self.0.lua;
+        let (k, v) = (key.into_value(lua)?, value.into_value(lua)?);
         self.protected(move |lua, L| unsafe {
             lua.push(L, &k);
             lua.push(L, &v);
@@ -717,13 +1041,52 @@ impl Table {
         T::from_value(vals.into_iter().next().unwrap_or(Value::Nil), &lua)
     }
 
-    /// `rawget(t, key)`.
-    pub fn raw_get<T: FromValue>(&self, key: impl Into<Value>) -> Result<T> {
+    /// Gets a value, converting `default` only if the field is nil.
+    pub fn get_or<T: FromValue>(&self, key: impl IntoValue, default: impl IntoValue) -> Result<T> {
         let lua = self.0.lua.clone();
+        let key = key.into_value(&lua)?;
+        let vals = self.protected(move |lua, L| unsafe {
+            lua.push(L, &key);
+            lua_gettable(L, -2);
+            1
+        })?;
+        let value = vals.into_iter().next().unwrap_or(Value::Nil);
+        T::from_value(
+            if value.is_nil() {
+                default.into_value(&lua)?
+            } else {
+                value
+            },
+            &lua,
+        )
+    }
+
+    /// Typed raw key/value iteration. Conversion errors are returned instead of discarded.
+    pub fn pairs_typed<K: FromValue, V: FromValue>(&self) -> Result<Vec<(K, V)>> {
+        let lua = self.0.lua.clone();
+        self.pairs()
+            .into_iter()
+            .map(|(key, value)| Ok((K::from_value(key, &lua)?, V::from_value(value, &lua)?)))
+            .collect()
+    }
+
+    /// Typed iteration over the array part `t[1..n]`.
+    pub fn sequence_typed<T: FromValue>(&self) -> Result<Vec<T>> {
+        let lua = self.0.lua.clone();
+        self.sequence()
+            .into_iter()
+            .map(|value| T::from_value(value, &lua))
+            .collect()
+    }
+
+    /// `rawget(t, key)`.
+    pub fn raw_get<T: FromValue>(&self, key: impl IntoValue) -> Result<T> {
+        let lua = self.0.lua.clone();
+        let key = key.into_value(&lua)?;
         unsafe {
             let L = lua.L();
             self.0.push();
-            lua.push(L, &key.into());
+            lua.push(L, &key);
             lua_rawget(L, -2);
             let v = lua.value_at(L, -1);
             lua_pop(L, 2);
@@ -732,8 +1095,10 @@ impl Table {
     }
 
     /// `rawset(t, key, value)`.
-    pub fn raw_set(&self, key: impl Into<Value>, value: impl Into<Value>) -> Result<()> {
+    pub fn raw_set(&self, key: impl IntoValue, value: impl IntoValue) -> Result<()> {
         let lua = &self.0.lua;
+        let k = key.into_value(lua)?;
+        let v = value.into_value(lua)?;
         unsafe {
             let L = lua.L();
             self.0.push();
@@ -741,13 +1106,12 @@ impl Table {
                 lua_pop(L, 1);
                 return Err(Error::new("attempt to modify a readonly table"));
             }
-            let k = key.into();
             if k.is_nil() || matches!(k, Value::Number(n) if n.is_nan()) {
                 lua_pop(L, 1);
                 return Err(Error::new("invalid table key"));
             }
             lua.push(L, &k);
-            lua.push(L, &value.into());
+            lua.push(L, &v);
             lua_rawset(L, -3);
             lua_pop(L, 1);
         }
@@ -792,7 +1156,9 @@ impl Table {
 
     /// The array part `t[1..n]`.
     pub fn sequence(&self) -> Vec<Value> {
-        (1..=self.len()).map(|i| self.raw_get(i as f64).unwrap_or(Value::Nil)).collect()
+        (1..=self.len())
+            .map(|i| self.raw_get(i as f64).unwrap_or(Value::Nil))
+            .collect()
     }
 
     /// Runs `f` with the table on top of the stack inside a protected call;
@@ -808,7 +1174,9 @@ impl Table {
             let L = lua.L();
             let base = lua_gettop(L);
             t.0.push();
-            let Some(f) = f.borrow_mut().take() else { return Err(Error::new("table operation re-entered")) };
+            let Some(f) = f.borrow_mut().take() else {
+                return Err(Error::new("table operation re-entered"));
+            };
             let n = f(lua, L);
             let vals = (0..n).map(|k| lua.value_at(L, -(n - k))).collect();
             lua_settop(L, base);
@@ -874,7 +1242,9 @@ unsafe fn trampoline(L: *mut lua_State) -> i32 {
     let slot = lua_touserdata(L, lua_upvalueindex(1)) as *mut *mut Callback;
     let outcome: std::result::Result<Vec<Value>, String> = (|| {
         let cb = &**slot;
-        let Some(inner) = cb.lua.upgrade() else { return Err("Luau state is gone".to_string()) };
+        let Some(inner) = cb.lua.upgrade() else {
+            return Err("Luau state is gone".to_string());
+        };
         let lua = Luau { inner };
         lua.inner.depth.set(lua.inner.depth.get() + 1);
         let n = lua_gettop(L);
