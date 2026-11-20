@@ -570,6 +570,12 @@ impl<'f> Tr<'f> {
         if vec_ok {
             return self.t_arith_vec(kind, ra, lhs, rhs, el, er);
         }
+        // an operand seen as something else (userdata / table: metamethods)
+        // goes through the generic helper rather than an interpreter step
+        let other = |t: u8| t != T_ANY && t != TNUM && t != TVEC;
+        if (other(el) || other(er)) && !dbg_off(67108864) {
+            return kind <= 3 && self.t_arith_generic(kind, ra, lhs, rhs);
+        }
         false
     }
 

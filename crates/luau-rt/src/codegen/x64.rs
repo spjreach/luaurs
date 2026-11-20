@@ -624,29 +624,51 @@ fn is_table_access(op: u8) -> bool {
     [O::GetTable, O::GetTableN, O::GetTableKs, O::SetTable, O::SetTableN, O::SetTableKs].iter().any(|&o| o as u8 == op)
 }
 
-/// The other table accesses of `p` whose object register holds the same
-/// value source (GETUPVAL / GETIMPORT / GETGLOBAL of the same thing, as last
-/// written in straight-line order) as at instruction `at`. A heuristic: it
-/// only picks the generic (always correct) path for those sites.
-unsafe fn same_source_sites(p: *mut Proto, at: usize) -> Vec<usize> {
-    // (kind, operand) of what each register was last loaded from
+fn is_arith(op: u8) -> bool {
+    [O::Add, O::Sub, O::Mul, O::Div, O::AddK, O::SubK, O::MulK, O::DivK].iter().any(|&o| o as u8 == op)
+}
+
+fn is_arith_k(op: u8) -> bool {
+    [O::AddK, O::SubK, O::MulK, O::DivK].iter().any(|&o| o as u8 == op)
+}
+
+/// The other +, -, *, / of `p` with an operand from the same value source as
+/// register `r` at instruction `at` (see `same_source_sites`).
+unsafe fn same_source_arith_sites(p: *mut Proto, at: usize, r: i32) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut want = None;
+    scan_sources(p, |i, insn, src| {
+        let op = op_of(insn);
+        if !is_arith(op) {
+            return;
+        }
+        if i == at {
+            want = src[r as usize];
+            return;
+        }
+        let sb = src[b_of(insn) as usize];
+        let sc = if is_arith_k(op) { None } else { src[c_of(insn) as usize] };
+        out.push((i, sb, sc));
+    });
+    match want {
+        Some(w) => out.into_iter().filter(|&(_, b, c)| b == Some(w) || c == Some(w)).map(|(j, _, _)| j).collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Walks `p`'s instructions in order, calling `f(index, insn, sources)` with
+/// what each register was last loaded from (GETUPVAL / GETIMPORT /
+/// GETGLOBAL, through MOVEs) before the instruction runs. Straight-line
+/// approximation: only used to pick generic (always correct) paths.
+unsafe fn scan_sources(p: *mut Proto, mut f: impl FnMut(usize, u32, &[Option<(u8, u32)>; 256])) {
     let n = (*p).sizecode as usize;
     let mut src: [Option<(u8, u32)>; 256] = [None; 256];
-    let mut sites: Vec<(usize, Option<(u8, u32)>)> = Vec::new();
-    let mut want = None;
     let mut i = 0;
     while i < n {
         let insn = *(*p).code.add(i);
         let op = op_of(insn);
         let aux = if i + 1 < n { *(*p).code.add(i + 1) } else { 0 };
-        if is_table_access(op) {
-            let s = src[b_of(insn) as usize];
-            if i == at {
-                want = s;
-            } else {
-                sites.push((i, s));
-            }
-        }
+        f(i, insn, &src);
         let a = a_of(insn) as usize;
         let o = |x: O| op == x as u8;
         if o(O::GetUpval) {
@@ -666,6 +688,25 @@ unsafe fn same_source_sites(p: *mut Proto, at: usize) -> Vec<usize> {
         }
         i += luau_common::bytecode::get_op_length(O::from_u8(op)) as usize;
     }
+}
+
+/// The other table accesses of `p` whose object register holds the same
+/// value source (GETUPVAL / GETIMPORT / GETGLOBAL of the same thing, as last
+/// written in straight-line order) as at instruction `at`. A heuristic: it
+/// only picks the generic (always correct) path for those sites.
+unsafe fn same_source_sites(p: *mut Proto, at: usize) -> Vec<usize> {
+    let mut sites = Vec::new();
+    let mut want = None;
+    scan_sources(p, |i, insn, src| {
+        if is_table_access(op_of(insn)) {
+            let s = src[b_of(insn) as usize];
+            if i == at {
+                want = s;
+            } else {
+                sites.push((i, s));
+            }
+        }
+    });
     match want {
         Some(w) => sites.into_iter().filter(|&(_, s)| s == Some(w)).map(|(j, _)| j).collect(),
         None => Vec::new(),
@@ -737,6 +778,20 @@ pub(super) unsafe extern "sysv64" fn on_bail(p: *mut Proto, idx: u64, L: *mut lu
         // an object that isn't a table at one table access is usually not
         // one at the others reading the same upvalue / global / import:
         // give them the generic path now rather than one recompile each
+        // likewise arithmetic on an object with metamethods
+        if is_arith(op) && !super::trans::dbg_off(33554432) {
+            let obj = |t: u8| t == LUA_TUSERDATA as u8 || t == LUA_TTABLE as u8;
+            let b_obj = obj(rtag(b_of(insn)));
+            let c_obj = !is_arith_k(op) && obj(rtag(c_of(insn)));
+            if b_obj || c_obj {
+                let r = if b_obj { b_of(insn) } else { c_of(insn) };
+                for j in same_source_arith_sites(p, idx as usize, r) {
+                    if !e.0.iter().any(|x| x.0 == j as u32) {
+                        e.0.push((j as u32, FB_GENERIC, FB_GENERIC));
+                    }
+                }
+            }
+        }
         if is_table_access(op) && rtag(b_of(insn)) != LUA_TTABLE as u8 && !super::trans::dbg_off(33554432) {
             let objtag = rtag(b_of(insn));
             for j in same_source_sites(p, idx as usize) {
