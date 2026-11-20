@@ -534,6 +534,23 @@ impl Recorder {
                 *b = back;
             }
         }
+        // explicit snapshot at the loop close: every slot the body wrote
+        // holds its end-of-iteration value. The compiler's interrupt exit
+        // (back edge taken, running out of trace budget) restores from the
+        // LAST snapshot; with this one that restore is unconditional - the
+        // interrupt can only happen after the whole body ran.
+        let close_entries: Vec<SnapEntry> = written
+            .iter()
+            .map(|(&slot, &w)| {
+                let v = map[w.index()].ok_or_else(|| AbortReason::Internal("loop-close slot value outside the body".into()))?;
+                Ok(SnapEntry { slot: slot as u16, value: v })
+            })
+            .collect::<R<_>>()?;
+        out.snapshots.push(Snapshot {
+            pc: rec.start_pc,
+            entries: close_entries,
+            ref_limit: Ref(out.insts.len() as u32),
+        });
         // each snapshot covers the values defined before its first user
         for (i, inst) in out.insts.iter().enumerate() {
             if let Some(s) = inst.snapshot() {

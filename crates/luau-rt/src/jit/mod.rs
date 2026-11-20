@@ -47,6 +47,12 @@ pub fn is_recording() -> bool {
     RECORDING.with(|r| r.get())
 }
 
+/// Side exits a compiled trace may take before it is dropped and the loop
+/// is re-recorded for the current types (a guard that keeps failing would
+/// otherwise exit on every iteration - correct but slower than the
+/// interpreter).
+pub const EXIT_STORM_LIMIT: u32 = 16;
+
 /// A taken backward branch to `header` in `p` (single-step interpreter,
 /// tracing enabled). Runs the loop's compiled trace if there is one and
 /// returns the pc to resume interpreting at; otherwise counts the loop and
@@ -59,13 +65,32 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
     if let Some((entry, id)) = native {
         let f: compiler::TraceFn = std::mem::transmute(entry);
         let ex = f(base, L);
+        if ex & 0x8000_0000 == 0 {
+            debug::log(debug::Event::SideExit { id: id.0, snap: ex });
+            // a side exit: counts toward the storm limit (see
+            // EXIT_STORM_LIMIT), which drops the trace for a re-record
+            let storm = state::with(|s| {
+                let t = s.traces.get_mut(&(p as usize, header)).expect("trace vanished");
+                t.side_exits += 1;
+                t.side_exits >= EXIT_STORM_LIMIT
+            });
+            if storm {
+                let reason = trace::AbortReason::Internal("side exit storm".into());
+                debug::log(debug::Event::TraceAbort { id: id.0, pc: header, reason: &reason });
+                state::with(|s| {
+                    s.traces.remove(&(p as usize, header));
+                    s.hot.penalize(p, header);
+                    s.aborts.push((id, header, reason));
+                });
+                return Some(header);
+            }
+        }
         return Some(state::with(|s| {
             let t = &s.traces[&(p as usize, header)];
             if ex & 0x8000_0000 != 0 {
                 // interrupted at the back edge: resume at the header
                 header
             } else {
-                debug::log(debug::Event::SideExit { id: id.0, snap: ex });
                 t.snapshots[ex as usize].pc
             }
         }));
