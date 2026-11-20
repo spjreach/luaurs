@@ -161,8 +161,43 @@ fn main() -> Result<(), luaurs::Error> {
 }
 ```
 
-There's a runnable version in `crates/luaurs/examples/hello.rs`
-(`cargo run --release -p luaurs --example hello`).
+Runnable versions are in `crates/luaurs/examples/`:
+
+```sh
+cargo run -p luaurs --example hello     # the tour above
+cargo run -p luaurs --example compiled  # bytecode, errors, Rust functions
+cargo run -p luaurs --example regex     # the Regex library from Rust and Luau
+```
+
+### Compiling once and handling errors
+
+`lua.compile` returns bytecode that can be loaded and run as often as you like, with the
+usual `Chunk` arguments:
+
+```rust
+let bytecode = lua.compile("local a, b = ... return a * b + 1")?;
+let results = lua.load(&bytecode).bytecode().call((6, 7))?;
+let answer = results.first().and_then(Value::as_number).unwrap_or(0.0);
+assert_eq!(answer, 43.0);
+```
+
+Runtime errors carry the chunk name and line, and compile errors are returned before any
+script runs:
+
+```rust
+match lua.load("return missing.value").name("demo").exec() {
+    Ok(()) => {}
+    Err(error) => eprintln!("runtime: {error}"),
+}
+
+if let Err(error) = lua.compile("local = 1") {
+    eprintln!("compile: {error}");
+}
+```
+
+The `task`, `Signal` and `Regex` extras are installed by default, so scripts loaded through
+this crate can use them exactly like the CLI does. See the `regex` example for using the
+regex engine directly from Rust as well.
 
 ### The API in short
 
