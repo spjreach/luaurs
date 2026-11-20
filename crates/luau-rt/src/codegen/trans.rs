@@ -1632,6 +1632,9 @@ impl<'f> Tr<'f> {
         let s = self.slow(false);
         let tl = self.labels[target];
         let el = self.labels[exit];
+        // the key (e.g. `_` in `for _, v in t`) need not be written when
+        // the body never reads it
+        let key_dead = !super::live::has(&self.live[target], ra + 3) && !self.is_volatile[ra + 3] && !dbg_off(8388608);
         let ra = ra as i32;
         let a = &mut self.a;
         emit_loop_checks(a, s);
@@ -1666,10 +1669,12 @@ impl<'f> Tr<'f> {
         a.store(R::R13, reg(ra + 2), R::R8);
         a.mov_ri(R::R9, (LU_TAG_ITERATOR as u32 as u64) | ((LUA_TLIGHTUSERDATA as u64) << 32));
         a.store(R::R13, reg(ra + 2) + TAGWORD, R::R9);
-        a.cvtsi2sd64(X(0), R::R8);
-        a.movsd_store(R::R13, reg(ra + 3), X(0));
-        a.mov_ri(R::R9, NUM_TAG);
-        a.store(R::R13, reg(ra + 3) + TAGWORD, R::R9);
+        if !key_dead {
+            a.cvtsi2sd64(X(0), R::R8);
+            a.movsd_store(R::R13, reg(ra + 3), X(0));
+            a.mov_ri(R::R9, NUM_TAG);
+            a.store(R::R13, reg(ra + 3) + TAGWORD, R::R9);
+        }
         copy_tv(a, R::R13, reg(ra + 4), R::Rdx, 0);
         a.jmp(tl);
         a.bind(hash);
