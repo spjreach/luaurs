@@ -409,8 +409,25 @@ pub(super) fn emit_c_call(a: &mut Asm, cx: &Ctx, insn: u32, pc: usize, next: Lab
     a.load(R::Rcx, R::R12, OFF_CI);
     a.cmp_rm(R::Rcx, R::R12, OFF_END_CI);
     a.jcc(Cond::E, slow);
-    emit_args(a, pc);
-    a.mov_ri(R::Rax, native_call_c as usize as u64);
+    let nparams = b_of(insn) - 1;
+    let nres = c_of(insn) - 1;
+    let isfb = (insn & 0xff) as u8 == O::CallFb as u8;
+    if !isfb && nparams >= 0 && (0..=2).contains(&nres) && !super::trans::dbg_off(4194304) {
+        // fixed shape: a helper specialized for it
+        a.mov_rr(R::Rdi, R::R12);
+        a.lea(R::Rsi, R::R13, reg(ra));
+        a.lea(R::Rdx, R::R13, reg(ra + 1 + nparams));
+        a.mov_ri(R::Rcx, (pc + 4) as u64);
+        let f = match nres {
+            0 => crate::lvmexecute::native_call_c_fixed::<0> as usize,
+            1 => crate::lvmexecute::native_call_c_fixed::<1> as usize,
+            _ => crate::lvmexecute::native_call_c_fixed::<2> as usize,
+        };
+        a.mov_ri(R::Rax, f as u64);
+    } else {
+        emit_args(a, pc);
+        a.mov_ri(R::Rax, native_call_c as usize as u64);
+    }
     a.call_r(R::Rax);
     a.cmp_ri(R::Rax, NATIVE_LEAVE as i32);
     a.jcc(Cond::E, cx.ret);

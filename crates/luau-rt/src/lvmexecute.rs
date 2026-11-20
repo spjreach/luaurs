@@ -2161,6 +2161,50 @@ pub(crate) unsafe extern "sysv64-unwind" fn native_call_c(L: *mut lua_State, pc:
     if call_c(L, pc, clvalue(ra), ra, npc, isfb, argtop, ic(insn) as i32 - 1) { NATIVE_CONT } else { NATIVE_LEAVE }
 }
 
+/// CALL (not CALL_FB) of a C function with a fixed argument count and `NR`
+/// results (0..=2), as `native_call_c` with the shape known at compile time:
+/// `ra` = the callee's slot, `argtop` = one past the last argument, `npc` =
+/// the next instruction.
+#[cfg(all(target_arch = "x86_64", windows))]
+pub(crate) unsafe extern "sysv64-unwind" fn native_call_c_fixed<const NR: i32>(L: *mut lua_State, ra: StkId, argtop: StkId, npc: *const Instruction) -> usize {
+    let ccl = clvalue(ra);
+    (*(*L).ci).savedpc = npc;
+    let ci = incr_ci(L);
+    (*ci).func = ra;
+    (*ci).p = std::ptr::null_mut();
+    (*ci).base = ra.add(1);
+    (*ci).top = argtop.add((*ccl).stacksize as usize);
+    (*ci).savedpc = std::ptr::null();
+    (*ci).flags = 0;
+    (*ci).nresults = NR;
+    (*L).base = (*ci).base;
+    (*L).top = argtop;
+    luaD_checkstackfornewci(L, (*ccl).stacksize as i32);
+    let func = Closure::c(ccl).f.unwrap_unchecked();
+    let n = func(L);
+    if n < 0 {
+        return NATIVE_LEAVE;
+    }
+    let ci = (*L).ci;
+    let cip = ci.sub(1);
+    // (the stack may have moved: everything is re-read from the CallInfo)
+    let res = (*ci).func;
+    let top = (*L).top;
+    let mut i = 0;
+    while i < NR {
+        if i < n {
+            setobj_fresh(res.add(i as usize), top.sub((n - i) as usize));
+        } else {
+            setnilvalue(res.add(i as usize));
+        }
+        i += 1;
+    }
+    (*L).ci = cip;
+    (*L).base = (*cip).base;
+    (*L).top = (*cip).top;
+    NATIVE_CONT
+}
+
 /// RETURN from native code: pops the frame like the interpreter's fast path
 /// and continues the caller natively when it has native code.
 #[cfg(all(target_arch = "x86_64", windows))]

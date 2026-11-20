@@ -2874,7 +2874,7 @@ const CSE_UPVAL: u8 = 100;
 
 /// Debugging aid: `LUAU_CODEGEN_OFF` is a bit mask of translator features to
 /// disable (1 typed loads, 2 inline builtins, 4 table templates, 8 arithmetic).
-fn dbg_off(bit: u32) -> bool {
+pub(super) fn dbg_off(bit: u32) -> bool {
     static MASK: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *MASK.get_or_init(|| std::env::var("LUAU_CODEGEN_OFF").ok().and_then(|v| v.parse().ok()).unwrap_or(0)) & bit != 0
 }
