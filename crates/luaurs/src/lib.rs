@@ -83,7 +83,7 @@ pub struct Options {
     /// global table that reads through to them), like the `luau` CLI.
     /// Default: off.
     pub sandbox: bool,
-    /// Install `task`, `Signal` and the debug extensions. Default: on.
+    /// Install `task`, `Signal`, `Regex` and the debug extensions. Default: on.
     pub task_library: bool,
 }
 

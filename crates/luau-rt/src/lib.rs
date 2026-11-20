@@ -40,6 +40,7 @@ pub mod lutf8lib;
 pub mod ldblib;
 pub mod lbuflib;
 pub mod lveclib;
+pub mod lregex;
 pub mod lintlib;
 pub mod ltasklib;
 pub mod lsignal;

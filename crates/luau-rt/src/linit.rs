@@ -45,11 +45,12 @@ pub unsafe fn luaL_openlibs(L: *mut lua_State) {
     }
 }
 
-/// Opens the non-standard libraries: `task` and `Signal` (Roblox-style
-/// APIs; `luaL_openlibs` stays standard).
+/// Opens the non-standard libraries: `task`, `Signal` and `Regex`
+/// (Roblox-style APIs plus the regex engine; `luaL_openlibs` stays standard).
 pub unsafe fn luaL_openextlibs(L: *mut lua_State) {
     crate::ltasklib::luaopen_task(L);
     crate::lsignal::luaopen_signal(L);
+    crate::lregex::luaopen_regex(L);
 }
 
 pub unsafe fn luaL_sandbox(L: *mut lua_State) {

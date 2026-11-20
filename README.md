@@ -21,8 +21,8 @@ What you get:
   **158 of 224 benchmarks** and is about **21% faster overall** (numbers below).
 - **A Rust library.** Drop it into your Rust project, run Luau code and pass values back and
   forth in a few lines.
-- **Some extras for game-style scripts.** A `task` scheduler, `Signal` objects and a few more
-  `debug` helpers, in the style of Roblox's APIs.
+- **Some extras for game-style scripts.** A `task` scheduler, `Signal` objects, a `Regex`
+  library and a few more `debug` helpers, in the style of Roblox's APIs.
 
 ## Benchmarks
 
@@ -204,6 +204,68 @@ task.delay(1, function() done:Fire("ready") end)
 print(done:Wait())  --> ready
 ```
 
+**`Regex`**: a regular-expression engine. Patterns are compiled to a Thompson NFA and run by
+a Pike VM, so matching is linear in the size of the input (there is no catastrophic
+backtracking). A literal prefix and a first-character class skip regions that cannot start a
+match.
+
+`Regex.new(pattern [, flags])` returns a `Regex` object. `flags` is a string made of `i`
+(case-insensitive), `m` (multi-line `^`/`$`), `s` (`.` matches a newline) and `x` (ignore
+whitespace and `#` comments). Inline flags (`(?i)`, `(?im-sx:...)`) work too.
+`Regex.Escape(text)` escapes a string so it can be used literally in a pattern.
+
+| | |
+|---|---|
+| `re:Match(contents) -> match?` | first match, or `nil` |
+| `re:MatchMany(contents [, limit]) -> {match}` | every non-overlapping match |
+| `re:Find(contents [, init]) -> match?` | first match at or after the 1-based `init` |
+| `re:Test(contents)`, `re:IsMatch(contents)` | `true` when the pattern matches |
+| `re:Replace(contents, replacement) -> string` | replace the first match |
+| `re:ReplaceAll(contents, replacement) -> string` | replace every match |
+| `re:Split(contents [, limit]) -> {string}` | split on matches |
+| `re:Count(contents) -> number` | number of matches |
+| `re.Pattern`, `re.Flags`, `re.GroupCount`, `re.GroupNames` | pattern information |
+| `re:GetPattern()` | the pattern |
+
+A `match` has `.Text` (also `.Value`), `.Start`/`.Finish` (1-based, inclusive, like
+`string.find`), `.ByteStart`/`.ByteEnd` (0-based, end exclusive), `.Captures[0..n]`,
+`.Starts[0..n]` and `.Ends[0..n]`, plus `:GetCapture(i)`, `:GetStart(i)`, `:GetEnd(i)` and
+`:GetText()`. Capture 0 is the whole match. `tostring(match)` returns its text.
+
+`replacement` uses `$0` (whole match), `$1`..`$99`, `${name}` and `$name` for named groups,
+and `$$` for a literal `$`. It can also be a function that receives the match and returns
+the string to insert. `Replace` also accepts a match object as `contents`.
+
+```lua
+local input = "[DEBUG] (ID): 99821"
+local label = "[DEBUG] (ID): "
+
+local escaped = Regex.Escape(label)
+local regex = Regex.new(escaped .. "(\\d+)")
+local match = regex:Match(input)
+
+if match then
+    print("ID:", regex:Replace(match, "$1"))  --> ID: 99821
+end
+```
+
+Supported syntax: literals, `.`, `^`, `$`, `\A`, `\z`, `\Z`, `\b`, `\B`, character classes
+(`[...]`, `[^...]`, POSIX `[[:alpha:]]`), escapes (`\n`, `\t`, `\xHH`, `\u{...}`,
+`\Q...\E`), `\d \D \w \W \s \S`, Unicode properties (`\p{L}`, `\p{Lu}`, ...), groups
+(capturing, `(?:...)`, named `(?<name>...)` / `(?P<name>...)`), alternation and greedy/lazy
+quantifiers (`* + ? {n} {n,} {n,m}`). Backreferences and lookaround raise an error instead of
+silently doing the wrong thing.
+
+```lua
+local regex = Regex.new("(?<word>[A-Za-z]+):(\\d+)")
+local m = regex:Match("My Cool Id: 31235335")
+if m then
+    print(m.Captures[1])                             --> Id
+    print(regex:Replace(m, "$2"))                    --> 31235335
+    print(regex:ReplaceAll("a:1 b:2", "${word}=$2")) --> a=1 b=2
+end
+```
+
 **`debug`**: on top of the usual `info` and `traceback`, there are:
 - `newcclosure(f, name?)` and `newlclosure(f, name?)`;
 - `setreadonly(t, bool)`;
@@ -217,7 +279,7 @@ print(done:Wait())  --> ready
 | `crates/luau-common` | bytecode format, opcodes, builtin ids, hashing, allocator |
 | `crates/luau-ast` | lexer and parser |
 | `crates/luau-compiler` | the bytecode compiler (constant folding, inlining, loop unrolling, type info) |
-| `crates/luau-rt` | VM, garbage collector, coroutines, standard libraries, `task`/`Signal`, and the x64 JIT (`codegen/`) |
+| `crates/luau-rt` | VM, garbage collector, coroutines, standard libraries, `task`/`Signal`/`Regex`, and the x64 JIT (`codegen/`) |
 | `crates/luau-config`, `crates/luau-require` | `.luaurc` / `.config.luau` and require-by-string |
 | `crates/luaurs` | the Rust library |
 | `crates/luau` | the `luau` and `luau-compile` programs |
