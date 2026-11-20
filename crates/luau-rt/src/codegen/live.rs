@@ -108,6 +108,12 @@ pub unsafe fn info(code: *const u32, n: usize, i: usize) -> Option<Info> {
             }
             if c != 0 {
                 set_range(&mut df, a, a + c - 1);
+            } else {
+                // results up to L->top: R(A) and everything above is
+                // overwritten (the frame above A is the callee's), so a
+                // later variadic use doesn't keep the whole function's
+                // upper registers live
+                set_from(&mut df, a);
             }
         }
         O::Return => {
@@ -199,6 +205,9 @@ pub unsafe fn info(code: *const u32, n: usize, i: usize) -> Option<Info> {
             let cc = ((call >> 24) & 0xff) as usize;
             if cc != 0 {
                 set_range(&mut df1, ca, ca + cc - 1);
+            } else {
+                // results up to L->top, as for a variadic CALL
+                set_from(&mut df1, ca);
             }
             succ = [next, call_i + 1];
         }
