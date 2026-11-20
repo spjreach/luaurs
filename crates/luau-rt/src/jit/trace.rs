@@ -43,11 +43,13 @@ pub struct Trace {
     /// index of the `Loop` instruction, once the loop is closed
     pub loop_ref: Option<Ref>,
     pub state: TraceState,
+    /// machine code, once compiled
+    pub native: Option<super::compiler::CompiledTrace>,
 }
 
 impl Trace {
     pub fn new(id: TraceId, proto: *mut Proto, start_pc: u32) -> Trace {
-        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording }
+        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None }
     }
 
     pub fn inst(&self, r: Ref) -> &Inst {

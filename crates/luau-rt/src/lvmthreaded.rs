@@ -9179,6 +9179,12 @@ unsafe extern "sysv64-unwind" fn s_OP_FOR_N_LOOP(L: *mut lua_State, mut pc: *con
                 // instruction fetch to the floating point compare
                 if if step > 0.0 { idx <= limit } else { limit <= idx } {
                     pc = pc.offset(id(insn));
+                    if SS && crate::jit::state::trace_enabled() {
+                        let p = (*(*L).ci).p;
+                        if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
                 } else {
                     std::hint::cold_path();
                 }
@@ -21145,6 +21151,12 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_N_LOOP(L: *mut lua_State, 
                 // instruction fetch to the floating point compare
                 if if step > 0.0 { idx <= limit } else { limit <= idx } {
                     pc = pc.offset(id(insn));
+                    if SS && crate::jit::state::trace_enabled() {
+                        let p = (*(*L).ci).p;
+                        if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
                 } else {
                     std::hint::cold_path();
                 }

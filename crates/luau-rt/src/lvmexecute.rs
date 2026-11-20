@@ -161,7 +161,9 @@ fn aux_not(aux: u32) -> i32 {
 /// `luau_execute`: runs Lua frames until a frame with
 /// `LUA_CALLINFO_RETURN` returns or the thread yields/breaks.
 pub unsafe fn luau_execute(L: *mut lua_State) {
-    if (*L).singlestep {
+    // (the tracing JIT records and enters traces from the single-step
+    // interpreter for now)
+    if (*L).singlestep || crate::jit::state::trace_enabled() {
         execute::<true>(L)
     } else {
         execute_threaded(L)
@@ -346,6 +348,10 @@ unsafe fn execute<const SS: bool>(L: *mut lua_State) {
     let mut ovr: u32 = NO_OVR;
 
     loop {
+        if SS && crate::jit::is_recording() {
+            let p = (*(*L).ci).p;
+            crate::jit::record_step(L, p, pc.offset_from((*p).code) as u32, base);
+        }
         if SS {
             if let Some(step) = (*(*L).global).cb.debugstep {
                 let op = op_of(*pc);
@@ -1275,6 +1281,12 @@ unsafe fn execute<const SS: bool>(L: *mut lua_State) {
                 // instruction fetch to the floating point compare
                 if if step > 0.0 { idx <= limit } else { limit <= idx } {
                     pc = pc.offset(id(insn));
+                    if SS && crate::jit::state::trace_enabled() {
+                        let p = (*(*L).ci).p;
+                        if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
                 } else {
                     std::hint::cold_path();
                 }

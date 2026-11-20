@@ -46,7 +46,8 @@ fn in_debug_range() -> bool {
 }
 
 unsafe fn compile_tree(p: *mut Proto, stats: &mut (u32, u32)) {
-    if in_debug_range() && x64::compile_proto(p) {
+    // (the tracing JIT runs loops from the interpreter for now)
+    if in_debug_range() && !crate::jit::state::trace_enabled() && x64::compile_proto(p) {
         stats.0 += 1;
     } else {
         stats.1 += 1;
