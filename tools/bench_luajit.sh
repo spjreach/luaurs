@@ -71,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix="luaurs-luajit-bench-") as td:
 
     results = {name: {bench: [] for bench, _ in prepared} for name in commands}
     outputs = {bench: {} for bench, _ in prepared}
-    compiled_traces = 0
+    trace_events = {event: 0 for event in ("compiled", "side_exit", "abort")}
     for bench, script in prepared:
         for sample in range(repeats):
             for vm, (executable, extra_env) in commands.items():
@@ -94,9 +94,13 @@ with tempfile.TemporaryDirectory(prefix="luaurs-luajit-bench-") as td:
                 if not match:
                     raise SystemExit(f"{vm}/{bench} emitted no timing result:\n{proc.stdout[-4000:]}")
                 if vm == "luaurs JIT":
-                    compiled_traces += sum(
-                        line.startswith("[TRACE] compiled ") for line in proc.stdout.splitlines()
-                    )
+                    for line in proc.stdout.splitlines():
+                        if line.startswith("[TRACE] compiled "):
+                            trace_events["compiled"] += 1
+                        elif line.startswith("[TRACE] side_exit "):
+                            trace_events["side_exit"] += 1
+                        elif line.startswith("[TRACE] abort "):
+                            trace_events["abort"] += 1
                 output = "\n".join(
                     line for line in proc.stdout.splitlines()
                     if not line.startswith(("BENCH_RESULT\t", "[TRACE] "))
@@ -108,7 +112,7 @@ with tempfile.TemporaryDirectory(prefix="luaurs-luajit-bench-") as td:
                 results[vm][bench].append(float(match.group(1)) * 1000.0)
                 print(f"sample {sample + 1}/{repeats}: {bench} on {vm}: process {wall_ms:.1f} ms", flush=True)
 
-    if compiled_traces == 0:
+    if trace_events["compiled"] == 0:
         raise SystemExit("luaurs emitted no compiled trace events; refusing to label these timings as JIT")
 
     for bench, _ in prepared:
@@ -126,5 +130,6 @@ with tempfile.TemporaryDirectory(prefix="luaurs-luajit-bench-") as td:
     for bench, _ in prepared:
         medians = [statistics.median(results[vm][bench]) for vm in commands]
         print(f"| {bench} | {medians[0]:.3f} | {medians[1]:.3f} | {medians[2]:.3f} |")
-    print(f"\nSamples per VM: {repeats}; executions averaged per process: {inner_runs}; outputs matched exactly; luaurs compiled {compiled_traces} traces across samples.")
+    print(f"\nSamples per VM: {repeats}; executions averaged per process: {inner_runs}; outputs matched exactly.")
+    print("luaurs trace events across samples: " + ", ".join(f"{event}={count}" for event, count in trace_events.items()))
 PY
