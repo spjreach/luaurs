@@ -1,0 +1,18 @@
+[package]
+name = "luaurs"
+description = "Embed Luau in Rust: a pure-Rust Luau runtime, compiler and x64 JIT with a safe API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme = "README.md"
+keywords = ["luau", "lua", "scripting", "jit", "vm"]
+categories = ["development-tools", "game-development", "compilers"]
+
+[lib]
+name = "luaurs"
+path = "src/lib.rs"
+
+[dependencies]
+luau-common = { path = "../luau-common" }
+luau-compiler = { path = "../luau-compiler" }
+luau-rt = { path = "../luau-rt" }

@@ -1,0 +1,10 @@
+[package]
+name = "luau-require"
+description = "Rust port of Luau's Require module (require-by-string)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+luau-config = { path = "../luau-config" }
+luau-rt = { path = "../luau-rt" }

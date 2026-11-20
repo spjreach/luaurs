@@ -1,0 +1,1038 @@
+// Fast paths for hot opcodes, spliced into lvmthreaded.rs by gen_threaded.py.
+//
+// Each section `// @fast OP_A OP_B ...` is the body of a small handler that
+// must not call anything (so it needs no callee-saved registers). It ends in
+// `next!(n)` (advance pc by n, dispatch), `jump!(off)` (pc += off, dispatch)
+// or `slow!()` (tail-call the full generated handler for the same pc, which
+// redoes the whole instruction). Available: L, pc, base, k, insn.
+
+// @fast OP_ADD
+let ra = base.add(ia(insn) as usize);
+let rb = base.add(ib(insn) as usize);
+let rc = base.add(ic(insn) as usize);
+if ttisnumber(rb) && ttisnumber(rc) {
+    setnvalue(ra, nvalue(rb) + nvalue(rc));
+    next!(1);
+}
+if ttisvector(rb) || ttisvector(rc) {
+    std::hint::cold_path();
+    if let Some((x, y, z)) = vec_addsub_fast(rb, rc, false) {
+        setvvalue(ra, x, y, z);
+        next!(1);
+    }
+}
+slow!();
+
+// @fast OP_SUB
+let ra = base.add(ia(insn) as usize);
+let rb = base.add(ib(insn) as usize);
+let rc = base.add(ic(insn) as usize);
+if ttisnumber(rb) && ttisnumber(rc) {
+    setnvalue(ra, nvalue(rb) - nvalue(rc));
+    next!(1);
+}
+if ttisvector(rb) || ttisvector(rc) {
+    std::hint::cold_path();
+    if let Some((x, y, z)) = vec_addsub_fast(rb, rc, true) {
+        setvvalue(ra, x, y, z);
+        next!(1);
+    }
+}
+slow!();
+
+// @fast OP_MUL
+let ra = base.add(ia(insn) as usize);
+let rb = base.add(ib(insn) as usize);
+let rc = base.add(ic(insn) as usize);
+if ttisnumber(rb) && ttisnumber(rc) {
+    setnvalue(ra, nvalue(rb) * nvalue(rc));
+    next!(1);
+}
+if ttisvector(rb) || ttisvector(rc) {
+    std::hint::cold_path();
+    if let Some((x, y, z)) = vec_muldiv(rb, rc, false) {
+        setvvalue(ra, x, y, z);
+        next!(1);
+    }
+}
+slow!();
+
+// @fast OP_DIV
+let ra = base.add(ia(insn) as usize);
+let rb = base.add(ib(insn) as usize);
+let rc = base.add(ic(insn) as usize);
+if ttisnumber(rb) && ttisnumber(rc) {
+    setnvalue(ra, nvalue(rb) / nvalue(rc));
+    next!(1);
+}
+if ttisvector(rb) || ttisvector(rc) {
+    std::hint::cold_path();
+    if let Some((x, y, z)) = vec_muldiv(rb, rc, true) {
+        setvvalue(ra, x, y, z);
+        next!(1);
+    }
+}
+slow!();
+
+// @fast OP_I_DIV
+let ra = base.add(ia(insn) as usize);
+let rb = base.add(ib(insn) as usize);
+let rc = base.add(ic(insn) as usize);
+if ttisnumber(rb) && ttisnumber(rc) {
+    setnvalue(ra, luai_numidiv(nvalue(rb), nvalue(rc)));
+    next!(1);
+}
+slow!();
+
+// @fast OP_MOD
+let ra = base.add(ia(insn) as usize);
+let rb = base.add(ib(insn) as usize);
+let rc = base.add(ic(insn) as usize);
+if ttisnumber(rb) && ttisnumber(rc) {
+    setnvalue(ra, luai_nummod(nvalue(rb), nvalue(rc)));
+    next!(1);
+}
+slow!();
+
+// @fast OP_MUL_K
+let ra = base.add(ia(insn) as usize);
+let rb = base.add(ib(insn) as usize);
+let kv = k.add(ic(insn) as usize);
+if ttisnumber(rb) {
+    setnvalue(ra, nvalue(rb) * nvalue(kv));
+    next!(1);
+}
+slow!();
+
+// @fast OP_DIV_K
+let ra = base.add(ia(insn) as usize);
+let rb = base.add(ib(insn) as usize);
+let kv = k.add(ic(insn) as usize);
+if ttisnumber(rb) {
+    setnvalue(ra, nvalue(rb) / nvalue(kv));
+    next!(1);
+}
+slow!();
+
+// @fast OP_I_DIV_K
+let ra = base.add(ia(insn) as usize);
+let rb = base.add(ib(insn) as usize);
+let kv = k.add(ic(insn) as usize);
+if ttisnumber(rb) {
+    setnvalue(ra, luai_numidiv(nvalue(rb), nvalue(kv)));
+    next!(1);
+}
+slow!();
+
+// @fast OP_MINUS
+let ra = base.add(ia(insn) as usize);
+let rb = base.add(ib(insn) as usize);
+if ttisnumber(rb) {
+    setnvalue(ra, -nvalue(rb));
+    next!(1);
+}
+slow!();
+
+// @fast OP_JUMP_IF_EQ OP_JUMP_IF_NOT_EQ
+let ra = base.add(ia(insn) as usize);
+let rb = base.add(*pc.add(1) as usize);
+let iseq = x == Opcode::JumpIfEq as u8;
+let eq = if (*ra).tt != (*rb).tt {
+    false
+} else {
+    match (*ra).tt {
+        LUA_TNIL => true,
+        LUA_TBOOLEAN => bvalue(ra) == bvalue(rb),
+        LUA_TNUMBER => nvalue(ra) == nvalue(rb),
+        LUA_TSTRING => gcvalue(ra) == gcvalue(rb),
+        LUA_TINTEGER => lvalue(ra) == lvalue(rb),
+        _ => slow!(),
+    }
+};
+if eq == iseq {
+    jump!(1 + id(insn));
+}
+next!(2);
+
+// @fast OP_JUMP_IF_LE OP_JUMP_IF_NOT_LE OP_JUMP_IF_LT OP_JUMP_IF_NOT_LT
+let ra = base.add(ia(insn) as usize);
+let rb = base.add(*pc.add(1) as usize);
+if ttisnumber(ra) && ttisnumber(rb) {
+    let islt = x == Opcode::JumpIfLt as u8 || x == Opcode::JumpIfNotLt as u8;
+    let want = x == Opcode::JumpIfLe as u8 || x == Opcode::JumpIfLt as u8;
+    let cond = if islt { nvalue(ra) < nvalue(rb) } else { nvalue(ra) <= nvalue(rb) };
+    if cond == want {
+        jump!(1 + id(insn));
+    }
+    next!(2);
+}
+slow!();
+
+// @fast OP_GET_TABLE_KS
+let rb = base.add(ib(insn) as usize);
+if ttistable(rb) {
+    let kv = k.add(*pc.add(1) as usize);
+    let h = hvalue(rb);
+    let n = (*h).node.add(ic(insn) & (*h).nodemask8 as usize);
+    if (*n).key.tt() == LUA_TSTRING && (*n).key.value.gc == (*kv).value.gc && !ttisnil(gval(n)) {
+        setobj(base.add(ia(insn) as usize), gval(n));
+        next!(2);
+    }
+}
+slow!();
+
+// @fast OP_SET_TABLE_KS
+let rb = base.add(ib(insn) as usize);
+if ttistable(rb) {
+    let ra = base.add(ia(insn) as usize);
+    let kv = k.add(*pc.add(1) as usize);
+    let h = hvalue(rb);
+    let n = (*h).node.add(ic(insn) & (*h).nodemask8 as usize);
+    if (*n).key.tt() == LUA_TSTRING
+        && (*n).key.value.gc == (*kv).value.gc
+        && !ttisnil(gval(n))
+        && (*h).readonly == 0
+        && !(iscollectable(ra) && isblack(h as *mut GCObject) && iswhite(gcvalue(ra)))
+    {
+        setobj(gval(n), ra);
+        next!(2);
+    }
+}
+slow!();
+
+// @fast OP_GET_GLOBAL
+let h = (*clvalue((*(*L).ci).func)).env;
+let kv = k.add(*pc.add(1) as usize);
+let n = (*h).node.add(ic(insn) & (*h).nodemask8 as usize);
+if (*n).key.tt() == LUA_TSTRING && (*n).key.value.gc == (*kv).value.gc && !ttisnil(gval(n)) {
+    setobj(base.add(ia(insn) as usize), gval(n));
+    next!(2);
+}
+slow!();
+
+// @fast OP_GET_TABLE
+let rb = base.add(ib(insn) as usize);
+let rc = base.add(ic(insn) as usize);
+if ttistable(rb) && ttisnumber(rc) {
+    let h = hvalue(rb);
+    let indexd = nvalue(rc);
+    let index = d2i_trunc(indexd);
+    if (index as u32).wrapping_sub(1) < (*h).sizearray as u32 && (*h).metatable.is_null() && index as f64 == indexd {
+        setobj(base.add(ia(insn) as usize), (*h).array.add(index as usize - 1));
+        next!(1);
+    }
+}
+if ttistable(rb) && (*hvalue(rb)).metatable.is_null() {
+    // plain table without metamethods, any key type: a separate handler so
+    // that this one stays call-free
+    #[inline(never)]
+    unsafe extern "sysv64-unwind" fn plain(L: *mut lua_State, pc: *const Instruction, base: StkId, k: *mut TValue) {
+        let insn = *pc;
+        let res = luaH_get(hvalue(base.add(ib(insn) as usize)), base.add(ic(insn) as usize));
+        setobj(base.add(ia(insn) as usize), res);
+        become dispatch(L, pc.add(1), base, k)
+    }
+    become plain(L, pc, base, k);
+}
+slow!();
+
+// @fast OP_SET_TABLE
+let rb = base.add(ib(insn) as usize);
+let rc = base.add(ic(insn) as usize);
+if ttistable(rb) && ttisnumber(rc) {
+    let ra = base.add(ia(insn) as usize);
+    let h = hvalue(rb);
+    let indexd = nvalue(rc);
+    let index = d2i_trunc(indexd);
+    if (index as u32).wrapping_sub(1) < (*h).sizearray as u32
+        && (*h).metatable.is_null()
+        && (*h).readonly == 0
+        && index as f64 == indexd
+        && !(iscollectable(ra) && isblack(h as *mut GCObject) && iswhite(gcvalue(ra)))
+    {
+        setobj((*h).array.add(index as usize - 1), ra);
+        next!(1);
+    }
+}
+if ttistable(rb) && (*hvalue(rb)).metatable.is_null() && (*hvalue(rb)).readonly == 0 {
+    // plain table, existing key of any type (inserts take the full handler)
+    #[inline(never)]
+    unsafe extern "sysv64-unwind" fn plain(L: *mut lua_State, pc: *const Instruction, base: StkId, k: *mut TValue) {
+        let insn = *pc;
+        let ra = base.add(ia(insn) as usize);
+        let h = hvalue(base.add(ib(insn) as usize));
+        let rc = base.add(ic(insn) as usize);
+        let slot = luaH_get(h, rc);
+        if slot != luaO_nilobject() && !(iscollectable(ra) && isblack(h as *mut GCObject) && iswhite(gcvalue(ra))) {
+            invalidateTMcache(h);
+            setobj(slot as *mut TValue, ra);
+            become dispatch(L, pc.add(1), base, k)
+        }
+        become s_OP_SET_TABLE(L, pc, base, k)
+    }
+    become plain(L, pc, base, k);
+}
+slow!();
+
+// @fast OP_GET_TABLE_N
+let rb = base.add(ib(insn) as usize);
+if ttistable(rb) {
+    let h = hvalue(rb);
+    let c = ic(insn);
+    if (c as u32) < (*h).sizearray as u32 && (*h).metatable.is_null() {
+        setobj(base.add(ia(insn) as usize), (*h).array.add(c));
+        next!(1);
+    }
+}
+slow!();
+
+// @fast OP_SET_TABLE_N
+let rb = base.add(ib(insn) as usize);
+if ttistable(rb) {
+    let ra = base.add(ia(insn) as usize);
+    let h = hvalue(rb);
+    let c = ic(insn);
+    if (c as u32) < (*h).sizearray as u32
+        && (*h).metatable.is_null()
+        && (*h).readonly == 0
+        && !(iscollectable(ra) && isblack(h as *mut GCObject) && iswhite(gcvalue(ra)))
+    {
+        setobj((*h).array.add(c), ra);
+        next!(1);
+    }
+}
+slow!();
+
+// @fast OP_FOR_G_LOOP
+// pairs/ipairs/generalized iteration over a table (array and hash part);
+// interrupts, GC steps and iterator functions take the full handler
+if (*(*L).global).cb.interrupt.is_some() || luaC_needsGC(L) {
+    slow!();
+}
+let ra = base.add(ia(insn) as usize);
+let aux = *pc.add(1) as i32;
+if ttisnil(ra) && ttistable(ra.add(1)) && aux <= 2 {
+    let h = hvalue(ra.add(1));
+    let mut index = pvalue(ra.add(2)) as usize as i32;
+    let sizearray = (*h).sizearray;
+    if aux < 0 && ((index as u32) >= sizearray as u32 || ttisnil((*h).array.add(index as usize))) {
+        next!(2);
+    }
+    while (index as u32) < sizearray as u32 {
+        let e = (*h).array.add(index as usize);
+        if !ttisnil(e) {
+            setpvalue(ra.add(2), (index + 1) as usize as *mut u8, LU_TAG_ITERATOR);
+            setnvalue(ra.add(3), (index + 1) as f64);
+            setobj(ra.add(4), e);
+            jump!(1 + id(insn));
+        }
+        index += 1;
+    }
+    let sizenode = 1i32 << (*h).lsizenode;
+    while ((index - sizearray) as u32) < sizenode as u32 {
+        let n = (*h).node.add((index - sizearray) as usize);
+        if !ttisnil(gval(n)) {
+            setpvalue(ra.add(2), (index + 1) as usize as *mut u8, LU_TAG_ITERATOR);
+            getnodekey(ra.add(3), n);
+            setobj(ra.add(4), gval(n));
+            jump!(1 + id(insn));
+        }
+        index += 1;
+    }
+    next!(2);
+}
+slow!();
+
+// @fast OP_CALL OP_CALL_FB
+// calls into Lua functions; C functions, __call, interrupts and stack/CI
+// growth take the full handler
+if (*(*L).global).cb.interrupt.is_some() {
+    slow!();
+}
+let ra = base.add(ia(insn) as usize);
+if !ttisfunction(ra) {
+    slow!();
+}
+let ccl = clvalue(ra);
+if (*L).ci == (*L).end_ci {
+    slow!();
+}
+if (*ccl).isC != 0 {
+    // C function call (same steps as the full handler's C branch)
+    #[inline(never)]
+    unsafe extern "sysv64-unwind" fn ccall(L: *mut lua_State, pc: *const Instruction, base: StkId, k: *mut TValue) {
+        let insn = *pc;
+        let isfb = (insn & 0xff) as u8 == Opcode::CallFb as u8;
+        let npc = pc.add(if isfb { 2 } else { 1 });
+        let ra = base.add(ia(insn) as usize);
+        let nparams = ib(insn) as i32 - 1;
+        let nresults = ic(insn) as i32 - 1;
+        let argtop = if nparams == LUA_MULTRET { (*L).top } else { ra.add(1 + nparams as usize) };
+        let ccl = clvalue(ra);
+        (*(*L).ci).savedpc = npc;
+        let ci = incr_ci(L);
+        (*ci).func = ra;
+        (*ci).p = std::ptr::null_mut();
+        (*ci).base = ra.add(1);
+        (*ci).top = argtop.add((*ccl).stacksize as usize);
+        (*ci).savedpc = std::ptr::null();
+        (*ci).flags = 0;
+        (*ci).nresults = nresults;
+        (*L).base = (*ci).base;
+        (*L).top = argtop;
+        luaD_checkstackfornewci(L, (*ccl).stacksize as i32);
+        if isfb && *pc.add(1) != FBSLOT_SEALED {
+            *(pc.add(1) as *mut Instruction) = FBSLOT_SEALED;
+        }
+        let func = Closure::c(ccl).f.unwrap_unchecked();
+        let n = func(L);
+        if n < 0 {
+            return;
+        }
+        let ci = (*L).ci;
+        let cip = ci.sub(1);
+        let mut res = (*ci).func;
+        let mut vali = (*L).top.sub(n as usize);
+        let valend = (*L).top;
+        let mut i = nresults;
+        while i != 0 && vali < valend {
+            setobj_fresh(res, vali);
+            res = res.add(1);
+            vali = vali.add(1);
+            i -= 1;
+        }
+        while i > 0 {
+            setnilvalue(res);
+            res = res.add(1);
+            i -= 1;
+        }
+        (*L).ci = cip;
+        (*L).base = (*cip).base;
+        (*L).top = if nresults == LUA_MULTRET { res } else { (*cip).top };
+        become dispatch_frame(L, npc, (*L).base, k)
+    }
+    become ccall(L, pc, base, k);
+}
+let nparams = ib(insn) as i32 - 1;
+let argtop = if nparams == LUA_MULTRET { (*L).top } else { ra.add(1 + nparams as usize) };
+if ((*L).stack_last as usize).wrapping_sub(argtop as usize) as isize <= (*ccl).stacksize as isize * std::mem::size_of::<TValue>() as isize {
+    slow!();
+}
+let p = Closure::proto(ccl);
+(*(*L).ci).savedpc = pc.add(if x == Opcode::CallFb as u8 { 2 } else { 1 });
+let ci = (*L).ci.add(1);
+(*L).ci = ci;
+(*ci).func = ra;
+(*ci).p = p;
+(*ci).base = ra.add(1);
+(*ci).top = argtop.add((*ccl).stacksize as usize);
+(*ci).savedpc = std::ptr::null();
+(*ci).flags = 0;
+(*ci).nresults = ic(insn) as i32 - 1;
+let nbase = ra.add(1);
+(*L).base = nbase;
+(*p).execcount += 1;
+let mut argi = argtop;
+let argend = nbase.add((*p).numparams as usize);
+while argi < argend {
+    setnilvalue(argi);
+    argi = argi.add(1);
+}
+(*L).top = if (*p).is_vararg != 0 { argi } else { (*ci).top };
+if !(*p).execdata.is_null() {
+    become native_enter(L, (*p).codeentry, nbase, (*p).k);
+}
+become dispatch(L, (*p).codeentry, nbase, (*p).k);
+
+// @fast OP_RETURN
+if (*(*L).global).cb.interrupt.is_some() {
+    slow!();
+}
+let ra = base.add(ia(insn) as usize);
+let b = ib(insn) as i32 - 1;
+let ci = (*L).ci;
+let cip = ci.sub(1);
+let mut res = (*ci).func;
+let mut vali = ra;
+let valend = if b == LUA_MULTRET { (*L).top } else { ra.add(b as usize) };
+let nresults = (*ci).nresults;
+let mut i = nresults;
+while i != 0 && vali < valend {
+    setobj_fresh(res, vali);
+    res = res.add(1);
+    vali = vali.add(1);
+    i -= 1;
+}
+while i > 0 {
+    setnilvalue(res);
+    res = res.add(1);
+    i -= 1;
+}
+(*L).ci = cip;
+(*L).base = (*cip).base;
+(*L).top = if nresults == LUA_MULTRET { res } else { (*cip).top };
+if (*ci).flags & LUA_CALLINFO_RETURN != 0 {
+    return;
+}
+become dispatch_frame(L, (*cip).savedpc, (*cip).base, (*(*cip).p).k);
+
+// @fast OP_NAMECALL
+// method lookup on a table: own slot, or the slot cached in its
+// metatable's __index table
+let rb = base.add(ib(insn) as usize);
+if ttistable(rb) {
+    let ra = base.add(ia(insn) as usize);
+    let kv = k.add(*pc.add(1) as usize);
+    let h = hvalue(rb);
+    let n = (*h).node.add(((*tsvalue(kv)).hash & (sizenode(h) as u32 - 1)) as usize);
+    if (*n).key.tt() == LUA_TSTRING && (*n).key.value.gc == (*kv).value.gc && !ttisnil(gval(n)) {
+        setobj(ra.add(1), rb);
+        setobj(ra, gval(n));
+        next!(2);
+    }
+    let mt = (*h).metatable;
+    if gnext(n) == 0 && !mt.is_null() && ((*mt).tmcache & (1u8 << TM_INDEX)) == 0 && hasmetacache(mt) {
+        let idx = getmetacache(mt, TM_INDEX);
+        if !idx.is_null() && ttistable(idx) {
+            let mh = hvalue(idx);
+            let mtn = (*mh).node.add(ic(insn) & (*mh).nodemask8 as usize);
+            if (*mtn).key.tt() == LUA_TSTRING && (*mtn).key.value.gc == (*kv).value.gc && !ttisnil(gval(mtn)) {
+                setobj(ra.add(1), rb);
+                setobj(ra, gval(mtn));
+                next!(2);
+            }
+        }
+    }
+    if gnext(n) == 0 && !mt.is_null() {
+        // ordinary (non-frozen) metatable: look __index up like C++ does
+        // (fasttm), in a separate handler so this one stays call-free
+        #[inline(never)]
+        unsafe extern "sysv64-unwind" fn namecall_index(L: *mut lua_State, pc: *const Instruction, base: StkId, k: *mut TValue) {
+            let insn = *pc;
+            let ra = base.add(ia(insn) as usize);
+            let rb = base.add(ib(insn) as usize);
+            let kv = k.add(*pc.add(1) as usize);
+            let idx = fasttm(L, (*hvalue(rb)).metatable, TM_INDEX);
+            if !idx.is_null() && ttistable(idx) {
+                let mh = hvalue(idx);
+                let mtn = (*mh).node.add(ic(insn) & (*mh).nodemask8 as usize);
+                if (*mtn).key.tt() == LUA_TSTRING && (*mtn).key.value.gc == (*kv).value.gc && !ttisnil(gval(mtn)) {
+                    setobj(ra.add(1), rb);
+                    setobj(ra, gval(mtn));
+                    become dispatch(L, pc.add(2), base, k);
+                }
+            }
+            become s_OP_NAMECALL(L, pc, base, k)
+        }
+        become namecall_index(L, pc, base, k);
+    }
+}
+slow!();
+
+// @fast OP_FOR_N_LOOP
+if (*(*L).global).cb.interrupt.is_some() || luaC_needsGC(L) {
+    slow!();
+}
+let ra = base.add(ia(insn) as usize);
+let limit = nvalue(ra);
+let step = nvalue(ra.add(1));
+let idx = nvalue(ra.add(2)) + step;
+setnvalue(ra.add(2), idx);
+if step > 0.0 {
+    if idx <= limit {
+        jump!(1 + id(insn));
+    }
+} else if limit <= idx {
+    jump!(1 + id(insn));
+}
+std::hint::cold_path();
+next!(1);
+
+// @fast OP_JUMP_BACK
+if (*(*L).global).cb.interrupt.is_some() || luaC_needsGC(L) {
+    slow!();
+}
+(*(*(*L).ci).p).execcount += 1;
+jump!(1 + id(insn));
+
+// @fast OP_MOD_K
+let ra = base.add(ia(insn) as usize);
+let rb = base.add(ib(insn) as usize);
+let kv = k.add(ic(insn) as usize);
+if ttisnumber(rb) {
+    setnvalue(ra, luai_nummod(nvalue(rb), nvalue(kv)));
+    next!(1);
+}
+slow!();
+
+// @fast OP_ADD_K
+let ra = base.add(ia(insn) as usize);
+let rb = base.add(ib(insn) as usize);
+let kv = k.add(ic(insn) as usize);
+if ttisnumber(rb) {
+    setnvalue(ra, nvalue(rb) + nvalue(kv));
+    next!(1);
+}
+slow!();
+
+// @fast OP_SUB_K
+let ra = base.add(ia(insn) as usize);
+let rb = base.add(ib(insn) as usize);
+let kv = k.add(ic(insn) as usize);
+if ttisnumber(rb) {
+    setnvalue(ra, nvalue(rb) - nvalue(kv));
+    next!(1);
+}
+slow!();
+
+// @fast OP_SUB_RK
+let ra = base.add(ia(insn) as usize);
+let kv = k.add(ib(insn) as usize);
+let rc = base.add(ic(insn) as usize);
+if ttisnumber(rc) {
+    setnvalue(ra, nvalue(kv) - nvalue(rc));
+    next!(1);
+}
+slow!();
+
+// @fast OP_DIV_RK
+let ra = base.add(ia(insn) as usize);
+let kv = k.add(ib(insn) as usize);
+let rc = base.add(ic(insn) as usize);
+if ttisnumber(rc) {
+    setnvalue(ra, nvalue(kv) / nvalue(rc));
+    next!(1);
+}
+slow!();
+
+// @fast OP_GET_UPVAL
+let ur = Closure::uprefs(clvalue((*(*L).ci).func)).add(ib(insn) as usize);
+let v = if (*ur).tt == LUA_TUPVAL { (*upvalue(ur)).v as *const TValue } else { ur };
+setobj(base.add(ia(insn) as usize), v);
+next!(1);
+
+// @fast OP_SET_UPVAL
+let ra = base.add(ia(insn) as usize);
+let uv = upvalue(Closure::uprefs(clvalue((*(*L).ci).func)).add(ib(insn) as usize));
+if iscollectable(ra) && isblack(uv as *mut GCObject) && iswhite(gcvalue(ra)) {
+    slow!();
+}
+setobj((*uv).v, ra);
+next!(1);
+
+// @fast OP_NOT
+let res = l_isfalse(base.add(ib(insn) as usize));
+setbvalue(base.add(ia(insn) as usize), res);
+next!(1);
+
+// @fast OP_JUMP_X_EQ_K_B
+let aux = *pc.add(1);
+let ra = base.add(ia(insn) as usize);
+let eq = (ttisboolean(ra) && bvalue(ra) == aux_kb(aux)) as i32;
+jump!(1 + if eq != aux_not(aux) { id(insn) } else { 1 });
+
+// @fast OP_JUMP_X_EQ_K_S
+let aux = *pc.add(1);
+let ra = base.add(ia(insn) as usize);
+let kv = k.add(aux_kv(aux) as usize);
+let eq = (ttisstring(ra) && gcvalue(ra) == gcvalue(kv)) as i32;
+jump!(1 + if eq != aux_not(aux) { id(insn) } else { 1 });
+
+// @fast OP_JUMP_X_EQ_K_N
+let aux = *pc.add(1);
+let ra = base.add(ia(insn) as usize);
+let kv = k.add(aux_kv(aux) as usize);
+let eq = (ttisnumber(ra) && nvalue(ra) == nvalue(kv)) as i32;
+jump!(1 + if eq != aux_not(aux) { id(insn) } else { 1 });
+
+// @fast OP_FAST_CALL1
+// common numeric builtins computed inline; everything else calls the
+// builtin through the full handler
+const ABS: u32 = luau_common::bytecode::BuiltinFunction::MathAbs as u32;
+const CEIL: u32 = luau_common::bytecode::BuiltinFunction::MathCeil as u32;
+const FLOOR: u32 = luau_common::bytecode::BuiltinFunction::MathFloor as u32;
+const SQRT: u32 = luau_common::bytecode::BuiltinFunction::MathSqrt as u32;
+const BNOT: u32 = luau_common::bytecode::BuiltinFunction::Bit32Bnot as u32;
+const SELECTV: u32 = luau_common::bytecode::BuiltinFunction::SelectVararg as u32;
+let arg = base.add(ib(insn) as usize);
+let skip = ic(insn) as usize;
+let call = *pc.add(1 + skip);
+if ia(insn) as u32 == luau_common::bytecode::BuiltinFunction::Tostring as u32
+    && (ttisnil(arg) || ttisstring(arg))
+    && (ic(call) as i32 - 1) <= 1 && (*(*clvalue((*(*L).ci).func)).env).safeenv != 0
+{
+    // tostring(nil) / tostring(string): no allocation (luauF_tostring)
+    let ra = base.add(ia(call) as usize);
+    if ttisnil(arg) {
+        setsvalue(ra, (*(*L).global).ttname[LUA_TNIL as usize]);
+    } else {
+        setobj(ra, arg);
+    }
+    if ic(call) == 0 {
+        (*L).top = ra.add(1);
+    }
+    jump!(skip + 2);
+}
+if ia(insn) as u32 == luau_common::bytecode::BuiltinFunction::Assert as u32
+    && ic(call) == 1 && !l_isfalse(arg) && (*(*clvalue((*(*L).ci).func)).env).safeenv != 0
+{
+    // assert(truthy) with no results (luauF_assert)
+    jump!(skip + 2);
+}
+if ia(insn) as u32 == luau_common::bytecode::BuiltinFunction::Type as u32
+    && (ic(call) as i32 - 1) <= 1 && (*(*clvalue((*(*L).ci).func)).env).safeenv != 0
+{
+    let ra = base.add(ia(call) as usize);
+    setsvalue(ra, (*(*L).global).ttname[(*arg).tt as usize]);
+    if ic(call) == 0 {
+        (*L).top = ra.add(1);
+    }
+    jump!(skip + 2);
+}
+if ia(insn) as u32 == SELECTV {
+    // select(i, ...) / select("#", ...) with one result (luauF_select)
+    if ic(call) == 2 && (*(*clvalue((*(*L).ci).func)).env).safeenv != 0 {
+        let ci = (*L).ci;
+        let n = base.offset_from((*ci).func) as i32 - (*(*ci).p).numparams as i32 - 1;
+        let ra = base.add(ia(call) as usize);
+        if ttisnumber(arg) {
+            let i = d2i_trunc(nvalue(arg));
+            if ((i - 1) as u32) < n as u32 {
+                setobj(ra, base.sub(n as usize).add((i - 1) as usize));
+                jump!(skip + 2);
+            }
+        } else if ttisstring(arg) && *getstr(tsvalue(arg)) == b'#' {
+            setnvalue(ra, n as f64);
+            jump!(skip + 2);
+        }
+    }
+    slow!();
+}
+if ttisinteger(arg) && (ic(call) as i32 - 1) <= 1 && (*(*clvalue((*(*L).ci).func)).env).safeenv != 0 {
+    use luau_common::bytecode::BuiltinFunction as B;
+    const IBNOT: u32 = B::IntegerBnot as u32;
+    const INEG: u32 = B::IntegerNeg as u32;
+    let a = lvalue(arg);
+    let r = match ia(insn) as u32 {
+        IBNOT => !a,
+        INEG => a.wrapping_neg(),
+        _ => slow!(),
+    };
+    let ra = base.add(ia(call) as usize);
+    setlvalue(ra, r);
+    if ic(call) == 0 {
+        (*L).top = ra.add(1);
+    }
+    jump!(skip + 2);
+}
+'num: {
+if ttisnumber(arg) && (ic(call) as i32 - 1) <= 1 && (*(*clvalue((*(*L).ci).func)).env).safeenv != 0 {
+    let a = nvalue(arg);
+    let r = match ia(insn) as u32 {
+        ABS => a.abs(),
+        CEIL => luai_ceil_fast(a),
+        FLOOR => luai_floor_fast(a),
+        SQRT => a.sqrt(),
+        BNOT => (!luai_num2unsigned(a)) as f64,
+        _ => break 'num,
+    };
+    let ra = base.add(ia(call) as usize);
+    setnvalue(ra, r);
+    if ic(call) == 0 {
+        (*L).top = ra.add(1);
+    }
+    jump!(skip + 2);
+}
+}
+// any other builtin: call it (in a separate handler, so that this one stays
+// call-free) like the full handler does; when it declines, continue with the
+// fallback call sequence
+#[inline(never)]
+unsafe extern "sysv64-unwind" fn generic1(L: *mut lua_State, pc: *const Instruction, base: StkId, k: *mut TValue) {
+    let insn = *pc;
+    let skip = ic(insn) as usize;
+    let call = *pc.add(1 + skip);
+    if (*(*clvalue((*(*L).ci).func)).env).safeenv != 0 {
+        (*(*L).ci).savedpc = pc.add(1);
+        let ra = base.add(ia(call) as usize);
+        let nresults = ic(call) as i32 - 1;
+        let n = crate::lbuiltins::luauF_table[ia(insn) as usize](L, ra, base.add(ib(insn) as usize), nresults, std::ptr::null_mut(), 1);
+        if n >= 0 {
+            if nresults == LUA_MULTRET {
+                (*L).top = ra.add(n as usize);
+            }
+            become dispatch(L, pc.add(skip + 2), base, k);
+        }
+    }
+    become dispatch(L, pc.add(1), base, k)
+}
+become generic1(L, pc, base, k);
+
+// @fast OP_FAST_CALL2 OP_FAST_CALL2_K
+const BAND: u32 = luau_common::bytecode::BuiltinFunction::Bit32Band as u32;
+const BOR: u32 = luau_common::bytecode::BuiltinFunction::Bit32Bor as u32;
+const BXOR: u32 = luau_common::bytecode::BuiltinFunction::Bit32Bxor as u32;
+const LSHIFT: u32 = luau_common::bytecode::BuiltinFunction::Bit32Lshift as u32;
+const RSHIFT: u32 = luau_common::bytecode::BuiltinFunction::Bit32Rshift as u32;
+const ARSHIFT: u32 = luau_common::bytecode::BuiltinFunction::Bit32Arshift as u32;
+const MAX: u32 = luau_common::bytecode::BuiltinFunction::MathMax as u32;
+const MIN: u32 = luau_common::bytecode::BuiltinFunction::MathMin as u32;
+const EXTRACTK: u32 = luau_common::bytecode::BuiltinFunction::Bit32ExtractK as u32;
+const BYTE: u32 = luau_common::bytecode::BuiltinFunction::StringByte as u32;
+let aux = *pc.add(1);
+let arg1 = base.add(ib(insn) as usize);
+let arg2: *const TValue = if x == Opcode::FastCall2 as u8 { base.add(aux as usize) } else { k.add(aux as usize) };
+let skip = ic(insn) as usize - 1;
+let call = *pc.add(2 + skip);
+'num: {
+if ttisnumber(arg1) && ttisnumber(arg2) && (ic(call) as i32 - 1) <= 1 && (*(*clvalue((*(*L).ci).func)).env).safeenv != 0 {
+    let a = nvalue(arg1);
+    let b = nvalue(arg2);
+    let r = match ia(insn) as u32 {
+        BAND => (luai_num2unsigned(a) & luai_num2unsigned(b)) as f64,
+        BOR => (luai_num2unsigned(a) | luai_num2unsigned(b)) as f64,
+        BXOR => (luai_num2unsigned(a) ^ luai_num2unsigned(b)) as f64,
+        LSHIFT | RSHIFT | ARSHIFT => {
+            let s = d2i_trunc(b);
+            if (s as u32) >= 32 {
+                slow!();
+            }
+            let u = luai_num2unsigned(a);
+            match ia(insn) as u32 {
+                LSHIFT => (u << s) as f64,
+                RSHIFT => (u >> s) as f64,
+                _ => ((u as i32) >> s) as u32 as f64,
+            }
+        }
+        MAX => if b > a { b } else { a },
+        MIN => if b < a { b } else { a },
+        EXTRACTK => {
+            let n = luai_num2unsigned(a);
+            let fw = d2i_trunc(b);
+            let m = !(0xfffffffeu32 << (fw >> 5));
+            ((n >> (fw & 31)) & m) as f64
+        }
+        _ => break 'num,
+    };
+    let ra = base.add(ia(call) as usize);
+    setnvalue(ra, r);
+    if ic(call) == 0 {
+        (*L).top = ra.add(1);
+    }
+    jump!(skip + 3);
+}
+}
+'int: {
+if ttisinteger(arg1) && ttisinteger(arg2) && (ic(call) as i32 - 1) <= 1 && (*(*clvalue((*(*L).ci).func)).env).safeenv != 0 {
+    // integer library (same results as luauF_integer*)
+    use luau_common::bytecode::BuiltinFunction as B;
+    const IADD: u32 = B::IntegerAdd as u32;
+    const ISUB: u32 = B::IntegerSub as u32;
+    const IMUL: u32 = B::IntegerMul as u32;
+    const IBAND: u32 = B::IntegerBand as u32;
+    const IBOR: u32 = B::IntegerBor as u32;
+    const IBXOR: u32 = B::IntegerBxor as u32;
+    const ILROT: u32 = B::IntegerLrotate as u32;
+    const IRROT: u32 = B::IntegerRrotate as u32;
+    const ILSH: u32 = B::IntegerLshift as u32;
+    const IRSH: u32 = B::IntegerRshift as u32;
+    const IREM: u32 = B::IntegerRem as u32;
+    const IMOD: u32 = B::IntegerMod as u32;
+    const IIDIV: u32 = B::IntegerIDiv as u32;
+    const IUDIV: u32 = B::IntegerUDiv as u32;
+    const IUREM: u32 = B::IntegerURem as u32;
+    let a = lvalue(arg1);
+    let b = lvalue(arg2);
+    let r: i64 = match ia(insn) as u32 {
+        IADD => a.wrapping_add(b),
+        ISUB => a.wrapping_sub(b),
+        IMUL => a.wrapping_mul(b),
+        IBAND => a & b,
+        IBOR => a | b,
+        IBXOR => a ^ b,
+        ILROT => (a as u64).rotate_left(((b as u64) % 64) as u32) as i64,
+        IRROT => (a as u64).rotate_right(((b as u64) % 64) as u32) as i64,
+        // division family: zero divisors (errors) take the builtin path
+        IREM if b != 0 => if a == i64::MIN && b == -1 { 0 } else { a % b },
+        IMOD if b != 0 => {
+            if a == i64::MIN && b == -1 {
+                0
+            } else {
+                let r = a % b;
+                if r != 0 && ((a < 0) != (b < 0)) { r + b } else { r }
+            }
+        }
+        IIDIV if b != 0 && !(a == i64::MIN && b == -1) => {
+            let r = a / b;
+            if ((a ^ b) < 0) && (a % b != 0) { r - 1 } else { r }
+        }
+        IUDIV if b != 0 => ((a as u64) / (b as u64)) as i64,
+        IUREM if b != 0 => ((a as u64) % (b as u64)) as i64,
+        ILSH | IRSH if (0..=63).contains(&b) => {
+            if ia(insn) as u32 == ILSH { ((a as u64) << b) as i64 } else { ((a as u64) >> b) as i64 }
+        }
+        _ => break 'int,
+    };
+    let ra = base.add(ia(call) as usize);
+    setlvalue(ra, r);
+    if ic(call) == 0 {
+        (*L).top = ra.add(1);
+    }
+    jump!(skip + 3);
+}
+
+}
+#[inline(never)]
+unsafe extern "sysv64-unwind" fn generic2(L: *mut lua_State, pc: *const Instruction, base: StkId, k: *mut TValue) {
+    let insn = *pc;
+    let aux = *pc.add(1);
+    let arg2: *mut TValue = if (insn & 0xff) as u8 == Opcode::FastCall2 as u8 { base.add(aux as usize) } else { k.add(aux as usize) };
+    let skip = ic(insn) as usize - 1;
+    let call = *pc.add(2 + skip);
+    if (*(*clvalue((*(*L).ci).func)).env).safeenv != 0 {
+        (*(*L).ci).savedpc = pc.add(2);
+        let ra = base.add(ia(call) as usize);
+        let nresults = ic(call) as i32 - 1;
+        let n = crate::lbuiltins::luauF_table[ia(insn) as usize](L, ra, base.add(ib(insn) as usize), nresults, arg2, 2);
+        if n >= 0 {
+            if nresults == LUA_MULTRET {
+                (*L).top = ra.add(n as usize);
+            }
+            become dispatch(L, pc.add(skip + 3), base, k);
+        }
+    }
+    become dispatch(L, pc.add(2), base, k)
+}
+become generic2(L, pc, base, k);
+
+// @fast OP_GET_IMPORT
+let kv = k.add(id(insn) as usize);
+if !ttisnil(kv) && (*(*clvalue((*(*L).ci).func)).env).safeenv != 0 {
+    setobj(base.add(ia(insn) as usize), kv);
+    next!(2);
+}
+slow!();
+
+// @fast OP_FAST_CALL3
+// three-argument bit32.band/bor/bxor inline; everything else via the full handler
+{
+    use luau_common::bytecode::BuiltinFunction as B;
+    const BAND: u32 = B::Bit32Band as u32;
+    const BOR: u32 = B::Bit32Bor as u32;
+    const BXOR: u32 = B::Bit32Bxor as u32;
+    const VECTOR: u32 = B::Vector as u32;
+    let aux = *pc.add(1);
+    let arg1 = base.add(ib(insn) as usize);
+    let arg2 = base.add((aux & 0xff) as usize);
+    let arg3 = base.add(((aux >> 8) & 0xff) as usize);
+    let skip = ic(insn) as usize - 1;
+    let call = *pc.add(2 + skip);
+    let f = ia(insn) as u32;
+    if (f == BAND || f == BOR || f == BXOR) && ttisnumber(arg1) && ttisnumber(arg2) && ttisnumber(arg3)
+        && (ic(call) as i32 - 1) <= 1 && (*(*clvalue((*(*L).ci).func)).env).safeenv != 0
+    {
+        let (a, b, c) = (luai_num2unsigned(nvalue(arg1)), luai_num2unsigned(nvalue(arg2)), luai_num2unsigned(nvalue(arg3)));
+        let r = if f == BAND { a & b & c } else if f == BOR { a | b | c } else { a ^ b ^ c };
+        let ra = base.add(ia(call) as usize);
+        setnvalue(ra, r as f64);
+        if ic(call) == 0 {
+            (*L).top = ra.add(1);
+        }
+        jump!(skip + 3);
+    }
+    if f == VECTOR && ttisnumber(arg1) && ttisnumber(arg2) && ttisnumber(arg3)
+        && (ic(call) as i32 - 1) <= 1 && (*(*clvalue((*(*L).ci).func)).env).safeenv != 0
+    {
+        let ra = base.add(ia(call) as usize);
+        setvvalue(ra, nvalue(arg1) as f32, nvalue(arg2) as f32, nvalue(arg3) as f32);
+        if ic(call) == 0 {
+            (*L).top = ra.add(1);
+        }
+        jump!(skip + 3);
+    }
+}
+// any other builtin: call it in a separate handler (keeps this one call-free)
+#[inline(never)]
+unsafe extern "sysv64-unwind" fn generic3(L: *mut lua_State, pc: *const Instruction, base: StkId, k: *mut TValue) {
+    let insn = *pc;
+    let aux = *pc.add(1);
+    let skip = ic(insn) as usize - 1;
+    let call = *pc.add(2 + skip);
+    if (*(*clvalue((*(*L).ci).func)).env).safeenv != 0 {
+        (*(*L).ci).savedpc = pc.add(2);
+        let ra = base.add(ia(call) as usize);
+        let nresults = ic(call) as i32 - 1;
+        let top = (*L).top;
+        setobj(top, base.add((aux & 0xff) as usize));
+        setobj(top.add(1), base.add(((aux >> 8) & 0xff) as usize));
+        let n = crate::lbuiltins::luauF_table[ia(insn) as usize](L, ra, base.add(ib(insn) as usize), nresults, top, 3);
+        if n >= 0 {
+            if nresults == LUA_MULTRET {
+                (*L).top = ra.add(n as usize);
+            }
+            become dispatch(L, pc.add(skip + 3), base, k);
+        }
+    }
+    become dispatch(L, pc.add(2), base, k)
+}
+become generic3(L, pc, base, k);
+
+// @fast OP_PREP_VARARGS
+// move the fixed parameters above the varargs (stack growth via the full handler)
+{
+    let numparams = ia(insn) as usize;
+    let cl = clvalue((*(*L).ci).func);
+    let need = (*cl).stacksize as usize + numparams;
+    if ((*L).stack_last as usize).wrapping_sub((*L).top as usize) as isize <= (need * std::mem::size_of::<TValue>()) as isize {
+        slow!();
+    }
+    let fixed = base;
+    let nbase = (*L).top;
+    for i in 0..numparams {
+        setobj(nbase.add(i), fixed.add(i));
+        setnilvalue(fixed.add(i));
+    }
+    let ci = (*L).ci;
+    (*ci).base = nbase;
+    (*ci).top = nbase.add((*cl).stacksize as usize);
+    (*L).base = nbase;
+    (*L).top = (*ci).top;
+    become dispatch(L, pc.add(1), nbase, k);
+}
+
+// @fast OP_POW_K
+{
+    let rb = base.add(ib(insn) as usize);
+    if ttisnumber(rb) {
+        let nb = nvalue(rb);
+        let nk = nvalue(k.add(ic(insn) as usize));
+        let r = if nk == 2.0 {
+            nb * nb
+        } else if nk == 0.5 {
+            nb.sqrt()
+        } else if nk == 3.0 {
+            nb * nb * nb
+        } else {
+            crate::lmathlib::luai_numpow(nb, nk)
+        };
+        setnvalue(base.add(ia(insn) as usize), r);
+        next!(1);
+    }
+}
+slow!();
+
+// @fast OP_LENGTH
+{
+    let rb = base.add(ib(insn) as usize);
+    if ttistable(rb) {
+        let h = hvalue(rb);
+        if (*h).metatable.is_null() {
+            setnvalue(base.add(ia(insn) as usize), luaH_getn(h) as f64);
+            next!(1);
+        }
+    } else if ttisstring(rb) {
+        setnvalue(base.add(ia(insn) as usize), (*tsvalue(rb)).len as f64);
+        next!(1);
+    }
+}
+slow!();

@@ -1,0 +1,11 @@
+[package]
+name = "luau-config"
+description = "Rust port of Luau's Config module (.luaurc and .config.luau)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+luau-ast = { path = "../luau-ast" }
+luau-compiler = { path = "../luau-compiler" }
+luau-rt = { path = "../luau-rt" }

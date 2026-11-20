@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust (x86_64-pc-windows-gnu)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - name: Use the GNU toolchain
+        shell: bash
+        run: rustup default stable-x86_64-pc-windows-gnu
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Unit and API tests
+        run: cargo test --release
+
+      - name: Conformance (JIT and interpreter)
+        shell: bash
+        run: |
+          bash sweep.sh | tail -2
+          LUAU_CODEGEN=0 bash sweep.sh | tail -2
+          bash sweep.sh | grep -q "0 failed"
+
+      - name: JIT differential tests
+        shell: bash
+        run: bash tools/jitdiff.sh

@@ -1,0 +1,9 @@
+[package]
+name = "luau-ast"
+description = "Rust port of Luau Ast module (lexer, parser, AST nodes)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+luau-common = { path = "../luau-common" }

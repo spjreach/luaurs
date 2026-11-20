@@ -1,0 +1,8 @@
+[package]
+name = "luau-common"
+description = "Port of Luau Common module (bytecode definitions, shared utilities)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

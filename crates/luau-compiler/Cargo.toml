@@ -1,0 +1,10 @@
+[package]
+name = "luau-compiler"
+description = "Rust port of Luau Compiler module (bytecode compiler)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+luau-common = { path = "../luau-common" }
+luau-ast = { path = "../luau-ast" }

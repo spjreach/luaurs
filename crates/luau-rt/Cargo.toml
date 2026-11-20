@@ -1,0 +1,11 @@
+[package]
+name = "luau-rt"
+description = "Rust port of the Luau VM runtime (lua_State, GC, interpreter, standard libraries)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+luau-common = { path = "../luau-common" }
+luau-ast = { path = "../luau-ast" }
+luau-compiler = { path = "../luau-compiler" }

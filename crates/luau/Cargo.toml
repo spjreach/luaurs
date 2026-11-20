@@ -1,0 +1,22 @@
+[package]
+name = "luau"
+description = "Rust port of the Luau CLI (run/repl/compile)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "luau"
+path = "src/main.rs"
+
+[[bin]]
+name = "luau-compile"
+path = "src/compile_main.rs"
+
+[dependencies]
+luau-common = { path = "../luau-common" }
+luau-ast = { path = "../luau-ast" }
+luau-compiler = { path = "../luau-compiler" }
+luau-rt = { path = "../luau-rt" }
+luau-config = { path = "../luau-config" }
+luau-require = { path = "../luau-require" }

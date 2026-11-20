@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/luau-common",
+    "crates/luau-ast",
+    "crates/luau-compiler",
+    "crates/luau-rt",
+    "crates/luau-config",
+    "crates/luau-require",
+    "crates/luaurs",
+    "crates/luau",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["luaurs contributors"]
+description = "Luau (the Roblox scripting language) in Rust: compiler, VM and x64 JIT"
+# set this to your repository before publishing
+# repository = "https://github.com/<you>/luaurs"
+
+# Luau is performance sensitive; enable some optimization for dev/test builds used
+# in the conformance harness. Optimizing the workspace crates also keeps the
+# interpreter's per-call native stack frames small, which matters for the
+# 20000-deep recursion conformance tests.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 1
+
+[profile.release]
+debug = true
+# The interpreter's hot loop crosses crate boundaries (AST accessors, VM
+# helpers) on every node, so whole-program inlining pays off noticeably.
+lto = "fat"
+codegen-units = 1
