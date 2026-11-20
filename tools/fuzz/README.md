@@ -23,8 +23,10 @@ python tools/fuzz/fuzz.py --seed 1234 --count 50 --verbose
 The C++ reference path defaults to the local `luau-reference-build` checkout;
 override it with `--ref` or `LUAU_REF`.  Reduced failures are written to
 `tools/fuzz/failures/` as a `.lua` program and a `.txt` report.  Use
-`--no-shrink` to keep the original program, and `--ref-interp` to also compare
-the reference interpreter.
+`--no-shrink` to keep the original program, `--ref-interp` to also compare the
+reference interpreter, and `--trace` to add a fourth run with `LUAU_TRACE=1`
+(optionally `--trace-hotloop N`).  Until the tracing JIT is wired, the trace
+run is a no-op.
 
 The generator covers arithmetic and integer operations, tables and metamethods,
 loops with mid-loop type changes, closures/upvalues, varargs, strings,

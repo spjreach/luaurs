@@ -8,6 +8,7 @@ use super::trace::{AbortReason, Trace, TraceId};
 use crate::lobject::Proto;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI8, Ordering};
 
 pub struct JitState {
     pub enabled: bool,
@@ -27,7 +28,11 @@ impl JitState {
     fn new() -> JitState {
         let config = TraceConfig::global();
         JitState {
-            enabled: config.enabled,
+            enabled: match ENABLED_OVERRIDE.load(Ordering::Relaxed) {
+                0 => false,
+                1 => true,
+                _ => config.enabled,
+            },
             hotloop: config.hotloop,
             max_trace_len: config.max_trace_len,
             max_traces: 1000,
@@ -49,6 +54,8 @@ impl JitState {
     }
 }
 
+static ENABLED_OVERRIDE: AtomicI8 = AtomicI8::new(-1);
+
 thread_local! {
     static STATE: RefCell<JitState> = RefCell::new(JitState::new());
 }
@@ -65,5 +72,26 @@ pub fn enabled() -> bool {
 /// Cheap process-level check for interpreter hot paths. Unlike `enabled()`,
 /// this avoids touching the thread-local `RefCell` on every interpreter entry.
 pub fn trace_enabled() -> bool {
-    TraceConfig::global().enabled
+    match ENABLED_OVERRIDE.load(Ordering::Relaxed) {
+        0 => false,
+        1 => true,
+        _ => TraceConfig::global().enabled,
+    }
+}
+
+/// Enable or disable tracing for this thread and subsequent interpreter
+/// entries. The override is process-wide so the cheap interpreter check does
+/// not need to borrow thread-local state.
+pub fn set_enabled(enabled: bool) {
+    ENABLED_OVERRIDE.store(enabled as i8, Ordering::Relaxed);
+    with(|state| state.enabled = enabled);
+}
+
+/// Discard compiled traces, hot-loop history, and diagnostic aborts.
+pub fn flush() {
+    with(|state| {
+        state.traces.clear();
+        state.hot = HotCounters::default();
+        state.aborts.clear();
+    });
 }

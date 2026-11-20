@@ -22,6 +22,7 @@ pub mod config;
 pub mod debug;
 pub mod hotness;
 pub mod ir;
+pub mod lualib;
 pub mod optimizer;
 pub mod snapshots;
 pub mod state;
@@ -69,10 +70,14 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
             debug::log(debug::Event::SideExit { id: id.0, snap: ex });
             // a side exit: counts toward the storm limit (see
             // EXIT_STORM_LIMIT), which drops the trace for a re-record
-            let storm = state::with(|s| {
+            let (storm, resume) = state::with(|s| {
                 let t = s.traces.get_mut(&(p as usize, header)).expect("trace vanished");
+                // Resume where the guard's snapshot says, even when the
+                // trace is dropped. Returning `header` here replays the
+                // iteration that was about to leave the loop.
+                let resume = if ex & 0x8000_0000 != 0 { header } else { t.snapshots[ex as usize].pc };
                 t.side_exits += 1;
-                t.side_exits >= EXIT_STORM_LIMIT
+                (t.side_exits >= EXIT_STORM_LIMIT, resume)
             });
             if storm {
                 let reason = trace::AbortReason::Internal("side exit storm".into());
@@ -82,8 +87,9 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
                     s.hot.penalize(p, header);
                     s.aborts.push((id, header, reason));
                 });
-                return Some(header);
+                return Some(resume);
             }
+            return Some(resume);
         }
         return Some(state::with(|s| {
             let t = &s.traces[&(p as usize, header)];
