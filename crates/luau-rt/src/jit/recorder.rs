@@ -256,7 +256,7 @@ impl Recorder {
         // a guard taken now resumes at this instruction (it hasn't run yet)
         self.b.pc = pc;
 
-        if o(O::Nop) || o(O::Coverage) || o(O::Jump) {
+        if o(O::Nop) || o(O::Coverage) || o(O::Jump) || o(O::JumpX) {
             // (the interpreter follows the jump; the trace just continues)
         } else if o(O::LoadNil) {
             let v = self.b.knil();
@@ -306,23 +306,36 @@ impl Recorder {
             }
         } else if o(O::JumpIfEq) || o(O::JumpIfNotEq) || o(O::JumpIfLe) || o(O::JumpIfNotLe) || o(O::JumpIfLt) || o(O::JumpIfNotLt) {
             let rb = aux as usize;
-            if (*base.add(a)).tt != LUA_TNUMBER || (*base.add(rb)).tt != LUA_TNUMBER {
+            let ta = (*base.add(a)).tt;
+            let tb = (*base.add(rb)).tt;
+            if ta == LUA_TSTRING && tb == LUA_TSTRING {
+                // interned strings: equality is pointer equality. Only the
+                // "equal" direction is expressible (GuardSame)
+                if op != O::JumpIfEq as u8 || (*base.add(a)).value.gc != (*base.add(rb)).value.gc {
+                    return Err(unsupported_type("string comparison"));
+                }
+                let x = self.read(a, base)?;
+                let y = self.read(rb, base)?;
+                let snap = self.b.snapshot();
+                self.b.emit(Op::GuardSame { a: x, k: y, snap }, IrType::Nil);
+            } else if ta != LUA_TNUMBER || tb != LUA_TNUMBER {
                 return Err(unsupported_type("comparison of non-numbers"));
-            }
-            let (va, vb) = ((*base.add(a)).value.n, (*base.add(rb)).value.n);
-            let x = self.read(a, base)?;
-            let y = self.read(rb, base)?;
-            // the condition as it held now (the guard keeps it holding)
-            let (cmp_true, cmp_false, holds) = if o(O::JumpIfEq) || o(O::JumpIfNotEq) {
-                (Cmp::Eq, Cmp::Ne, va == vb)
-            } else if o(O::JumpIfLe) || o(O::JumpIfNotLe) {
-                (Cmp::Le, Cmp::Nle, va <= vb)
             } else {
-                (Cmp::Lt, Cmp::Nlt, va < vb)
-            };
-            let snap = self.b.snapshot();
-            let cmp = if holds { cmp_true } else { cmp_false };
-            self.b.emit(Op::Guard { cmp, a: x, b: y, snap }, IrType::Nil);
+                let (va, vb) = ((*base.add(a)).value.n, (*base.add(rb)).value.n);
+                let x = self.read(a, base)?;
+                let y = self.read(rb, base)?;
+                // the condition as it held now (the guard keeps it holding)
+                let (cmp_true, cmp_false, holds) = if o(O::JumpIfEq) || o(O::JumpIfNotEq) {
+                    (Cmp::Eq, Cmp::Ne, va == vb)
+                } else if o(O::JumpIfLe) || o(O::JumpIfNotLe) {
+                    (Cmp::Le, Cmp::Nle, va <= vb)
+                } else {
+                    (Cmp::Lt, Cmp::Nlt, va < vb)
+                };
+                let snap = self.b.snapshot();
+                let cmp = if holds { cmp_true } else { cmp_false };
+                self.b.emit(Op::Guard { cmp, a: x, b: y, snap }, IrType::Nil);
+            }
         } else if o(O::JumpXEqKN) {
             if (*base.add(a)).tt != LUA_TNUMBER {
                 return Err(unsupported_type("comparison of a non-number"));
@@ -336,6 +349,47 @@ impl Recorder {
             let eq = (*base.add(a)).value.n == kval;
             let snap = self.b.snapshot();
             self.b.emit(Op::Guard { cmp: if eq { Cmp::Eq } else { Cmp::Ne }, a: x, b: k, snap }, IrType::Nil);
+        } else if o(O::JumpXEqKNil) || o(O::JumpXEqKB) || o(O::JumpXEqKS) {
+            // A comparison jump against a constant. Reading the slot pins
+            // its tag (the guard exits when the tag changes, so the branch
+            // direction stays pinned); within the tag only a boolean can
+            // differ in value without a tag change, and a string constant
+            // equality is pointer equality (interned strings).
+            let tv = base.add(a);
+            let ktt = if o(O::JumpXEqKNil) {
+                LUA_TNIL
+            } else if o(O::JumpXEqKB) {
+                LUA_TBOOLEAN
+            } else {
+                LUA_TSTRING
+            };
+            if (*tv).tt == ktt {
+                if o(O::JumpXEqKB) {
+                    let x = self.read(a, base)?;
+                    let want = (*tv).value.b != 0;
+                    let snap = self.b.snapshot();
+                    self.b.emit(Op::GuardTruthy { a: x, want, snap }, IrType::Nil);
+                } else if o(O::JumpXEqKS) {
+                    let kv = (*(*self.proto).k.add((aux & 0xffffff) as usize)).value.gc as usize;
+                    if (*tv).value.gc as usize == kv {
+                        // equal (same object): pin it
+                        let x = self.read(a, base)?;
+                        let k = self.konst((aux & 0xffffff) as usize)?;
+                        let snap = self.b.snapshot();
+                        self.b.emit(Op::GuardSame { a: x, k, snap }, IrType::Nil);
+                    } else {
+                        // "not this string" can't be expressed yet
+                        return Err(unsupported_type("negated string comparison"));
+                    }
+                } else {
+                    // nil: the SLoad tag guard pins it
+                    self.read(a, base)?;
+                }
+            } else {
+                // the constant has another type: the tag guard alone pins
+                // the comparison result
+                self.read(a, base)?;
+            }
         } else if o(O::ForNLoop) {
             let target = (pc as i64 + 1 + d_of(insn) as i64) as u32;
             if target != self.start_pc {
