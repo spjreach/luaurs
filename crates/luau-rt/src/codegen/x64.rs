@@ -620,6 +620,58 @@ pub(super) unsafe extern "sysv64" fn on_carry_fail(p: *mut Proto, head: u64, L: 
     }
 }
 
+fn is_table_access(op: u8) -> bool {
+    [O::GetTable, O::GetTableN, O::GetTableKs, O::SetTable, O::SetTableN, O::SetTableKs].iter().any(|&o| o as u8 == op)
+}
+
+/// The other table accesses of `p` whose object register holds the same
+/// value source (GETUPVAL / GETIMPORT / GETGLOBAL of the same thing, as last
+/// written in straight-line order) as at instruction `at`. A heuristic: it
+/// only picks the generic (always correct) path for those sites.
+unsafe fn same_source_sites(p: *mut Proto, at: usize) -> Vec<usize> {
+    // (kind, operand) of what each register was last loaded from
+    let n = (*p).sizecode as usize;
+    let mut src: [Option<(u8, u32)>; 256] = [None; 256];
+    let mut sites: Vec<(usize, Option<(u8, u32)>)> = Vec::new();
+    let mut want = None;
+    let mut i = 0;
+    while i < n {
+        let insn = *(*p).code.add(i);
+        let op = op_of(insn);
+        let aux = if i + 1 < n { *(*p).code.add(i + 1) } else { 0 };
+        if is_table_access(op) {
+            let s = src[b_of(insn) as usize];
+            if i == at {
+                want = s;
+            } else {
+                sites.push((i, s));
+            }
+        }
+        let a = a_of(insn) as usize;
+        let o = |x: O| op == x as u8;
+        if o(O::GetUpval) {
+            src[a] = Some((0, b_of(insn) as u32));
+        } else if o(O::GetImport) {
+            src[a] = Some((1, aux));
+        } else if o(O::GetGlobal) {
+            src[a] = Some((2, aux));
+        } else if o(O::Move) {
+            src[a] = src[b_of(insn) as usize];
+        } else if !(o(O::SetTable) || o(O::SetTableN) || o(O::SetTableKs) || o(O::SetUpval) || o(O::SetGlobal)) {
+            // anything else may write R(A) (and calls more): forget it
+            src[a] = None;
+            if o(O::Call) || o(O::CallFb) || o(O::Namecall) || o(O::ForGLoop) || o(O::GetVarargs) || o(O::FastPCall) {
+                src = [None; 256];
+            }
+        }
+        i += luau_common::bytecode::get_op_length(O::from_u8(op)) as usize;
+    }
+    match want {
+        Some(w) => sites.into_iter().filter(|&(_, s)| s == Some(w)).map(|(j, _)| j).collect(),
+        None => Vec::new(),
+    }
+}
+
 fn bailed_of(p: *mut Proto) -> Vec<(u32, u8, u8)> {
     let g = FEEDBACK.lock().unwrap();
     g.as_ref().and_then(|m| m.get(&(p as usize))).map(|e| e.0.clone()).unwrap_or_default()
@@ -681,6 +733,19 @@ pub(super) unsafe extern "sysv64" fn on_bail(p: *mut Proto, idx: u64, L: *mut lu
                 x.2 = FB_GENERIC;
             }
             None => e.0.push((idx as u32, seen.0, seen.1)),
+        }
+        // an object that isn't a table at one table access is usually not
+        // one at the others reading the same upvalue / global / import:
+        // give them the generic path now rather than one recompile each
+        if is_table_access(op) && rtag(b_of(insn)) != LUA_TTABLE as u8 && !super::trans::dbg_off(33554432) {
+            let objtag = rtag(b_of(insn));
+            for j in same_source_sites(p, idx as usize) {
+                if !e.0.iter().any(|x| x.0 == j as u32) {
+                    let jop = op_of(*(*p).code.add(j));
+                    let fb = if jop == O::GetTableKs as u8 { (objtag, 0) } else { (FB_NOINLINE, FB_NOINLINE) };
+                    e.0.push((j as u32, fb.0, fb.1));
+                }
+            }
         }
         e.1 += 1;
         (e.0.clone(), e.1 > MAX_RECOMPILES)

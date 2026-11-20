@@ -2914,9 +2914,35 @@ unsafe extern "sysv64-unwind" fn jit_tablen(L: *mut lua_State, obj: *const TValu
     setnvalue(&mut n, ((cs & 0xffff_ffff) + 1) as f64);
     if cs >> 32 != 0 {
         crate::lvmutils::luaV_settable(L, obj, &mut n, val);
-    } else {
-        crate::lvmutils::luaV_gettable(L, obj, &mut n, val);
+        return;
     }
+    if !dbg_off(16777216) {
+        // fast cases: the table's own array slot, or the array slot of the
+        // table that a userdata's / table's __index is (non-nil only: a nil
+        // goes on to the full lookup, which also handles further metatables)
+        let i = (cs & 0xffff_ffff) as usize;
+        let mt = match (*obj).tt {
+            LUA_TUSERDATA => (*uvalue(obj)).metatable,
+            LUA_TTABLE => {
+                let h = hvalue(obj);
+                if i < (*h).sizearray as usize && !ttisnil((*h).array.add(i)) {
+                    setobj(val, (*h).array.add(i));
+                    return;
+                }
+                (*h).metatable
+            }
+            _ => std::ptr::null_mut(),
+        };
+        let tm = crate::ltm::fasttm(L, mt, crate::ltm::TM_INDEX);
+        if !tm.is_null() && ttistable(tm) {
+            let h = hvalue(tm);
+            if i < (*h).sizearray as usize && !ttisnil((*h).array.add(i)) {
+                setobj(val, (*h).array.add(i));
+                return;
+            }
+        }
+    }
+    crate::lvmutils::luaV_gettable(L, obj, &mut n, val);
 }
 
 /// SETTABLE through the generic VM path; `pc` is the next instruction.
