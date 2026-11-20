@@ -22,7 +22,7 @@ pub fn run(t: &mut Trace) -> bool {
 
     for i in (loop_at + 1)..t.insts.len() {
         let inst = &t.insts[i];
-        if !inst.is_pure() || matches!(inst.op, Op::Nop | Op::Phi { .. }) {
+        if !inst.is_pure() || inst.is_const() || matches!(inst.op, Op::Nop | Op::Phi { .. }) {
             continue;
         }
         if backs.contains(&Ref(i as u32)) {

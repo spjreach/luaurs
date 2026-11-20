@@ -217,3 +217,21 @@ fn folds_a_phi_whose_two_inputs_are_equal_constants() {
 fn set_phi(b: &mut IrBuilder, phi: Ref, pre: Ref, back: Ref) {
     b.trace.insts[phi.index()].op = Op::Phi { pre, back };
 }
+
+
+#[test]
+fn licm_leaves_constants_in_the_body() {
+    let mut b = trace();
+    let dead = b.knum(99.0);
+    let lp = b.emit(Op::Loop, IrType::Nil);
+    let k = b.emit(Op::KNum(3.0), IrType::Number);
+    let snap = b.snapshot();
+    b.emit(Op::GuardTruthy { a: k, want: true, snap }, IrType::Nil);
+    let mut t = b.into_trace();
+    t.loop_ref = Some(lp);
+    dce::run(&mut t);
+    assert!(matches!(t.inst(dead).op, Op::Nop));
+    assert!(!licm::run(&mut t));
+    assert!(matches!(t.inst(k).op, Op::KNum(n) if n == 3.0));
+    validate(&t).unwrap();
+}

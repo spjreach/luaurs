@@ -13,7 +13,7 @@
 //! snapshot is the same at every guard that uses it: one stub per snapshot.
 
 use crate::codegen::asm::{Asm, Cond, Label, R, X};
-use crate::jit::ir::instruction::{Cmp, Op, Ref};
+use crate::jit::ir::instruction::{Cmp, Op, Ref, SnapId};
 use crate::jit::ir::types::IrType;
 use crate::jit::snapshots::Snapshot;
 use crate::jit::trace::Trace;
@@ -73,13 +73,9 @@ pub unsafe fn compile(t: &Trace) -> Result<Code, String> {
         }
     };
     // the loop's interrupt exit resumes at the header with every slot the
-    // iteration wrote: the last guard's snapshot, re-targeted
-    let back_snap = t
-        .insts
-        .iter()
-        .rev()
-        .find_map(|i| i.snapshot())
-        .ok_or("trace has no exit")?;
+    // iteration wrote. The recorder appends that snapshot last; using the
+    // last snapshot (not the last *guard*) keeps the restore complete.
+    let back_snap = SnapId(t.snapshots.len().checked_sub(1).ok_or("trace has no snapshot")? as u32);
     for (i, inst) in t.insts.iter().enumerate() {
         match inst.op {
             Op::Phi { pre, back } => {
