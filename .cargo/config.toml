@@ -2,5 +2,5 @@
 # lvmthreaded.rs uses guaranteed tail calls (`become`, feature explicit_tail_calls)
 RUSTC_BOOTSTRAP = "1"
 
-[build]
+[target.x86_64-pc-windows-gnu]
 rustflags = ["-C", "llvm-args=-align-loops=32", "-C", "llvm-args=-align-all-functions=5"]

@@ -1,12 +1,27 @@
 #!/usr/bin/env bash
-# Full conformance sweep. Each test runs in its own shell with a hard address
-# space cap and a wall-clock timeout so a runaway test can never exhaust RAM.
+# Full conformance sweep. Each test runs with a wall-clock timeout and, where
+# supported, an address-space cap so a runaway test cannot exhaust available RAM.
 cd "$(dirname "$0")"
-BIN=${BIN:-./target/release/luau.exe}
+PLATFORM=$(uname -s)
+case "$PLATFORM" in
+  MINGW*|MSYS*|CYGWIN*) EXE_SUFFIX=.exe ;;
+  *) EXE_SUFFIX= ;;
+esac
+BIN=${BIN:-./target/release/luau${EXE_SUFFIX}}
+TIMEOUT_BIN=${TIMEOUT_BIN:-timeout}
+if ! command -v "$TIMEOUT_BIN" >/dev/null 2>&1; then
+  if command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_BIN=gtimeout
+  else
+    echo "sweep.sh requires timeout (install GNU coreutils on macOS)" >&2
+    exit 2
+  fi
+fi
 pass=0; fail=0; failed=()
 for f in tests/conformance/*.luau; do
   name=$(basename "$f" .luau)
-  ( ulimit -v 1500000 2>/dev/null; timeout ${TO:-60} "$BIN" "$f" >"/tmp/out_$name.txt" 2>&1 )
+  ( if [ "$PLATFORM" != Darwin ]; then ulimit -v 1500000 2>/dev/null || true; fi
+    "$TIMEOUT_BIN" ${TO:-60} "$BIN" "$f" >"/tmp/out_$name.txt" 2>&1 )
   code=$?
   if [ $code -eq 0 ]; then
     echo "PASS $name"; pass=$((pass+1))
@@ -16,3 +31,4 @@ for f in tests/conformance/*.luau; do
 done
 echo "=== $pass passed, $fail failed ==="
 echo "failing: ${failed[*]}"
+exit "$fail"

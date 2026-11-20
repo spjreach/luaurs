@@ -1,9 +1,10 @@
 [package]
 name = "luau-ast"
-description = "Rust port of Luau Ast module (lexer, parser, AST nodes)"
+description = "Luau lexer, parser, and AST nodes (workspace requires nightly Rust)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
-luau-common = { path = "../luau-common" }
+luau-common = { version = "0.1.0", path = "../luau-common" }

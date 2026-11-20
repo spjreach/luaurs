@@ -1,11 +1,12 @@
 [package]
 name = "luau-config"
-description = "Rust port of Luau's Config module (.luaurc and .config.luau)"
+description = "Luau configuration loader for .luaurc and .config.luau (requires nightly Rust)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
-luau-ast = { path = "../luau-ast" }
-luau-compiler = { path = "../luau-compiler" }
-luau-rt = { path = "../luau-rt" }
+luau-ast = { version = "0.1.0", path = "../luau-ast" }
+luau-compiler = { version = "0.1.0", path = "../luau-compiler" }
+luau-rt = { version = "0.1.0", path = "../luau-rt" }

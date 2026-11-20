@@ -1,10 +1,11 @@
 [package]
 name = "luau-compiler"
-description = "Rust port of Luau Compiler module (bytecode compiler)"
+description = "Luau bytecode compiler (workspace requires nightly Rust)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
-luau-common = { path = "../luau-common" }
-luau-ast = { path = "../luau-ast" }
+luau-common = { version = "0.1.0", path = "../luau-common" }
+luau-ast = { version = "0.1.0", path = "../luau-ast" }

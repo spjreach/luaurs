@@ -112,6 +112,12 @@ It takes the same flags as the C++ `luau` tool: `-O0..2`, `-g0..2`, `--codegen`,
 
 ## Using it from Rust
 
+**Toolchain note:** this crate currently requires nightly Rust because `luau-rt` uses the
+unstable `explicit_tail_calls` feature. `.cargo/config.toml` sets `RUSTC_BOOTSTRAP=1` only
+for builds inside this repository; that setting does not apply to downstream projects. A
+consumer can build with nightly, or explicitly set `RUSTC_BOOTSTRAP=1` in their own build
+environment (not recommended as a stable-Rust compatibility guarantee).
+
 Add it to your `Cargo.toml`:
 
 ```toml
@@ -323,8 +329,11 @@ where it lives as it goes. Most of its speed comes from three tricks:
 
 ## Building and testing
 
-You need Rust (stable is fine; `.cargo/config.toml` switches on the two unstable features the
-code uses).
+Building the workspace currently requires nightly Rust because `luau-rt` uses the unstable
+`explicit_tail_calls` feature. The repository's `.cargo/config.toml` enables `RUSTC_BOOTSTRAP`
+for local builds, but this configuration does not travel with crates.io or git dependencies.
+Downstream users should use nightly; setting `RUSTC_BOOTSTRAP=1` themselves is a workaround,
+not a stable-Rust compatibility guarantee.
 
 ```sh
 cargo build --release

@@ -5,6 +5,39 @@ on:
   pull_request:
 
 jobs:
+  linux-macos-interpreter:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install GNU coreutils on macOS
+        if: runner.os == 'macOS'
+        run: brew install coreutils
+
+      - name: Build Luau CLI (interpreter-only target)
+        run: cargo build --release -p luau
+
+      - name: Unit and API tests (interpreter)
+        run: cargo test --release
+
+      - name: Luau conformance (interpreter)
+        env:
+          LUAU_CODEGEN: "0"
+        run: bash sweep.sh
+
   windows:
     runs-on: windows-latest
     steps:
@@ -28,9 +61,9 @@ jobs:
       - name: Conformance (JIT and interpreter)
         shell: bash
         run: |
+          set -o pipefail
           bash sweep.sh | tail -2
           LUAU_CODEGEN=0 bash sweep.sh | tail -2
-          bash sweep.sh | grep -q "0 failed"
 
       - name: JIT differential tests
         shell: bash

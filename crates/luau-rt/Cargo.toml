@@ -1,11 +1,12 @@
 [package]
 name = "luau-rt"
-description = "Rust port of the Luau VM runtime (lua_State, GC, interpreter, standard libraries)"
+description = "Luau VM runtime, interpreter, and standard libraries (requires nightly Rust)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
-luau-common = { path = "../luau-common" }
-luau-ast = { path = "../luau-ast" }
-luau-compiler = { path = "../luau-compiler" }
+luau-common = { version = "0.1.0", path = "../luau-common" }
+luau-ast = { version = "0.1.0", path = "../luau-ast" }
+luau-compiler = { version = "0.1.0", path = "../luau-compiler" }

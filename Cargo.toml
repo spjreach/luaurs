@@ -16,7 +16,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["luaurs contributors"]
-description = "Luau (the Roblox scripting language) in Rust: compiler, VM and x64 JIT"
+description = "Luau in Rust: compiler, VM and x64 JIT (requires nightly Rust)"
 repository = "https://github.com/spjreach/luaurs"
 
 # Luau is performance sensitive; enable some optimization for dev/test builds used
