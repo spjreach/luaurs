@@ -333,18 +333,24 @@ impl NumSink for Vec<u8> {
 
 /// Fixed stack buffer for one formatted number (no heap allocation).
 pub struct NumBuf {
-    buf: [u8; 64],
+    /// only `..len` is ever read, so the rest stays uninitialized (no
+    /// 64-byte fill per number formatted)
+    buf: std::mem::MaybeUninit<[u8; 64]>,
     len: usize,
 }
 
 impl NumBuf {
     #[inline(always)]
     pub fn new() -> Self {
-        NumBuf { buf: [0; 64], len: 0 }
+        NumBuf { buf: std::mem::MaybeUninit::uninit(), len: 0 }
+    }
+    #[inline(always)]
+    fn ptr(&mut self) -> *mut u8 {
+        self.buf.as_mut_ptr() as *mut u8
     }
     #[inline(always)]
     pub fn as_slice(&self) -> &[u8] {
-        &self.buf[..self.len]
+        unsafe { std::slice::from_raw_parts(self.buf.as_ptr() as *const u8, self.len) }
     }
 }
 
@@ -357,12 +363,14 @@ impl Default for NumBuf {
 impl NumSink for NumBuf {
     #[inline(always)]
     fn push(&mut self, c: u8) {
-        self.buf[self.len] = c;
+        assert!(self.len < 64);
+        unsafe { *self.ptr().add(self.len) = c };
         self.len += 1;
     }
     #[inline(always)]
     fn extend_from_slice(&mut self, s: &[u8]) {
-        self.buf[self.len..self.len + s.len()].copy_from_slice(s);
+        assert!(self.len + s.len() <= 64);
+        unsafe { std::ptr::copy_nonoverlapping(s.as_ptr(), self.ptr().add(self.len), s.len()) };
         self.len += s.len();
     }
     #[inline(always)]
@@ -375,7 +383,8 @@ impl NumSink for NumBuf {
             None
         } else {
             self.len -= 1;
-            Some(self.buf[self.len])
+            // (a byte written before: it was below the old length)
+            Some(unsafe { *self.ptr().add(self.len) })
         }
     }
 }

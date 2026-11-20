@@ -2926,6 +2926,36 @@ unsafe extern "sysv64-unwind" fn jit_settablek(L: *mut lua_State, obj: *const TV
     crate::lvmutils::luaV_settable(L, obj, key, val);
 }
 
+/// CONCAT for native code; `abc` = a | b << 8 | c << 16, `pc` the next
+/// instruction.
+unsafe extern "sysv64-unwind" fn jit_concat(L: *mut lua_State, abc: u64, pc: *const u32) {
+    let (a, b, c) = ((abc & 0xff) as usize, ((abc >> 8) & 0xff) as i32, ((abc >> 16) & 0xff) as i32);
+    (*(*L).ci).savedpc = pc;
+    crate::lvmutils::luaV_concat(L, c - b + 1, c);
+    let base = (*L).base;
+    setobj(base.add(a), base.add(b as usize));
+    crate::lgc::luaC_checkGC(L);
+}
+
+/// PREPVARARGS for native code (as the interpreter: may grow the stack).
+unsafe extern "sysv64-unwind" fn jit_prepvarargs(L: *mut lua_State, numparams: u64) {
+    let numparams = numparams as usize;
+    let ci = (*L).ci;
+    let cl = clvalue((*ci).func);
+    crate::ldo::luaD_checkstack(L, (*cl).stacksize as i32 + numparams as i32);
+    let fixed = (*L).base;
+    let base = (*L).top;
+    for i in 0..numparams {
+        setobj(base.add(i), fixed.add(i));
+        setnilvalue(fixed.add(i));
+    }
+    let ci = (*L).ci;
+    (*ci).base = base;
+    (*ci).top = base.add((*cl).stacksize as usize);
+    (*L).base = base;
+    (*L).top = (*ci).top;
+}
+
 /// `#t` for native code (no allocation, never raises).
 unsafe extern "sysv64" fn jit_getn(t: *mut LuaTable) -> u64 {
     crate::ltable::luaH_getn(t) as u32 as u64
@@ -3451,6 +3481,29 @@ unsafe fn translate_pass(
             done = tr.t_gettableks(ra, rb, aux);
         } else if is(O::SetTableKs) {
             done = tr.t_settableks(ra, rb, aux);
+        } else if is(O::Concat) && !dbg_off(2097152) {
+            // R(A) = R(B) .. ... .. R(C) through luaV_concat (metamethods,
+            // GC step), without the interpreter step around it
+            tr.flush_here();
+            tr.sync();
+            tr.a.mov_rr(R::Rdi, R::R12);
+            tr.a.mov_ri(R::Rsi, (ra as u64) | ((rb as u64) << 8) | ((rc as u64) << 16));
+            tr.a.mov_ri(R::Rdx, tr.pc(i) as u64 + 4);
+            tr.a.call_abs(jit_concat as usize);
+            tr.a.load(R::R13, R::R12, OFF_BASE);
+            for r in rb..=rc {
+                tr.st.kill(r);
+            }
+            // (any type: __concat may return anything)
+            tr.st.kill(ra);
+        } else if is(O::PrepVarargs) && !dbg_off(1048576) {
+            // fixed parameters move above the varargs; the frame is rebased
+            tr.sync();
+            tr.a.mov_rr(R::Rdi, R::R12);
+            tr.a.mov_ri(R::Rsi, ra as u64);
+            tr.a.call_abs(jit_prepvarargs as usize);
+            tr.a.load(R::R13, R::R12, OFF_BASE);
+            tr.st.forget();
         } else if is(O::SetList) && !dbg_off(4096) {
             done = tr.t_setlist(ra, rb, rc, aux);
         } else if is(O::Length) && !dbg_off(2048) {

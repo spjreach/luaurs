@@ -314,7 +314,13 @@ unsafe fn tpack(L: *mut lua_State) -> i32 {
     for i in 0..n as usize {
         setobj((*t).array.add(i), (*L).base.add(i));
     }
-    let nv = luaH_setstr(L, t, luaS_new(L, "n"));
+    let g = (*L).global;
+    if (*g).str_n.is_null() {
+        let s = luaS_new(L, "n");
+        crate::lstring::luaS_fix(s);
+        (*g).str_n = s;
+    }
+    let nv = luaH_setstr(L, t, (*g).str_n);
     setnvalue(nv, n as f64);
     1
 }

@@ -97,15 +97,17 @@ unsafe fn str_rep(L: *mut lua_State) -> i32 {
         if (*(*L).global).allocblocked {
             crate::ldo::luaD_throw(L, LUA_ERRMEM);
         }
-        let mut buf = [0u8; 256];
-        buf[..l].copy_from_slice(s);
+        // (uninitialized: only the first `total` bytes are written and read)
+        let mut buf = std::mem::MaybeUninit::<[u8; 256]>::uninit();
+        let bp = buf.as_mut_ptr() as *mut u8;
+        std::ptr::copy_nonoverlapping(s.as_ptr(), bp, l);
         let mut have = l;
         while have < total {
             let k = have.min(total - have);
-            buf.copy_within(..k, have);
+            std::ptr::copy_nonoverlapping(bp, bp.add(have), k);
             have += k;
         }
-        lua_pushlstring(L, &buf[..total]);
+        lua_pushlstring(L, std::slice::from_raw_parts(bp, total));
         return 1;
     }
     let mut r: Vec<u8> = Vec::new();

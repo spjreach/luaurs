@@ -415,16 +415,18 @@ pub unsafe fn luaV_concat(L: *mut lua_State, mut total: i32, mut last: i32) {
                 n += 1;
             }
             if tl < LUA_BUFFERSIZE {
-                let mut buf = [0u8; LUA_BUFFERSIZE];
+                // (not zero-filled: only the first `tl` bytes are written and read)
+                let mut buf = std::mem::MaybeUninit::<[u8; LUA_BUFFERSIZE]>::uninit();
+                let bp = buf.as_mut_ptr() as *mut u8;
                 let mut off = 0;
                 let mut i = n;
                 while i > 0 {
                     let s = sbytes(tsvalue(top.sub(i as usize)));
-                    buf[off..off + s.len()].copy_from_slice(s);
+                    std::ptr::copy_nonoverlapping(s.as_ptr(), bp.add(off), s.len());
                     off += s.len();
                     i -= 1;
                 }
-                setsvalue(top.sub(n as usize), luaS_newlstr(L, &buf[..off]));
+                setsvalue(top.sub(n as usize), luaS_newlstr(L, std::slice::from_raw_parts(bp, off)));
             } else {
                 let ts = luaS_bufstart(L, tl);
                 let data = std::ptr::addr_of_mut!((*ts).data) as *mut u8;

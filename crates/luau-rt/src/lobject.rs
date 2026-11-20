@@ -960,6 +960,8 @@ pub struct global_State {
     /// so string building doesn't allocate on every call.
     pub strbuf_ptr: *mut u8,
     pub strbuf_cap: usize,
+    /// the interned (fixed) string "n" for `table.pack` (null until used)
+    pub str_n: *mut TString,
 }
 
 #[repr(C)]
