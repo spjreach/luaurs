@@ -9,8 +9,7 @@ use super::trace::{Trace, TraceId};
 /// `for i = 1, n do s = s + i end`, as the recorder would build it:
 /// slot 0 = s, slot 1 = limit, slot 3 = i.
 fn sum_loop() -> Trace {
-    let mut t = Trace::new(TraceId(1), std::ptr::null_mut(), 5);
-    let mut b = IrBuilder::new(&mut t, 8, 5);
+    let mut b = IrBuilder::new(Trace::new(TraceId(1), std::ptr::null_mut(), 5), 8, 5);
     let s0 = b.slot(0, IrType::Number);
     let lim = b.slot(1, IrType::Number);
     let i0 = b.slot(3, IrType::Number);
@@ -26,6 +25,7 @@ fn sum_loop() -> Trace {
     b.pc = 9;
     let snap = b.snapshot();
     b.emit(Op::Guard { cmp: Cmp::Le, a: i1, b: lim, snap }, IrType::Nil);
+    let mut t = b.into_trace();
     t.insts[s.index()].op = Op::Phi { pre: s0, back: s1 };
     t.insts[i.index()].op = Op::Phi { pre: i0, back: i1 };
     t.loop_ref = Some(lp);
@@ -42,8 +42,7 @@ fn hand_built_loop_validates() {
 
 #[test]
 fn constants_are_interned() {
-    let mut t = Trace::new(TraceId(1), std::ptr::null_mut(), 0);
-    let mut b = IrBuilder::new(&mut t, 4, 0);
+    let mut b = IrBuilder::new(Trace::new(TraceId(1), std::ptr::null_mut(), 0), 4, 0);
     assert_eq!(b.knum(2.0), b.knum(2.0));
     assert_ne!(b.knum(2.0), b.knum(-2.0));
     assert_eq!(b.ki32(7), b.ki32(7));
@@ -51,8 +50,7 @@ fn constants_are_interned() {
 
 #[test]
 fn snapshot_reused_until_a_write() {
-    let mut t = Trace::new(TraceId(1), std::ptr::null_mut(), 0);
-    let mut b = IrBuilder::new(&mut t, 4, 0);
+    let mut b = IrBuilder::new(Trace::new(TraceId(1), std::ptr::null_mut(), 0), 4, 0);
     let a = b.slot(0, IrType::Number);
     let s1 = b.snapshot();
     assert_eq!(s1, b.snapshot());
@@ -70,10 +68,9 @@ fn validation_catches_use_before_def() {
 
 #[test]
 fn validation_catches_type_mismatch() {
-    let mut t = Trace::new(TraceId(1), std::ptr::null_mut(), 0);
-    let mut b = IrBuilder::new(&mut t, 4, 0);
+    let mut b = IrBuilder::new(Trace::new(TraceId(1), std::ptr::null_mut(), 0), 4, 0);
     let s = b.slot(0, IrType::String);
     let one = b.knum(1.0);
     b.emit(Op::Add(s, one), IrType::Number);
-    assert!(validate(&t).is_err());
+    assert!(validate(&b.into_trace()).is_err());
 }

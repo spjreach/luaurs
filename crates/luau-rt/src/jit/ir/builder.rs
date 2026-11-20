@@ -12,8 +12,8 @@ use crate::jit::snapshots::{SnapEntry, Snapshot};
 use crate::jit::trace::Trace;
 use std::collections::HashMap;
 
-pub struct IrBuilder<'t> {
-    pub trace: &'t mut Trace,
+pub struct IrBuilder {
+    pub trace: Trace,
     /// bytecode index that a snapshot taken now resumes at
     pub pc: u32,
     /// slot -> current value (None: untouched, still in the VM stack)
@@ -37,8 +37,8 @@ enum ConstKey {
     I32(i32),
 }
 
-impl<'t> IrBuilder<'t> {
-    pub fn new(trace: &'t mut Trace, nslots: usize, pc: u32) -> IrBuilder<'t> {
+impl IrBuilder {
+    pub fn new(trace: Trace, nslots: usize, pc: u32) -> IrBuilder {
         IrBuilder {
             trace,
             pc,
@@ -48,6 +48,22 @@ impl<'t> IrBuilder<'t> {
             last_snap: None,
             writes: 0,
         }
+    }
+
+    /// The finished trace.
+    pub fn into_trace(self) -> Trace {
+        self.trace
+    }
+
+    /// Slots read (loaded) by the trace so far, with their SLoad.
+    pub fn loaded(&self) -> Vec<(usize, Ref)> {
+        let mut v = Vec::new();
+        for (i, inst) in self.trace.insts.iter().enumerate() {
+            if let Op::SLoad { slot, .. } = inst.op {
+                v.push((slot as usize, Ref(i as u32)));
+            }
+        }
+        v
     }
 
     pub fn emit(&mut self, op: Op, ty: IrType) -> Ref {
