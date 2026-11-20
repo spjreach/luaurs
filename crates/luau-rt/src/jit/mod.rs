@@ -22,6 +22,7 @@ pub mod config;
 pub mod debug;
 pub mod hotness;
 pub mod ir;
+pub mod lualib;
 pub mod optimizer;
 pub mod snapshots;
 pub mod state;
