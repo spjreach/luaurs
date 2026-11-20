@@ -18,6 +18,8 @@
 //! `config.rs` / `debug.rs` (env vars, logging, dumps): GPT.
 
 pub mod compiler;
+pub mod config;
+pub mod debug;
 pub mod hotness;
 pub mod ir;
 pub mod optimizer;

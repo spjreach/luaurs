@@ -2,7 +2,8 @@
 //! header, recording status. (Thread-local: Luau states on different OS
 //! threads don't share traces.)
 
-use super::hotness::{HotCounters, DEFAULT_HOTLOOP};
+use super::config::TraceConfig;
+use super::hotness::HotCounters;
 use super::trace::{AbortReason, Trace, TraceId};
 use crate::lobject::Proto;
 use std::cell::RefCell;
@@ -24,11 +25,11 @@ pub struct JitState {
 
 impl JitState {
     fn new() -> JitState {
-        let env = |k: &str| std::env::var(k).ok();
+        let config = TraceConfig::global();
         JitState {
-            enabled: env("LUAU_TRACE").is_some_and(|v| v != "0"),
-            hotloop: env("LUAU_TRACE_HOTLOOP").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_HOTLOOP),
-            max_trace_len: env("LUAU_TRACE_MAXLEN").and_then(|v| v.parse().ok()).unwrap_or(4000),
+            enabled: config.enabled,
+            hotloop: config.hotloop,
+            max_trace_len: config.max_trace_len,
             max_traces: 1000,
             hot: HotCounters::default(),
             traces: HashMap::new(),
@@ -59,4 +60,10 @@ pub fn with<R>(f: impl FnOnce(&mut JitState) -> R) -> R {
 
 pub fn enabled() -> bool {
     with(|s| s.enabled)
+}
+
+/// Cheap process-level check for interpreter hot paths. Unlike `enabled()`,
+/// this avoids touching the thread-local `RefCell` on every interpreter entry.
+pub fn trace_enabled() -> bool {
+    TraceConfig::global().enabled
 }
