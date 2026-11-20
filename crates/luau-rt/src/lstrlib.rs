@@ -934,7 +934,14 @@ unsafe fn str_format(L: *mut lua_State) -> i32 {
                     fmt_char(&mut b.buf, &sp, v as u8);
                 }
                 b'd' | b'i' => {
-                    let v = if lua_type(L, arg) == LUA_TINTEGER { luaL_checkinteger64(L, arg) } else { luaL_checknumber(L, arg) as i64 };
+                    let v = if lua_type(L, arg) == LUA_TINTEGER {
+                        luaL_checkinteger64(L, arg)
+                    } else {
+                        // C's (long long) cast on x64 (cvttsd2si): out of
+                        // range and NaN give INT64_MIN, not a saturated value
+                        let n = luaL_checknumber(L, arg);
+                        if n >= -9223372036854775808.0 && n < 9223372036854775808.0 { n as i64 } else { i64::MIN }
+                    };
                     fmt_int(&mut b.buf, &sp, v);
                 }
                 b'o' | b'u' | b'x' | b'X' => {

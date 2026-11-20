@@ -73,15 +73,35 @@ fn digits_into(buf: &mut [u8; 128], v: u64, base: u64, upper: bool, prec: Option
     let set: &[u8; 16] = if upper { b"0123456789ABCDEF" } else { b"0123456789abcdef" };
     let mut i = buf.len();
     if !(v == 0 && prec == Some(0)) {
-        let mut x = v;
-        loop {
-            i -= 1;
-            buf[i] = set[(x % base) as usize];
-            x /= base;
-            if x == 0 {
-                break;
+        // a constant base per call site, so `%` and `/` become a mask/shift
+        // (8, 16) or a multiply (10) instead of a 64-bit divide per digit
+        #[inline(always)]
+        fn digits<const B: u64>(buf: &mut [u8; 128], mut i: usize, mut x: u64, set: &[u8; 16]) -> usize {
+            loop {
+                i -= 1;
+                buf[i] = set[(x % B) as usize];
+                x /= B;
+                if x == 0 {
+                    return i;
+                }
             }
         }
+        i = match base {
+            16 => digits::<16>(buf, i, v, set),
+            10 => digits::<10>(buf, i, v, set),
+            8 => digits::<8>(buf, i, v, set),
+            _ => {
+                let mut x = v;
+                loop {
+                    i -= 1;
+                    buf[i] = set[(x % base) as usize];
+                    x /= base;
+                    if x == 0 {
+                        break i;
+                    }
+                }
+            }
+        };
     }
     if let Some(p) = prec {
         let p = p.min(buf.len() - 1);
