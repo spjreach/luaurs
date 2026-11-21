@@ -420,6 +420,20 @@ impl Recorder {
         Ok(())
     }
 
+    /// Bytecode liveness (live-in registers per instruction) of the proto.
+    unsafe fn liveness(&self) -> Option<Vec<crate::codegen::live::Mask>> {
+        let p = self.proto;
+        let n = (*p).sizecode as usize;
+        let code = (*p).code;
+        let mut starts = vec![false; n];
+        let mut i = 0;
+        while i < n {
+            starts[i] = true;
+            i += op_len(op_of(*code.add(i)));
+        }
+        crate::codegen::live::analyze(code, n, &starts, &[])
+    }
+
     // ---- closing the loop ------------------------------------------------
 
     /// Turns the recorded iteration into `pre-roll; LOOP; PHIs; body`.
@@ -435,12 +449,29 @@ impl Recorder {
                 loads.insert(slot as usize, Ref(i as u32));
             }
         }
-        // loop-carried: read before written, and written by the iteration.
-        // TODO(before traces run): a slot written by the iteration but read
-        // only after its write is restored by exits after that write; an
-        // exit *before* it leaves the trace-entry value in the stack, which
-        // is wrong if the interpreter can read the slot at that exit's pc
-        // (bytecode liveness decides; such slots must be carried too)
+        // A slot the iteration writes without reading it first isn't
+        // carried: exits after its write restore it, but an exit *before*
+        // the write (in a later iteration) leaves the trace-entry value in
+        // the stack instead of the previous iteration's. That's only wrong
+        // if the interpreter can read the slot at that exit's pc.
+        unsafe {
+            let live = self.liveness();
+            for (&slot, _) in written.iter().filter(|(s, _)| !loads.contains_key(s)) {
+                for sn in &rec.snapshots {
+                    if sn.entries.iter().any(|e| e.slot as usize == slot) {
+                        continue;
+                    }
+                    let live_here = match &live {
+                        Some(l) => crate::codegen::live::has(&l[sn.pc as usize], slot),
+                        None => true,
+                    };
+                    if live_here {
+                        return Err(unsupported_type("write-only slot live at an exit before its write"));
+                    }
+                }
+            }
+        }
+        // loop-carried: read before written, and written by the iteration
         let carried: Vec<(usize, Ref, Ref)> = loads
             .iter()
             .filter_map(|(&s, &ld)| written.get(&s).map(|&w| (s, ld, w)))
@@ -602,7 +633,6 @@ fn opname(o: O) -> &'static str {
     names[o as u8 as usize]
 }
 
-#[allow(dead_code)]
 fn op_len(op: u8) -> usize {
     O::try_from(op).map(|o| get_op_length(o) as usize).unwrap_or(1)
 }
