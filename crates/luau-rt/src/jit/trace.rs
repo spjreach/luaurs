@@ -62,11 +62,15 @@ pub struct Trace {
     pub gc_refs: Vec<(usize, u8)>,
     /// prototypes inlined into the trace (besides `proto`)
     pub protos: Vec<usize>,
+    /// the same trace without loop-invariant hoisting (whose values stay in
+    /// registers across the loop): compiled instead when this one runs out
+    /// of registers
+    pub fallback: Option<Box<Trace>>,
 }
 
 impl Trace {
     pub fn new(id: TraceId, proto: *mut Proto, start_pc: u32) -> Trace {
-        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new() }
+        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None }
     }
 
     pub fn inst(&self, r: Ref) -> &Inst {

@@ -209,7 +209,18 @@ pub unsafe fn record_step(L: *mut lua_State, p: *mut Proto, pc: u32, base: StkId
         recorder::Step::Closed(mut t) => {
             optimizer::optimize(&mut t);
             let _ = debug::dump_ir(&t);
-            match compiler::compile(&t) {
+            let mut compiled = compiler::compile(&t);
+            if compiled.is_err() {
+                if let Some(mut fb) = t.fallback.take() {
+                    optimizer::optimize(&mut fb);
+                    if let Ok(c) = compiler::compile(&fb) {
+                        t = *fb;
+                        compiled = Ok(c);
+                    }
+                }
+            }
+            t.fallback = None;
+            match compiled {
                 Ok(native) => {
                     t.native = Some(native);
                     // (constants come from prototypes, which outlive the

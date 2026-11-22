@@ -105,13 +105,31 @@ pub enum Op {
     /// can't run) and isn't read-only (for stores)
     GuardPlainTable { t: Ref, store: bool, snap: SnapId },
 
+    /// pointer to the value of hash node `idx` of table `t` (a Table, or a
+    /// Ptr to one), whose key must be the string `k`: exits through `snap`
+    /// unless the hash part still has `2^lsize` nodes and that node's key is
+    /// `k` (LuaJIT's HREFK). `store`: also exits unless the node's value is
+    /// non-nil and the table isn't read-only (an existing field is assigned
+    /// without `__newindex` or a new key)
+    HRef { t: Ref, k: Ref, idx: u32, lsize: u8, store: bool, snap: SnapId },
+    /// pointer to the value of hash node `idx` of table `t`, unchecked: an
+    /// `HRef` of the same node was checked before the loop (a trace never
+    /// adds keys, so the table's hash part can't change while it runs)
+    HSlot { t: Ref, idx: u32 },
+
     // ---- functions --------------------------------------------------------
     /// the running closure of the trace's own frame (`L->ci->func`)
     FrameFunc,
     /// upvalue `idx` of closure `cl`: through its upvalue object when
-    /// `by_ref` (exits unless it is one), else stored in the closure; exits
-    /// through `snap` unless the value has this instruction's type
-    ULoad { cl: Ref, idx: u8, by_ref: bool, snap: SnapId },
+    /// `by_ref` (exits unless it is one, or if it points into the stack
+    /// below `base + stack`: an open upvalue of a slot the trace may hold in
+    /// a register), else stored in the closure; exits through `snap` unless
+    /// the value has this instruction's type
+    ULoad { cl: Ref, idx: u8, by_ref: bool, stack: u16, snap: SnapId },
+    /// exits unless upvalue `idx` of closure `cl` is open on stack slot
+    /// `slot` of the trace's frame (the trace then uses its own value of
+    /// that slot)
+    GuardUvSlot { cl: Ref, idx: u8, slot: u16, snap: SnapId },
     /// the environment (globals table) of closure `cl` (a Ptr)
     ClEnv { cl: Ref },
     /// exits unless function `f` is a Lua closure of prototype `p` (a Ptr
@@ -157,7 +175,9 @@ impl Inst {
             XStore { p, v } => vec![*p, *v],
             GuardPlainTable { t, .. } => vec![*t],
             FrameFunc => vec![],
-            ULoad { cl, .. } | ClEnv { cl } => vec![*cl],
+            HRef { t, k, .. } => vec![*t, *k],
+            HSlot { t, .. } => vec![*t],
+            ULoad { cl, .. } | ClEnv { cl } | GuardUvSlot { cl, .. } => vec![*cl],
             GuardProto { f, p, .. } => vec![*f, *p],
             GuardFlag { p, .. } => vec![*p],
             Phi { pre, back } => vec![*pre, *back],
@@ -169,7 +189,7 @@ impl Inst {
         use Op::*;
         match &self.op {
             SLoad { guarded: true, snap, .. } => Some(*snap),
-            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } => {
+            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } => {
                 Some(*snap)
             }
             _ => None,
@@ -183,7 +203,7 @@ impl Inst {
         matches!(
             self.op,
             KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | Add(..) | Sub(..) | Mul(..) | Div(..) | Mod(..)
-                | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | ARef { .. } | FrameFunc | ClEnv { .. }
+                | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | ARef { .. } | FrameFunc | ClEnv { .. } | HSlot { .. }
         )
     }
 

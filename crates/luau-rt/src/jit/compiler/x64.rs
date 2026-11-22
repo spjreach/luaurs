@@ -33,6 +33,11 @@ const OFF_CI: i32 = offset_of!(lua_State, ci) as i32;
 const OFF_CI_FUNC: i32 = offset_of!(CallInfo, func) as i32;
 const OFF_STACK_LAST: i32 = offset_of!(lua_State, stack_last) as i32;
 const OFF_UV_V: i32 = offset_of!(UpVal, v) as i32;
+const OFF_T_LSIZENODE: i32 = offset_of!(LuaTable, lsizenode) as i32;
+const OFF_T_NODE: i32 = offset_of!(LuaTable, node) as i32;
+const NODE_SIZE: i32 = std::mem::size_of::<LuaNode>() as i32;
+const OFF_NODE_KEY: i32 = (offset_of!(LuaNode, key) + offset_of!(TKey, value)) as i32;
+const OFF_NODE_KEYTT: i32 = (offset_of!(LuaNode, key) + offset_of!(TKey, ttnext)) as i32;
 const OFF_CL_ENV: i32 = offset_of!(Closure, env) as i32;
 const OFF_CL_P: i32 = (CLOSURE_HEADER + offset_of!(LClosure, p)) as i32;
 const OFF_CL_UPREFS: i32 = (CLOSURE_HEADER + offset_of!(LClosure, uprefs)) as i32;
@@ -126,7 +131,7 @@ pub unsafe fn compile(t: &Trace) -> Result<Code, String> {
         }
         let defines = !matches!(
             inst.op,
-            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. }
+            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. }
         );
         if !defines {
             continue;
@@ -393,6 +398,40 @@ pub unsafe fn compile(t: &Trace) -> Result<Code, String> {
                     }
                 }
             }
+            Op::HRef { t: tb, k, idx, lsize, store, snap } => {
+                let s = stub(*snap);
+                let tb = g(*tb)?;
+                a.cmp8_mi(tb, OFF_T_LSIZENODE, *lsize);
+                a.jcc(Cond::NE, s);
+                if *store {
+                    a.cmp8_mi(tb, OFF_T_READONLY, 0);
+                    a.jcc(Cond::NE, s);
+                }
+                a.load(R::Rcx, tb, OFF_T_NODE);
+                let off = *idx as i32 * NODE_SIZE;
+                // key: a string, and this one
+                a.load32(R::Rax, R::Rcx, off + OFF_NODE_KEYTT);
+                a.and32_ri(R::Rax, 0xf);
+                a.cmp32_ri(R::Rax, LUA_TSTRING as i32);
+                a.jcc(Cond::NE, s);
+                a.load(R::Rax, R::Rcx, off + OFF_NODE_KEY);
+                a.cmp_rr(R::Rax, g(*k)?);
+                a.jcc(Cond::NE, s);
+                if *store {
+                    a.cmp32_mi(R::Rcx, off + OFF_TT, LUA_TNIL as i32);
+                    a.jcc(Cond::E, s);
+                }
+                if let Home::G(d) = dst {
+                    a.lea(d, R::Rcx, off);
+                }
+            }
+            Op::HSlot { t: tb, idx } => {
+                if let Home::G(d) = dst {
+                    let tb = g(*tb)?;
+                    a.load(R::Rax, tb, OFF_T_NODE);
+                    a.lea(d, R::Rax, *idx as i32 * NODE_SIZE);
+                }
+            }
             Op::FrameFunc => {
                 if let Home::G(d) = dst {
                     a.load(d, R::R12, OFF_CI);
@@ -411,7 +450,19 @@ pub unsafe fn compile(t: &Trace) -> Result<Code, String> {
                 a.cmp_rr(R::Rax, g(*p)?);
                 a.jcc(Cond::NE, stub(*snap));
             }
-            Op::ULoad { cl, idx, by_ref, snap } => {
+            Op::GuardUvSlot { cl, idx, slot, snap } => {
+                let s = stub(*snap);
+                let disp = OFF_CL_UPREFS + *idx as i32 * TV;
+                a.mov_rr(R::Rcx, g(*cl)?);
+                a.cmp32_mi(R::Rcx, disp + OFF_TT, LUA_TUPVAL as i32);
+                a.jcc(Cond::NE, s);
+                a.load(R::Rcx, R::Rcx, disp);
+                a.load(R::Rcx, R::Rcx, OFF_UV_V);
+                a.lea(R::Rax, R::R13, *slot as i32 * TV);
+                a.cmp_rr(R::Rcx, R::Rax);
+                a.jcc(Cond::NE, s);
+            }
+            Op::ULoad { cl, idx, by_ref, stack, snap } => {
                 let s = stub(*snap);
                 let disp = OFF_CL_UPREFS + *idx as i32 * TV;
                 a.mov_rr(R::Rcx, g(*cl)?);
@@ -420,6 +471,15 @@ pub unsafe fn compile(t: &Trace) -> Result<Code, String> {
                     a.jcc(Cond::NE, s);
                     a.load(R::Rcx, R::Rcx, disp);
                     a.load(R::Rcx, R::Rcx, OFF_UV_V);
+                    // not open on a slot the trace may hold in a register:
+                    // exit when base <= v < base + stack
+                    let ok = a.label();
+                    a.cmp_rr(R::Rcx, R::R13);
+                    a.jcc(Cond::B, ok);
+                    a.lea(R::Rax, R::R13, *stack as i32 * TV);
+                    a.cmp_rr(R::Rcx, R::Rax);
+                    a.jcc(Cond::B, s);
+                    a.bind(ok);
                 } else {
                     a.add_ri(R::Rcx, disp);
                 }

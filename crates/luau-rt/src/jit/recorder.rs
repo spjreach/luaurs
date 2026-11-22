@@ -63,6 +63,10 @@ pub struct Recorder {
 /// Deepest call inlining.
 const MAX_INLINE_DEPTH: usize = 6;
 
+/// Stack slots (from the trace's base) an open upvalue read by the trace
+/// must not point into (covers every inlined frame: see `stack_need`).
+const STACK_WINDOW: usize = 1024;
+
 #[inline]
 fn op_of(i: u32) -> u8 {
     (i & 0xff) as u8
@@ -573,15 +577,74 @@ impl Recorder {
                 self.read(c, base)?
             };
             self.b.set_slot(a, v);
+        } else if o(O::GetTableKs) || o(O::GetGlobal) {
+            // a string-keyed field (of R(B), or of the environment)
+            let kidx = aux as usize;
+            let (h, t) = if o(O::GetTableKs) {
+                if (*base.add(bb)).tt != LUA_TTABLE {
+                    return Err(unsupported_type("field of a non-table"));
+                }
+                (hvalue(base.add(bb)), self.read(bb, base)?)
+            } else {
+                let (cl, clr) = self.cur_closure();
+                (((*cl).env), self.b.emit(Op::ClEnv { cl: clr }, IrType::Ptr))
+            };
+            let p = self.field_ref(h, t, kidx, false)?;
+            let ety = IrType::of_tag((*p.1).tt).ok_or(unsupported_type("field type"))?;
+            let snap = self.b.snapshot();
+            let v = self.b.emit(Op::XLoad { p: p.0, snap }, ety);
+            self.b.set_slot(a, v);
+        } else if o(O::SetTableKs) || o(O::SetGlobal) {
+            let kidx = aux as usize;
+            let (h, t) = if o(O::SetTableKs) {
+                if (*base.add(bb)).tt != LUA_TTABLE {
+                    return Err(unsupported_type("field of a non-table"));
+                }
+                (hvalue(base.add(bb)), self.read(bb, base)?)
+            } else {
+                let (cl, clr) = self.cur_closure();
+                (((*cl).env), self.b.emit(Op::ClEnv { cl: clr }, IrType::Ptr))
+            };
+            let v = self.read(a, base)?;
+            if self.b.trace.ty(v).is_gc() {
+                return Err(unsupported_type("store of a GC object (write barrier)"));
+            }
+            let (p, _) = self.field_ref(h, t, kidx, true)?;
+            self.b.emit(Op::XStore { p, v }, IrType::Nil);
         } else if o(O::GetUpval) {
             let (cl, clr) = self.cur_closure();
             let ur = Closure::uprefs(cl).add(bb);
             let by_ref = (*ur).tt == LUA_TUPVAL;
             let val = if by_ref { (*upvalue(ur)).v as *const TValue } else { ur as *const TValue };
-            let ty = IrType::of_tag((*val).tt).ok_or(unsupported_type("upvalue type"))?;
-            let snap = self.b.snapshot();
-            let v = self.b.emit(Op::ULoad { cl: clr, idx: bb as u8, by_ref, snap }, ty);
-            self.b.set_slot(a, v);
+            let rel = (val as isize - self.root_base as isize) / std::mem::size_of::<TValue>() as isize;
+            if by_ref && rel >= 0 && rel < STACK_WINDOW as isize {
+                // open on a slot of the trace's own frames, which the trace
+                // may hold in a register: use the trace's value of the slot
+                let slot = rel as usize;
+                if slot >= self.b.off {
+                    // (the current frame's own slots: not an upvalue of it)
+                    return Err(AbortReason::Internal("upvalue of the current frame".into()));
+                }
+                let snap = self.b.snapshot();
+                self.b.emit(Op::GuardUvSlot { cl: clr, idx: bb as u8, slot: slot as u16, snap }, IrType::Nil);
+                let ty = IrType::of_tag((*val).tt).ok_or(unsupported_type("upvalue type"))?;
+                let saved = self.b.off;
+                self.b.off = 0;
+                let v = match self.b.peek(slot) {
+                    Some(v) => v,
+                    None => self.b.slot(slot, ty),
+                };
+                self.b.off = saved;
+                if self.b.trace.ty(v) != ty {
+                    return Err(AbortReason::Internal("upvalue slot type mismatch".into()));
+                }
+                self.b.set_slot(a, v);
+            } else {
+                let ty = IrType::of_tag((*val).tt).ok_or(unsupported_type("upvalue type"))?;
+                let snap = self.b.snapshot();
+                let v = self.b.emit(Op::ULoad { cl: clr, idx: bb as u8, by_ref, stack: STACK_WINDOW as u16, snap }, ty);
+                self.b.set_slot(a, v);
+            }
         } else if o(O::GetImport) {
             let kv = (*proto).k.add(d_of(insn) as usize);
             let (cl, clr) = self.cur_closure();
@@ -615,6 +678,33 @@ impl Recorder {
             return Err(AbortReason::UnsupportedOpcode(name));
         }
         Ok(())
+    }
+
+    /// The node of table `h` (IR value `t`) holding string constant `kidx`
+    /// of the current function: (pointer to its value, the value now).
+    /// Only existing, non-nil fields: anything else (a new key, `__index`,
+    /// `__newindex`) is left to the interpreter.
+    unsafe fn field_ref(&mut self, h: *mut LuaTable, t: Ref, kidx: usize, store: bool) -> R<(Ref, *const TValue)> {
+        let kv = (*self.cur_proto()).k.add(kidx);
+        if (*kv).tt != LUA_TSTRING {
+            return Err(unsupported_type("non-string field key"));
+        }
+        if store && (*h).readonly != 0 {
+            return Err(unsupported_type("store into a read-only table"));
+        }
+        let res = crate::ltable::luaH_getstr(h, tsvalue(kv));
+        if res == luaO_nilobject() || (*res).tt == LUA_TNIL {
+            return Err(unsupported_type("missing field"));
+        }
+        let node = (*h).node;
+        let idx = (res as *const LuaNode).offset_from(node);
+        if idx < 0 || idx >= (1isize << (*h).lsizenode) {
+            return Err(AbortReason::Internal("field outside the hash part".into()));
+        }
+        let k = self.konst(kidx)?;
+        let snap = self.b.snapshot();
+        let p = self.b.emit(Op::HRef { t, k, idx: idx as u32, lsize: (*h).lsizenode, store, snap }, IrType::Ptr);
+        Ok((p, res))
     }
 
     /// Exits unless the environment of closure `cl` is still safe (its
@@ -658,6 +748,9 @@ impl Recorder {
             self.protos.push(p as usize);
         }
         let fb = self.b.off + a + 1;
+        if fb + (*cl).stacksize as usize + LUA_MINSTACK as usize > STACK_WINDOW {
+            return Err(AbortReason::UnsupportedControlFlow);
+        }
         let ret_pc = pc + if op_of(insn) == O::CallFb as u8 { 2 } else { 1 };
         self.b.push_frame(SnapFrame { base: fb as u16, func: cl as usize, ret_pc, nresults: nres, nargs: nargs as u16 });
         self.funcs.push((p, cl, Some(f)));
@@ -719,9 +812,40 @@ impl Recorder {
 
     // ---- closing the loop ------------------------------------------------
 
-    /// Turns the recorded iteration into `pre-roll; LOOP; PHIs; body`.
+    /// Turns the recorded iteration into `pre-roll; LOOP; PHIs; body`
+    /// (with loop-invariant work hoisted into the pre-roll, and a version
+    /// without as the fallback).
     fn close(&mut self) -> R<Trace> {
         let rec = std::mem::replace(&mut self.b.trace, Trace::new(TraceId(0), std::ptr::null_mut(), 0));
+        let (mut t, hoisted) = self.close_with(&rec, true)?;
+        if hoisted {
+            t.fallback = Some(Box::new(self.close_with(&rec, false)?.0));
+        }
+        Ok(t)
+    }
+
+    /// Instructions computing the same value on every iteration when their
+    /// operands do (`HRef` is hoisted as a check: the body uses `HSlot`).
+    fn hoistable(inst: &Inst) -> bool {
+        (inst.is_pure() && !inst.is_const())
+            || matches!(
+            inst.op,
+            Op::FrameFunc
+                | Op::ClEnv { .. }
+                | Op::HRef { .. }
+                | Op::GuardProto { .. }
+                | Op::GuardFlag { .. }
+                | Op::ULoad { .. }
+                | Op::GuardUvSlot { .. }
+                | Op::Guard { .. }
+                | Op::GuardTruthy { .. }
+                | Op::GuardSame { .. }
+                | Op::NumToI32 { .. }
+                | Op::ASize(_)
+        )
+    }
+
+    fn close_with(&self, rec: &Trace, hoist: bool) -> R<(Trace, bool)> {
         let written: BTreeMap<usize, Ref> = self.b.written().into_iter().collect();
         let n = rec.insts.len();
 
@@ -750,9 +874,9 @@ impl Recorder {
 
         let mut out = Trace::new(rec.id, rec.proto, rec.start_pc);
         out.end_pc = self.loop_end;
-        out.protos = std::mem::take(&mut self.protos);
+        out.protos = self.protos.clone();
         out.stack_need = self.stack_need as u32;
-        out.gc_refs = std::mem::take(&mut self.gc_refs);
+        out.gc_refs = self.gc_refs.clone();
         let mut map: Vec<Option<Ref>> = vec![None; n];
         let push = |out: &mut Trace, inst: Inst| -> Ref {
             out.insts.push(inst);
@@ -780,6 +904,98 @@ impl Recorder {
             let r = push(&mut out, Inst { op: Op::SLoad { slot: s as u16, guarded: true, snap: entry }, ty: rec.ty(w) });
             synth.insert(s, r);
         }
+        // loop-invariant instructions: operands are entry loads of slots the
+        // loop doesn't write, constants or hoisted values. They run once,
+        // before the loop, exiting through the entry snapshot.
+        let mut hoisted_href = vec![false; n];
+        let mut any_hoisted = false;
+        // (recorded load, its pre-loop value, the stored value it gets back)
+        let mut mem_phis: Vec<(usize, Ref, Ref)> = Vec::new();
+        if hoist {
+            let carried: std::collections::HashSet<Ref> = written.values().copied().collect();
+            let mut pre: Vec<Option<Ref>> = vec![None; n];
+            for (&s, &ld) in &loads {
+                if !written.contains_key(&s) {
+                    pre[ld.index()] = map[ld.index()];
+                }
+            }
+            for (i, inst) in rec.insts.iter().enumerate() {
+                if !Self::hoistable(inst) || carried.contains(&Ref(i as u32)) {
+                    continue;
+                }
+                let ops = inst.operands();
+                if !ops.iter().all(|o| pre[o.index()].is_some() || rec.inst(*o).is_const()) {
+                    continue;
+                }
+                for o in ops {
+                    if pre[o.index()].is_none() {
+                        // a constant: copied before the loop
+                        pre[o.index()] = Some(push(&mut out, rec.inst(o).clone()));
+                    }
+                }
+                let mut op = inst.op.clone();
+                remap_operands(&mut op, &|r: Ref| pre[r.index()].unwrap());
+                set_snapshot(&mut op, entry);
+                let r = push(&mut out, Inst { op, ty: inst.ty });
+                pre[i] = Some(r);
+                any_hoisted = true;
+                if matches!(inst.op, Op::HRef { .. }) {
+                    // checked here; the body takes the slot's address
+                    hoisted_href[i] = true;
+                } else {
+                    map[i] = Some(r);
+                }
+            }
+            // memory at loop-invariant addresses (LuaJIT's loop forwarding):
+            // a load no store in the loop may alias is done once, before the
+            // loop; a load of a location the loop stores to (and nothing
+            // else that may alias it), before that store in the iteration,
+            // becomes a PHI of the value loaded before the loop and the
+            // value the iteration stores
+            let stores: Vec<(usize, Ref, Ref)> = rec
+                .insts
+                .iter()
+                .enumerate()
+                .filter_map(|(j, x)| match x.op {
+                    Op::XStore { p, v } => Some((j, p, v)),
+                    _ => None,
+                })
+                .collect();
+            for (i, inst) in rec.insts.iter().enumerate() {
+                let Op::XLoad { p, .. } = inst.op else { continue };
+                let Some(pp) = pre[p.index()] else { continue };
+                if map[i].is_some() {
+                    continue;
+                }
+                let m = rec_mem(rec, p);
+                let aliasing: Vec<&(usize, Ref, Ref)> = stores.iter().filter(|s| rec_may_alias(m, rec_mem(rec, s.1))).collect();
+                let same = |q: Ref| rec_key(rec, q).is_some() && rec_key(rec, q) == rec_key(rec, p);
+                if aliasing.is_empty() {
+                    let r = push(&mut out, Inst { op: Op::XLoad { p: pp, snap: entry }, ty: inst.ty });
+                    map[i] = Some(r);
+                    pre[i] = Some(r);
+                    any_hoisted = true;
+                } else if aliasing.iter().all(|s| same(s.1) && s.0 > i) {
+                    let v = aliasing.last().unwrap().2;
+                    let v_in_body = pre[v.index()].is_none() || rec.inst(v).is_const();
+                    if rec.ty(v) == inst.ty && v_in_body && !carried.contains(&Ref(i as u32)) {
+                        let r = push(&mut out, Inst { op: Op::XLoad { p: pp, snap: entry }, ty: inst.ty });
+                        mem_phis.push((i, r, v));
+                        any_hoisted = true;
+                    }
+                }
+            }
+            // the body's HSlots use the hoisted operands
+            for (i, h) in hoisted_href.iter().enumerate() {
+                if *h {
+                    if let Op::HRef { t, .. } = rec.inst(Ref(i as u32)).op {
+                        if map[t.index()].is_none() {
+                            map[t.index()] = pre[t.index()];
+                        }
+                    }
+                }
+            }
+        }
         let loop_ref = push(&mut out, Inst { op: Op::Loop, ty: IrType::Nil });
         // PHIs (their back operands are filled in after the body)
         let mut phis: Vec<(usize, Ref, Ref)> = Vec::new();
@@ -804,6 +1020,12 @@ impl Recorder {
             phis.push((s, phi, w));
         }
         let phi_of: HashMap<usize, Ref> = phis.iter().map(|&(s, p, _)| (s, p)).collect();
+        let mut mphis: Vec<(Ref, Ref)> = Vec::new();
+        for &(i, pre_v, v) in &mem_phis {
+            let phi = push(&mut out, Inst { op: Op::Phi { pre: pre_v, back: pre_v }, ty: rec.inst(Ref(i as u32)).ty });
+            map[i] = Some(phi);
+            mphis.push((phi, v));
+        }
 
         // body, with snapshots copied and completed
         let mut snap_map: HashMap<u32, SnapId> = HashMap::new();
@@ -813,6 +1035,11 @@ impl Recorder {
             }
             let rm = |r: Ref| map[r.index()].expect("operand defined earlier");
             let mut op = inst.op.clone();
+            if hoisted_href[i] {
+                if let Op::HRef { t, idx, .. } = op {
+                    op = Op::HSlot { t, idx };
+                }
+            }
             remap_operands(&mut op, &rm);
             if let Some(s) = inst.snapshot() {
                 let ns = *snap_map.entry(s.0).or_insert_with(|| {
@@ -834,6 +1061,15 @@ impl Recorder {
                 set_snapshot(&mut op, ns);
             }
             map[i] = Some(push(&mut out, Inst { op, ty: inst.ty }));
+        }
+        for &(phi, v) in &mphis {
+            let back = map[v.index()].ok_or_else(|| AbortReason::Internal("memory PHI back value outside the body".into()))?;
+            if back <= loop_ref {
+                return Err(AbortReason::Internal("memory PHI back value is invariant".into()));
+            }
+            if let Op::Phi { back: b, .. } = &mut out.insts[phi.index()].op {
+                *b = back;
+            }
         }
         for &(_, phi, w) in &phis {
             let back = map[w.index()].ok_or_else(|| AbortReason::Internal("PHI back value outside the body".into()))?;
@@ -875,7 +1111,7 @@ impl Recorder {
         }
         out.loop_ref = Some(loop_ref);
         super::ir::validate(&out).map_err(AbortReason::Internal)?;
-        Ok(out)
+        Ok((out, any_hoisted))
     }
 }
 
@@ -900,6 +1136,44 @@ unsafe fn find_loop_end(p: *mut Proto, header: u32) -> u32 {
         pc += O::try_from(op).map(|o| get_op_length(o) as isize).unwrap_or(1);
     }
     last
+}
+
+/// Alias class of a recorded pointer (see `optimizer::forwarding`): hash
+/// node index, or array element (table, index, constant index).
+#[derive(Clone, Copy, PartialEq)]
+enum RecMem {
+    Node(u32),
+    Elem(Option<i32>),
+    Other,
+}
+
+fn rec_mem(t: &Trace, p: Ref) -> RecMem {
+    match t.inst(p).op {
+        Op::HRef { idx, .. } | Op::HSlot { idx, .. } => RecMem::Node(idx),
+        Op::ARef { idx, .. } => RecMem::Elem(match t.inst(idx).op {
+            Op::KI32(k) => Some(k),
+            _ => None,
+        }),
+        _ => RecMem::Other,
+    }
+}
+
+fn rec_may_alias(a: RecMem, b: RecMem) -> bool {
+    match (a, b) {
+        (RecMem::Node(x), RecMem::Node(y)) => x == y,
+        (RecMem::Node(_), RecMem::Elem(_)) | (RecMem::Elem(_), RecMem::Node(_)) => false,
+        (RecMem::Elem(Some(x)), RecMem::Elem(Some(y))) => x == y,
+        _ => true,
+    }
+}
+
+/// The exact location of a recorded pointer: (kind, table, index).
+fn rec_key(t: &Trace, p: Ref) -> Option<(u8, Ref, u32)> {
+    match t.inst(p).op {
+        Op::HRef { t: tb, idx, .. } | Op::HSlot { t: tb, idx } => Some((0, tb, idx)),
+        Op::ARef { t: tb, idx } => Some((1, tb, idx.0)),
+        _ => None,
+    }
 }
 
 /// Builtins the trace compiler has an instruction for.
@@ -936,7 +1210,12 @@ fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *v = rm(*v);
         }
         GuardPlainTable { t, .. } => *t = rm(*t),
-        ULoad { cl, .. } | ClEnv { cl } => *cl = rm(*cl),
+        ULoad { cl, .. } | ClEnv { cl } | GuardUvSlot { cl, .. } => *cl = rm(*cl),
+        HRef { t, k, .. } => {
+            *t = rm(*t);
+            *k = rm(*k);
+        }
+        HSlot { t, .. } => *t = rm(*t),
         GuardProto { f, p, .. } => {
             *f = rm(*f);
             *p = rm(*p);
@@ -962,7 +1241,9 @@ fn set_snapshot(op: &mut Op, s: SnapId) {
         | GuardPlainTable { snap, .. }
         | GuardFlag { snap, .. }
         | ULoad { snap, .. }
-        | GuardProto { snap, .. } => *snap = s,
+        | GuardProto { snap, .. }
+        | HRef { snap, .. }
+        | GuardUvSlot { snap, .. } => *snap = s,
         _ => {}
     }
 }
