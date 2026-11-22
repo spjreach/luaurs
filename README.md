@@ -98,6 +98,40 @@ Your numbers will differ with your CPU, so run them yourself (see
 [Building and testing](#building-and-testing)). Differences of a few percent are within the
 noise between runs.
 
+## Tracing JIT (experimental)
+
+There's a second JIT in the works, built the way LuaJIT's is: instead of compiling whole functions,
+it watches which loops get hot, records one trip around the loop (following calls into other
+functions), and compiles exactly that path into tight machine code with values kept in CPU
+registers. If something unexpected happens (a type changes, a branch goes the other way) it hops
+back to the regular JIT mid-loop, and branches that keep going the other way get their own
+compiled "side traces".
+
+It's off by default. Turn it on with an environment variable:
+
+```sh
+LUAU_TRACE=1 luau script.luau
+```
+
+Everything outside the traced loops still runs on the regular JIT, so it never makes a program
+much slower; on loop-heavy code it can make it a lot faster. On the classic shootout programs
+(Windows x64, milliseconds, lower is better):
+
+| Benchmark | luaurs + tracing | C++ Luau | LuaJIT 2.1 |
+|---|---:|---:|---:|
+| spectral-norm | **5.4** | 50.2 | 2.0 |
+| n-body | **8.6** | 21.9 | 3.0 |
+| heapsort | **32.0** | 100.8 | 21.0 |
+| fannkuch-redux | **46.6** | 120.4 | 22.7 |
+| binary-trees | **82.8** | 111.5 | 57.7 |
+| mandel | **145.6** | 179.6 | 28.7 |
+
+So it beats C++ Luau everywhere here, and LuaJIT is the next target. What it can't trace yet
+(it simply leaves those loops to the regular JIT): creating tables inside the loop, metamethods,
+calls into C functions such as `math.random`, storing strings or tables into fields, loops nested
+inside the traced loop, and `#t`. `LUAU_TRACE_LOG=1` (or `=2` for reasons) prints what it
+compiled and why it gave up; `jit.status()` / `jit.flush()` / `jit.off()` work from scripts.
+
 ## Using it from the command line
 
 ```sh
@@ -353,6 +387,7 @@ average. Right now luaurs wins 158 of 222 benchmarks; the rest are the to-do lis
 | Priority | Improvement | Status |
 |---|---|---|
 | High | Close the remaining benchmark gaps: `life`, `pcmmix` (about 8%), `air` (about 7%), `table.find` loops over numbers, `n-body-vector`, `%s` string interpolation (5–8%) | In progress. Done so far: `murmur128_int64` (now 1.25× faster than C++), proxy `__index` (about 1.7× faster), `table.find` on tables and strings (now even) |
+| High | Tracing JIT (LuaJIT-style, `LUAU_TRACE=1`): beat LuaJIT | In progress: loops, calls, upvalues, fields, math builtins and side traces compile; next are nested loops, cheaper trace entry, table allocation and metamethods |
 | High | Keep integer (`int64`) loop variables in CPU registers across iterations | Planned (numbers and vectors already are) |
 | High | Expand JIT support beyond Windows x64 | Planned; Linux/macOS interpreter builds in progress |
 | High | More JIT/interpreter differential tests | Largely done: 84 of 96 opcodes covered; a random-program fuzzer against C++ Luau is running |
