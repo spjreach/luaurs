@@ -99,6 +99,7 @@ pub unsafe fn luaF_closeupval(L: *mut lua_State, uv: *mut UpVal, dead: bool) {
 pub unsafe fn luaF_freeproto(L: *mut lua_State, f: *mut Proto) {
     #[cfg(all(target_arch = "x86_64", windows))]
     crate::codegen::free_execdata(f);
+    crate::jit::forget_proto(f);
     let m = (*f).hdr.memcat;
     luaM_freearray(L, (*f).code, (*f).sizecode as usize, m);
     luaM_freearray(L, (*f).p, (*f).sizep as usize, m);

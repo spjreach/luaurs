@@ -22,7 +22,7 @@
 use super::ir::builder::IrBuilder;
 use super::ir::instruction::{Cmp, Inst, Op, Ref, SnapId};
 use super::ir::types::IrType;
-use super::snapshots::{SnapEntry, Snapshot};
+use super::snapshots::{SnapEntry, SnapFrame, Snapshot};
 use super::trace::{AbortReason, Trace, TraceId};
 use crate::lobject::*;
 use luau_common::bytecode::{get_op_length, Opcode as O};
@@ -45,7 +45,23 @@ pub struct Recorder {
     id: TraceId,
     steps: usize,
     max_len: usize,
+    /// the trace frame's base when recording started (inlined frames are
+    /// at fixed offsets from it)
+    root_base: StkId,
+    /// (proto, closure now, the closure as an IR value once needed) of the
+    /// root frame and every inlined frame: a trace runs for any closure of
+    /// its prototypes, so upvalues and environments are read from the
+    /// closure at run time
+    funcs: Vec<(*mut Proto, *mut Closure, Option<Ref>)>,
+    /// most stack slots any recorded frame needs (from the root base)
+    stack_need: usize,
+    gc_refs: Vec<(usize, u8)>,
+    /// inlined prototypes (the trace is dropped when one is freed)
+    protos: Vec<usize>,
 }
+
+/// Deepest call inlining.
+const MAX_INLINE_DEPTH: usize = 6;
 
 #[inline]
 fn op_of(i: u32) -> u8 {
@@ -77,9 +93,10 @@ fn unsupported_type(what: &'static str) -> AbortReason {
 impl Recorder {
     /// Starts recording the loop whose header is instruction `start_pc` of
     /// `proto`; `base` is the frame's stack base right now.
-    pub unsafe fn new(id: TraceId, proto: *mut Proto, start_pc: u32, base: StkId, max_len: usize) -> Recorder {
+    /// `cl` is the running closure (not always at `base - 1`: a vararg
+    /// function's base is above its varargs).
+    pub unsafe fn new(id: TraceId, proto: *mut Proto, cl: *mut Closure, start_pc: u32, base: StkId, max_len: usize) -> Recorder {
         let nslots = (*proto).maxstacksize as usize;
-        let _ = base;
         let loop_end = find_loop_end(proto, start_pc);
         Recorder {
             b: IrBuilder::new(Trace::new(id, proto, start_pc), nslots, start_pc),
@@ -89,7 +106,51 @@ impl Recorder {
             id,
             steps: 0,
             max_len,
+            root_base: base,
+            funcs: vec![(proto, cl, None)],
+            stack_need: nslots,
+            gc_refs: Vec::new(),
+            protos: Vec::new(),
         }
+    }
+
+    /// Whether the interpreter is in the frame the recorder expects next
+    /// (`p` running at `base`).
+    pub fn expects(&self, p: *mut Proto, base: StkId) -> bool {
+        let (fp, _, _) = *self.funcs.last().unwrap();
+        fp == p && unsafe { self.root_base.add(self.b.off) } == base
+    }
+
+    fn cur_proto(&self) -> *mut Proto {
+        self.funcs.last().unwrap().0
+    }
+
+    /// The current frame's closure: (now, as an IR value).
+    fn cur_closure(&mut self) -> (*mut Closure, Ref) {
+        let last = self.funcs.len() - 1;
+        let (_, cl, r) = self.funcs[last];
+        let r = match r {
+            Some(r) => r,
+            None => {
+                // the root frame's (inlined frames have theirs from the CALL)
+                let r = self.b.emit(Op::FrameFunc, IrType::Function);
+                self.funcs[last].2 = Some(r);
+                r
+            }
+        };
+        (cl, r)
+    }
+
+    /// A GC object constant the trace's code refers to.
+    fn gc_const(&mut self, p: usize, ty: IrType) -> Ref {
+        // (Ptr constants - upvalue objects, environments - belong to a
+        // closure that is kept alive itself)
+        if let Some(tag) = ty.tag().filter(|_| ty.is_gc()) {
+            if !self.gc_refs.iter().any(|&(q, _)| q == p) {
+                self.gc_refs.push((p, tag as u8));
+            }
+        }
+        self.b.kptr(p, ty)
     }
 
     pub fn start_pc(&self) -> u32 {
@@ -107,7 +168,8 @@ impl Recorder {
     /// Records the instruction at `pc` (about to execute, with the frame's
     /// stack at `base`).
     pub unsafe fn step(&mut self, pc: u32, base: StkId) -> Step {
-        if pc == self.start_pc && self.steps > 0 {
+        let inlined = self.funcs.len() > 1;
+        if pc == self.start_pc && self.steps > 0 && !inlined {
             return match self.close() {
                 Ok(t) => Step::Closed(t),
                 Err(e) => Step::Abort(e),
@@ -115,7 +177,7 @@ impl Recorder {
         }
         // outside the loop: a break, a goto out of the body or the loop's
         // own exit path; the trace can't close there
-        if self.steps > 0 && (pc < self.start_pc || pc > self.loop_end) {
+        if self.steps > 0 && !inlined && (pc < self.start_pc || pc > self.loop_end) {
             return Step::Abort(AbortReason::UnsupportedControlFlow);
         }
         self.steps += 1;
@@ -154,19 +216,28 @@ impl Recorder {
     }
 
     unsafe fn konst(&mut self, k: usize) -> R<Ref> {
-        let kv = (*self.proto).k.add(k);
-        Ok(match (*kv).tt {
+        let kv = (*self.cur_proto()).k.add(k);
+        self.value_const(kv)
+    }
+
+    /// A constant for the value `*tv` (which can't change while the trace
+    /// runs: a constant table entry, an immutable upvalue, an import).
+    unsafe fn value_const(&mut self, tv: *const TValue) -> R<Ref> {
+        Ok(match (*tv).tt {
             LUA_TNIL => self.b.knil(),
-            LUA_TBOOLEAN => self.b.kbool((*kv).value.b != 0),
-            LUA_TNUMBER => self.b.knum((*kv).value.n),
-            LUA_TINTEGER => self.b.kint((*kv).value.l),
-            LUA_TSTRING => self.b.kptr((*kv).value.gc as usize, IrType::String),
+            LUA_TBOOLEAN => self.b.kbool((*tv).value.b != 0),
+            LUA_TNUMBER => self.b.knum((*tv).value.n),
+            LUA_TINTEGER => self.b.kint((*tv).value.l),
+            LUA_TSTRING | LUA_TTABLE | LUA_TFUNCTION | LUA_TUSERDATA | LUA_TBUFFER => {
+                let ty = IrType::of_tag((*tv).tt).ok_or(unsupported_type("constant"))?;
+                self.gc_const((*tv).value.gc as usize, ty)
+            }
             _ => return Err(unsupported_type("constant")),
         })
     }
 
     unsafe fn knum(&mut self, k: usize) -> R<Ref> {
-        let kv = (*self.proto).k.add(k);
+        let kv = (*self.cur_proto()).k.add(k);
         if (*kv).tt != LUA_TNUMBER {
             return Err(unsupported_type("arithmetic with a non-number constant"));
         }
@@ -247,7 +318,8 @@ impl Recorder {
     // ---- one instruction ---------------------------------------------
 
     unsafe fn record(&mut self, pc: u32, base: StkId) -> R<()> {
-        let code = (*self.proto).code;
+        let proto = self.cur_proto();
+        let code = (*proto).code;
         let insn = *code.add(pc as usize);
         let aux = *code.add(pc as usize + 1);
         let op = op_of(insn);
@@ -284,7 +356,11 @@ impl Recorder {
         } else if o(O::AddK) || o(O::SubK) || o(O::MulK) || o(O::DivK) || o(O::ModK) || o(O::PowK) || o(O::IDivK) {
             let x = self.read_num(bb, base)?;
             let y = self.knum(c)?;
-            let v = self.arith(op, x, y);
+            let v = if o(O::PowK) && matches!(self.b.trace.inst(y).op, Op::KNum(e) if e == 2.0) {
+                self.b.emit(Op::Mul(x, x), IrType::Number)
+            } else {
+                self.arith(op, x, y)
+            };
             self.b.set_slot(a, v);
         } else if o(O::SubRk) || o(O::DivRk) {
             let x = self.knum(bb)?;
@@ -370,7 +446,7 @@ impl Recorder {
                     let snap = self.b.snapshot();
                     self.b.emit(Op::GuardTruthy { a: x, want, snap }, IrType::Nil);
                 } else if o(O::JumpXEqKS) {
-                    let kv = (*(*self.proto).k.add((aux & 0xffffff) as usize)).value.gc as usize;
+                    let kv = (*(*proto).k.add((aux & 0xffffff) as usize)).value.gc as usize;
                     if (*tv).value.gc as usize == kv {
                         // equal (same object): pin it
                         let x = self.read(a, base)?;
@@ -477,11 +553,168 @@ impl Recorder {
             let p = self.array_slot(t, idx)?;
             let v = self.read(a, base)?;
             self.b.emit(Op::XStore { p, v }, IrType::Nil);
+        } else if o(O::And) || o(O::Or) || o(O::AndK) || o(O::OrK) {
+            // R(A) = R(B) and/or R(C) (or constant C): which operand is
+            // taken depends only on R(B)'s truthiness, which its type pins
+            // except for nil/boolean (guarded)
+            let tv = base.add(bb);
+            let truthy = !((*tv).tt == LUA_TNIL || ((*tv).tt == LUA_TBOOLEAN && (*tv).value.b == 0));
+            let x = self.read(bb, base)?;
+            if matches!(self.b.trace.ty(x), IrType::Nil | IrType::Boolean) {
+                let snap = self.b.snapshot();
+                self.b.emit(Op::GuardTruthy { a: x, want: truthy, snap }, IrType::Nil);
+            }
+            let take_b = if o(O::And) || o(O::AndK) { !truthy } else { truthy };
+            let v = if take_b {
+                x
+            } else if o(O::AndK) || o(O::OrK) {
+                self.konst(c)?
+            } else {
+                self.read(c, base)?
+            };
+            self.b.set_slot(a, v);
+        } else if o(O::GetUpval) {
+            let (cl, clr) = self.cur_closure();
+            let ur = Closure::uprefs(cl).add(bb);
+            let by_ref = (*ur).tt == LUA_TUPVAL;
+            let val = if by_ref { (*upvalue(ur)).v as *const TValue } else { ur as *const TValue };
+            let ty = IrType::of_tag((*val).tt).ok_or(unsupported_type("upvalue type"))?;
+            let snap = self.b.snapshot();
+            let v = self.b.emit(Op::ULoad { cl: clr, idx: bb as u8, by_ref, snap }, ty);
+            self.b.set_slot(a, v);
+        } else if o(O::GetImport) {
+            let kv = (*proto).k.add(d_of(insn) as usize);
+            let (cl, clr) = self.cur_closure();
+            if (*kv).tt == LUA_TNIL || (*(*cl).env).safeenv == 0 {
+                return Err(unsupported_type("import from an unsafe environment"));
+            }
+            self.guard_safeenv(clr);
+            let v = self.value_const(kv)?;
+            self.b.set_slot(a, v);
+        } else if o(O::FastCall1) {
+            // FASTCALL1 bfid, arg, skip: the CALL it replaces is `skip`
+            // instructions after the next; on success the interpreter jumps
+            // past that CALL with the result in its R(A)
+            let call = *code.add(pc as usize + 1 + c);
+            let (ra, nres) = (a_of(call), c_of(call) as i32 - 1);
+            let bfid = a as u8;
+            let (cl, clr) = self.cur_closure();
+            if (*(*cl).env).safeenv == 0 || nres != 1 || !math1_supported(bfid) || (*base.add(bb)).tt != LUA_TNUMBER {
+                return Err(AbortReason::UnsupportedOpcode("FastCall1"));
+            }
+            self.guard_safeenv(clr);
+            let x = self.read_num(bb, base)?;
+            let v = self.b.emit(Op::Math1(bfid, x), IrType::Number);
+            self.b.set_slot(ra, v);
+        } else if o(O::Call) || o(O::CallFb) {
+            self.record_call(pc, insn, base)?;
+        } else if o(O::Return) {
+            self.record_return(insn, base)?;
         } else {
             let name = O::try_from(op).map(|x| opname(x)).unwrap_or("?");
             return Err(AbortReason::UnsupportedOpcode(name));
         }
         Ok(())
+    }
+
+    /// Exits unless the environment of closure `cl` is still safe (its
+    /// globals unchanged since the imports were resolved).
+    unsafe fn guard_safeenv(&mut self, cl: Ref) {
+        let p = self.b.emit(Op::ClEnv { cl }, IrType::Ptr);
+        let snap = self.b.snapshot();
+        self.b.emit(Op::GuardFlag { p, off: std::mem::offset_of!(LuaTable, safeenv) as i32, snap }, IrType::Nil);
+    }
+
+    /// CALL of a Lua function: inlined (the callee's instructions are
+    /// recorded next, in a frame at a fixed slot offset).
+    unsafe fn record_call(&mut self, pc: u32, insn: u32, base: StkId) -> R<()> {
+        let (a, bb, c) = (a_of(insn), b_of(insn), c_of(insn));
+        let fv = base.add(a);
+        if (*fv).tt != LUA_TFUNCTION {
+            return Err(unsupported_type("call of a non-function"));
+        }
+        let cl = clvalue(fv);
+        if (*cl).isC != 0 {
+            return Err(AbortReason::UnsupportedOpcode("Call (C function)"));
+        }
+        if bb == 0 || c == 0 {
+            return Err(unsupported_type("call with variable arguments or results"));
+        }
+        let p = Closure::proto(cl);
+        if (*p).is_vararg != 0 {
+            return Err(unsupported_type("call of a vararg function"));
+        }
+        if self.funcs.len() >= MAX_INLINE_DEPTH {
+            return Err(AbortReason::UnsupportedControlFlow);
+        }
+        let (nargs, nres) = (bb - 1, c as i32 - 1);
+        // the callee must stay a closure of this prototype (any closure:
+        // its upvalues are read from it at run time)
+        let f = self.read(a, base)?;
+        let k = self.b.kptr(p as usize, IrType::Ptr);
+        let snap = self.b.snapshot();
+        self.b.emit(Op::GuardProto { f, p: k, snap }, IrType::Nil);
+        if !self.protos.contains(&(p as usize)) {
+            self.protos.push(p as usize);
+        }
+        let fb = self.b.off + a + 1;
+        let ret_pc = pc + if op_of(insn) == O::CallFb as u8 { 2 } else { 1 };
+        self.b.push_frame(SnapFrame { base: fb as u16, func: cl as usize, ret_pc, nresults: nres, nargs: nargs as u16 });
+        self.funcs.push((p, cl, Some(f)));
+        // missing parameters are nil
+        for i in nargs..(*p).numparams as usize {
+            let nil = self.b.knil();
+            self.b.set_slot(i, nil);
+        }
+        self.stack_need = self.stack_need.max(fb + nargs + (*cl).stacksize as usize + LUA_MINSTACK as usize);
+        Ok(())
+    }
+
+    /// RETURN from an inlined frame: its results go to the caller's slots.
+    unsafe fn record_return(&mut self, insn: u32, base: StkId) -> R<()> {
+        if self.funcs.len() == 1 {
+            return Err(AbortReason::UnsupportedControlFlow);
+        }
+        let (a, bb) = (a_of(insn), b_of(insn));
+        if bb == 0 {
+            return Err(unsupported_type("return of variable results"));
+        }
+        let nret = bb - 1;
+        let nres = self.b.frames.last().unwrap().nresults as usize;
+        let mut vals = Vec::with_capacity(nres);
+        for i in 0..nres {
+            vals.push(if i < nret { self.read(a + i, base)? } else { self.b.knil() });
+        }
+        let f = self.b.pop_frame().unwrap();
+        self.funcs.pop();
+        // results start at the caller's function slot
+        let dst = f.base as usize - 1 - self.b.off;
+        for (i, v) in vals.into_iter().enumerate() {
+            self.b.set_slot(dst + i, v);
+        }
+        Ok(())
+    }
+
+    /// Which slots of the trace's frame are live at the loop header (None:
+    /// unknown).
+    fn live_at_header(&self) -> Option<Vec<bool>> {
+        #[cfg(all(target_arch = "x86_64", windows))]
+        unsafe {
+            let p = self.proto;
+            let n = (*p).sizecode as usize;
+            let code = (*p).code;
+            let mut starts = vec![false; n];
+            let mut i = 0;
+            while i < n {
+                starts[i] = true;
+                i += op_len(op_of(*code.add(i)));
+            }
+            let live = crate::codegen::live::analyze(code, n, &starts, &[])?;
+            let m = live[self.start_pc as usize];
+            Some((0..256).map(|r| crate::codegen::live::has(&m, r)).collect())
+        }
+        #[cfg(not(all(target_arch = "x86_64", windows)))]
+        None
     }
 
     // ---- closing the loop ------------------------------------------------
@@ -505,14 +738,21 @@ impl Recorder {
         // the write (e.g. a break out of the loop) must restore the
         // previous iteration's value, not the trace-entry value - for those
         // an entry SLoad is synthesized in the pre-roll below
+        // (a slot dead at the loop header - a temporary - needs no
+        // carrying: no path from the header reads it before writing it, so
+        // no exit before its write can need its old value either)
+        let live = self.live_at_header();
         let written_missing: Vec<(usize, Ref)> = written
             .iter()
-            .filter(|(s, _)| !loads.contains_key(s))
+            .filter(|(s, _)| !loads.contains_key(s) && live.as_ref().is_none_or(|m| m[**s]))
             .map(|(&s, &w)| (s, w))
             .collect();
 
         let mut out = Trace::new(rec.id, rec.proto, rec.start_pc);
         out.end_pc = self.loop_end;
+        out.protos = std::mem::take(&mut self.protos);
+        out.stack_need = self.stack_need as u32;
+        out.gc_refs = std::mem::take(&mut self.gc_refs);
         let mut map: Vec<Option<Ref>> = vec![None; n];
         let push = |out: &mut Trace, inst: Inst| -> Ref {
             out.insts.push(inst);
@@ -520,7 +760,7 @@ impl Recorder {
         };
 
         // entry snapshot: resume at the loop header, nothing modified yet
-        out.snapshots.push(Snapshot { pc: rec.start_pc, entries: vec![], ref_limit: Ref(0) });
+        out.snapshots.push(Snapshot { pc: rec.start_pc, entries: vec![], ref_limit: Ref(0), frames: vec![] });
         let entry = SnapId(0);
 
         // pre-roll: slot loads. Constants stay in the body so their
@@ -551,7 +791,10 @@ impl Recorder {
                     }
                     (map[ld.index()].unwrap(), true)
                 }
-                None => (synth[&s], false),
+                None => match synth.get(&s) {
+                    Some(&r) => (r, false),
+                    None => continue,
+                },
             };
             let phi = push(&mut out, Inst { op: Op::Phi { pre, back: pre }, ty: rec.ty(w) });
             if recorded_load {
@@ -584,6 +827,7 @@ impl Recorder {
                         pc: old.pc,
                         entries: entries.into_iter().map(|(slot, value)| SnapEntry { slot, value }).collect(),
                         ref_limit: Ref(u32::MAX),
+                        frames: old.frames.clone(),
                     });
                     SnapId(out.snapshots.len() as u32 - 1)
                 });
@@ -618,6 +862,7 @@ impl Recorder {
             pc: rec.start_pc,
             entries: close_entries,
             ref_limit: Ref(out.insts.len() as u32),
+            frames: vec![],
         });
         // each snapshot covers the values defined before its first user
         for (i, inst) in out.insts.iter().enumerate() {
@@ -657,6 +902,12 @@ unsafe fn find_loop_end(p: *mut Proto, header: u32) -> u32 {
     last
 }
 
+/// Builtins the trace compiler has an instruction for.
+fn math1_supported(bfid: u8) -> bool {
+    use luau_common::bytecode::BuiltinFunction as B;
+    [B::MathSqrt, B::MathFloor, B::MathCeil, B::MathAbs].iter().any(|&b| b as u8 == bfid)
+}
+
 fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
     use Op::*;
     match op {
@@ -685,11 +936,17 @@ fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *v = rm(*v);
         }
         GuardPlainTable { t, .. } => *t = rm(*t),
+        ULoad { cl, .. } | ClEnv { cl } => *cl = rm(*cl),
+        GuardProto { f, p, .. } => {
+            *f = rm(*f);
+            *p = rm(*p);
+        }
+        GuardFlag { p, .. } => *p = rm(*p),
         Phi { pre, back } => {
             *pre = rm(*pre);
             *back = rm(*back);
         }
-        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop => {}
+        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop | FrameFunc => {}
     }
 }
 
@@ -702,7 +959,10 @@ fn set_snapshot(op: &mut Op, s: SnapId) {
         | GuardSame { snap, .. }
         | NumToI32 { snap, .. }
         | XLoad { snap, .. }
-        | GuardPlainTable { snap, .. } => *snap = s,
+        | GuardPlainTable { snap, .. }
+        | GuardFlag { snap, .. }
+        | ULoad { snap, .. }
+        | GuardProto { snap, .. } => *snap = s,
         _ => {}
     }
 }

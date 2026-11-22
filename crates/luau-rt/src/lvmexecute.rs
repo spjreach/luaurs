@@ -1298,7 +1298,11 @@ unsafe fn execute<const SS: bool>(L: *mut lua_State) {
                     if SS && crate::jit::state::trace_enabled() {
                         let p = (*(*L).ci).p;
                         if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
-                            pc = (*p).code.add(resume as usize);
+                            if resume == crate::jit::RESUME_FRAME {
+                                reload_frame!();
+                            } else {
+                                pc = (*p).code.add(resume as usize);
+                            }
                         }
                     }
                 } else {
@@ -1408,7 +1412,11 @@ unsafe fn execute<const SS: bool>(L: *mut lua_State) {
                     } else if SS && crate::jit::state::trace_enabled() {
                         let p = (*(*L).ci).p;
                         if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
-                            pc = (*p).code.add(resume as usize);
+                            if resume == crate::jit::RESUME_FRAME {
+                                reload_frame!();
+                            } else {
+                                pc = (*p).code.add(resume as usize);
+                            }
                         }
                     }
                 } else {
@@ -1543,7 +1551,11 @@ unsafe fn execute<const SS: bool>(L: *mut lua_State) {
                 if SS && crate::jit::state::trace_enabled() {
                     let p = (*(*L).ci).p;
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
-                        pc = (*p).code.add(resume as usize);
+                        if resume == crate::jit::RESUME_FRAME {
+                            reload_frame!();
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
                     }
                 }
             }

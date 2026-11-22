@@ -54,6 +54,48 @@ pub fn is_recording() -> bool {
 /// interpreter).
 pub const EXIT_STORM_LIMIT: u32 = 16;
 
+/// `on_backedge` result: the trace left through a snapshot inside inlined
+/// calls; their frames were pushed and `L->ci` resumes at its savedpc.
+pub const RESUME_FRAME: u32 = u32::MAX;
+
+/// Recreates the CallInfos of the inlined calls live at snapshot `sn` (the
+/// trace already wrote their slots) and points the innermost at `sn.pc`.
+unsafe fn push_frames(L: *mut lua_State, base: StkId, sn: &snapshots::Snapshot) {
+    use crate::lobject::Closure;
+    for f in &sn.frames {
+        let caller = (*L).ci;
+        (*caller).savedpc = (*(*caller).p).code.add(f.ret_pc as usize);
+        let func = base.add(f.base as usize - 1);
+        // (the trace wrote the function slot if it set it)
+        let cl = crate::lobject::clvalue(func);
+        let ci = crate::ldo::incr_ci(L);
+        (*ci).func = func;
+        (*ci).p = Closure::proto(cl);
+        (*ci).base = func.add(1);
+        (*ci).top = (*ci).base.add(f.nargs as usize + (*cl).stacksize as usize);
+        (*ci).savedpc = std::ptr::null();
+        (*ci).flags = 0;
+        (*ci).nresults = f.nresults;
+    }
+    let ci = (*L).ci;
+    (*ci).savedpc = (*(*ci).p).code.add(sn.pc as usize);
+    (*L).base = (*ci).base;
+    (*L).top = (*ci).top;
+}
+
+/// Drops everything known about a freed function.
+pub fn forget_proto(p: *mut Proto) {
+    if !state::trace_enabled() {
+        return;
+    }
+    state::try_with(|s| {
+        if !s.traces.is_empty() {
+            s.traces.retain(|&(q, _), t| q != p as usize && !t.protos.contains(&(p as usize)));
+        }
+        s.hot.forget_proto(p);
+    });
+}
+
 /// A taken backward branch to `header` in `p` (single-step interpreter,
 /// tracing enabled). Runs the loop's compiled trace if there is one and
 /// returns the pc to resume interpreting at; otherwise counts the loop and
@@ -62,48 +104,63 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
     if is_recording() {
         return None;
     }
-    let native = state::with(|s| s.traces.get(&(p as usize, header)).and_then(|t| t.native.map(|n| (n.entry, t.id))));
-    if let Some((entry, id)) = native {
+    let native = state::with(|s| s.traces.get(&(p as usize, header)).and_then(|t| t.native.map(|n| (n.entry, t.id, t.stack_need))));
+    if let Some((entry, id, need)) = native {
+        // room for the trace's inlined frames (the trace checks too, but
+        // can only exit): growing the stack moves it, so the caller then
+        // reloads its frame (RESUME_FRAME)
+        let mut base = base;
+        let moved = (*L).stack_last.offset_from(base) < need as isize;
+        if moved {
+            let n = need as isize - (*L).top.offset_from(base);
+            crate::ldo::luaD_checkstack(L, n.max(1) as i32);
+            base = (*L).base;
+        }
+        let resume_at = |pc: u32| -> Option<u32> {
+            if moved {
+                let ci = (*L).ci;
+                (*ci).savedpc = (*(*ci).p).code.add(pc as usize);
+                Some(RESUME_FRAME)
+            } else {
+                Some(pc)
+            }
+        };
         let f: compiler::TraceFn = std::mem::transmute(entry);
         let ex = f(base, L);
-        if ex & 0x8000_0000 == 0 {
-            debug::log(debug::Event::SideExit { id: id.0, snap: ex });
-            // a side exit: counts toward the storm limit (see
-            // EXIT_STORM_LIMIT), which drops the trace for a re-record
-            let (storm, resume) = state::with(|s| {
-                let t = s.traces.get_mut(&(p as usize, header)).expect("trace vanished");
-                // Resume where the guard's snapshot says, even when the
-                // trace is dropped. Returning `header` here replays the
-                // iteration that was about to leave the loop.
-                let resume = if ex & 0x8000_0000 != 0 { header } else { t.snapshots[ex as usize].pc };
-                // leaving the loop is normal; exits back into the body are
-                // what a storm is made of
-                if resume >= t.start_pc && resume <= t.end_pc {
-                    t.side_exits += 1;
-                }
-                (t.side_exits >= EXIT_STORM_LIMIT, resume)
-            });
-            if storm {
-                let reason = trace::AbortReason::Internal("side exit storm".into());
-                debug::log(debug::Event::TraceAbort { id: id.0, pc: header, reason: &reason });
-                state::with(|s| {
-                    s.traces.remove(&(p as usize, header));
-                    s.hot.penalize(p, header);
-                    s.aborts.push((id, header, reason));
-                });
-                return Some(resume);
-            }
-            return Some(resume);
+        if ex & 0x8000_0000 != 0 {
+            // interrupted at the back edge: resume at the header
+            return resume_at(header);
         }
-        return Some(state::with(|s| {
-            let t = &s.traces[&(p as usize, header)];
-            if ex & 0x8000_0000 != 0 {
-                // interrupted at the back edge: resume at the header
-                header
-            } else {
-                t.snapshots[ex as usize].pc
+        debug::log(debug::Event::SideExit { id: id.0, snap: ex });
+        // a side exit: exits back into the loop body count toward the storm
+        // limit (see EXIT_STORM_LIMIT), which drops the trace for a
+        // re-record. Leaving the loop is normal.
+        let (storm, resume, frames) = state::with(|s| {
+            let t = s.traces.get_mut(&(p as usize, header)).expect("trace vanished");
+            let sn = &t.snapshots[ex as usize];
+            let in_loop = !sn.frames.is_empty() || (sn.pc >= t.start_pc && sn.pc <= t.end_pc);
+            if in_loop {
+                t.side_exits += 1;
             }
-        }));
+            let frames = if sn.frames.is_empty() { None } else { Some(sn.clone()) };
+            (t.side_exits >= EXIT_STORM_LIMIT, sn.pc, frames)
+        });
+        if storm {
+            let reason = trace::AbortReason::Internal("side exit storm".into());
+            debug::log(debug::Event::TraceAbort { id: id.0, pc: header, reason: &reason });
+            state::with(|s| {
+                s.traces.remove(&(p as usize, header));
+                s.hot.penalize(p, header);
+                s.aborts.push((id, header, reason));
+            });
+        }
+        // Resume where the guard's snapshot says, even when the trace is
+        // dropped (resuming at `header` would replay the iteration).
+        if let Some(sn) = frames {
+            push_frames(L, base, &sn);
+            return Some(RESUME_FRAME);
+        }
+        return resume_at(resume);
     }
     let start = state::with(|s| {
         if !s.enabled || s.traces.contains_key(&(p as usize, header)) || s.traces.len() >= s.max_traces {
@@ -117,7 +174,7 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
     });
     if let Some((id, max_len)) = start {
         debug::log(debug::Event::TraceStart { id: id.0, pc: header });
-        let rec = recorder::Recorder::new(id, p, header, base, max_len);
+        let rec = recorder::Recorder::new(id, p, crate::lobject::clvalue((*(*L).ci).func), header, base, max_len);
         RECORDER.with(|r| *r.borrow_mut() = Some((rec, base)));
         RECORDING.with(|r| r.set(true));
     }
@@ -126,11 +183,11 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
 
 /// Called before the single-step interpreter executes instruction `pc` of
 /// `p` (frame base `base`) while recording.
-pub unsafe fn record_step(_L: *mut lua_State, p: *mut Proto, pc: u32, base: StkId) {
+pub unsafe fn record_step(L: *mut lua_State, p: *mut Proto, pc: u32, base: StkId) {
     let result = RECORDER.with(|r| {
         let mut r = r.borrow_mut();
-        let (rec, rbase) = r.as_mut().expect("recording");
-        if *rbase != base || rec_proto(rec) != p {
+        let (rec, _) = r.as_mut().expect("recording");
+        if !rec.expects(p, base) {
             // a call, a return, or a stack reallocation: leave it to the
             // interpreter
             return Some(recorder::Step::Abort(trace::AbortReason::LeftFrame));
@@ -155,6 +212,9 @@ pub unsafe fn record_step(_L: *mut lua_State, p: *mut Proto, pc: u32, base: StkI
             match compiler::compile(&t) {
                 Ok(native) => {
                     t.native = Some(native);
+                    // (constants come from prototypes, which outlive the
+                    // trace: it's dropped when any of them is freed)
+                    let _ = L;
                     debug::log(debug::Event::TraceCompiled { id: id.0, pc: header, insts: t.len() });
                     state::with(|s| s.traces.insert((proto as usize, header), t));
                 }
@@ -262,9 +322,8 @@ impl Drop for StopGuard {
 /// Runs the current frame from `pc` in the single-step interpreter until
 /// it can continue natively. Returns what `native_loop_hook` returns.
 #[cfg(all(target_arch = "x86_64", windows))]
-unsafe fn run_until_native(L: *mut lua_State, pc: *const crate::lobject::Instruction) -> usize {
+unsafe fn run_until_native(L: *mut lua_State, pc: *const crate::lobject::Instruction, depth: isize) -> usize {
     (*(*L).ci).savedpc = pc;
-    let depth = ci_depth(L);
     let _g = StopGuard(STOP_DEPTH.with(|d| d.replace(depth)));
     STOPPED.with(|s| s.set(false));
     crate::lvmexecute::execute_single_step(L);
@@ -319,9 +378,15 @@ pub unsafe extern "sysv64-unwind" fn native_loop_hook(
             return npc as usize;
         }
     }
+    let depth = ci_depth(L);
     let resume = on_backedge(L, p, header, base).unwrap_or(header);
-    let npc = code.add(resume as usize);
-    let r = if is_recording() || !native_entry(p, npc) { run_until_native(L, npc) } else { npc as usize };
+    let r = if resume == RESUME_FRAME {
+        // inside inlined calls: interpret until back in this frame
+        run_until_native(L, (*(*L).ci).savedpc, depth)
+    } else {
+        let npc = code.add(resume as usize);
+        if is_recording() || !native_entry(p, npc) { run_until_native(L, npc, depth) } else { npc as usize }
+    };
     // when to call again: every time while a trace exists or the loop may
     // still get one; practically never once it's given up on
     let again = state::with(|s| {

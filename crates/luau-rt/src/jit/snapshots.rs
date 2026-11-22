@@ -16,7 +16,24 @@ pub struct SnapEntry {
     pub value: Ref,
 }
 
+/// A call frame of a function inlined into the trace, live at a snapshot:
+/// leaving the trace there recreates its CallInfo.
 #[derive(Clone, Debug, PartialEq)]
+pub struct SnapFrame {
+    /// the frame's base, as a slot of the trace's frame (the function value
+    /// is in slot `base - 1`)
+    pub base: u16,
+    /// the called closure
+    pub func: usize,
+    /// bytecode index in the caller to return to (after its CALL)
+    pub ret_pc: u32,
+    /// results the caller wants (the CALL's C - 1, never LUA_MULTRET)
+    pub nresults: i32,
+    /// arguments passed (the frame's top is base + nargs + stacksize)
+    pub nargs: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct Snapshot {
     /// index of the bytecode instruction to resume at (in the trace's proto)
     pub pc: u32,
@@ -25,4 +42,7 @@ pub struct Snapshot {
     /// the first IR instruction *not* covered: values defined at or after
     /// this ref aren't available yet when this snapshot is taken
     pub ref_limit: Ref,
+    /// inlined call frames, outermost first (`pc` is then in the innermost
+    /// frame's function)
+    pub frames: Vec<SnapFrame>,
 }

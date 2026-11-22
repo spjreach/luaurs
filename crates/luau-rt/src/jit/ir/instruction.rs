@@ -14,6 +14,12 @@ use super::types::IrType;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Ref(pub u32);
 
+impl Default for Ref {
+    fn default() -> Ref {
+        Ref(0)
+    }
+}
+
 impl Ref {
     pub fn index(self) -> usize {
         self.0 as usize
@@ -99,6 +105,22 @@ pub enum Op {
     /// can't run) and isn't read-only (for stores)
     GuardPlainTable { t: Ref, store: bool, snap: SnapId },
 
+    // ---- functions --------------------------------------------------------
+    /// the running closure of the trace's own frame (`L->ci->func`)
+    FrameFunc,
+    /// upvalue `idx` of closure `cl`: through its upvalue object when
+    /// `by_ref` (exits unless it is one), else stored in the closure; exits
+    /// through `snap` unless the value has this instruction's type
+    ULoad { cl: Ref, idx: u8, by_ref: bool, snap: SnapId },
+    /// the environment (globals table) of closure `cl` (a Ptr)
+    ClEnv { cl: Ref },
+    /// exits unless function `f` is a Lua closure of prototype `p` (a Ptr
+    /// constant)
+    GuardProto { f: Ref, p: Ref, snap: SnapId },
+    /// exits through `snap` when the byte at `[p + off]` is zero (`p` a Ptr
+    /// constant; e.g. a global table's `safeenv`)
+    GuardFlag { p: Ref, off: i32, snap: SnapId },
+
     // ---- loops ----------------------------------------------------------
     /// the loop header: instructions after it form the loop body
     Loop,
@@ -134,6 +156,10 @@ impl Inst {
             XLoad { p, .. } => vec![*p],
             XStore { p, v } => vec![*p, *v],
             GuardPlainTable { t, .. } => vec![*t],
+            FrameFunc => vec![],
+            ULoad { cl, .. } | ClEnv { cl } => vec![*cl],
+            GuardProto { f, p, .. } => vec![*f, *p],
+            GuardFlag { p, .. } => vec![*p],
             Phi { pre, back } => vec![*pre, *back],
         }
     }
@@ -143,7 +169,7 @@ impl Inst {
         use Op::*;
         match &self.op {
             SLoad { guarded: true, snap, .. } => Some(*snap),
-            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } => {
+            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } => {
                 Some(*snap)
             }
             _ => None,
@@ -157,7 +183,7 @@ impl Inst {
         matches!(
             self.op,
             KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | Add(..) | Sub(..) | Mul(..) | Div(..) | Mod(..)
-                | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | ARef { .. }
+                | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | ARef { .. } | FrameFunc | ClEnv { .. }
         )
     }
 

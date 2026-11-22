@@ -47,9 +47,21 @@ impl Event<'_> {
 }
 
 /// Emit an event to stderr when `LUAU_TRACE_LOG` is enabled.
+/// (`LUAU_TRACE_LOG=2` also prints why recordings abort, after the stable
+/// fields)
 pub fn log(event: Event<'_>) {
     if TraceConfig::global().log {
-        eprintln!("[TRACE] {}", event.format());
+        static VERBOSE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let verbose = *VERBOSE.get_or_init(|| std::env::var("LUAU_TRACE_LOG").is_ok_and(|v| v == "2"));
+        let detail = match event {
+            Event::TraceAbort { reason, .. } if verbose => match reason {
+                AbortReason::UnsupportedOpcode(d) | AbortReason::UnsupportedType(d) => format!(" detail={}", d.replace(' ', "_")),
+                AbortReason::Internal(d) => format!(" detail={}", d.replace(' ', "_")),
+                _ => String::new(),
+            },
+            _ => String::new(),
+        };
+        eprintln!("[TRACE] {}{}", event.format(), detail);
     }
 }
 

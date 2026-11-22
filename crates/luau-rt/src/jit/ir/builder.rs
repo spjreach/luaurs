@@ -8,7 +8,7 @@
 
 use super::instruction::{Inst, Op, Ref, SnapId};
 use super::types::IrType;
-use crate::jit::snapshots::{SnapEntry, Snapshot};
+use crate::jit::snapshots::{SnapEntry, SnapFrame, Snapshot};
 use crate::jit::trace::Trace;
 use std::collections::HashMap;
 
@@ -25,6 +25,11 @@ pub struct IrBuilder {
     last_snap: Option<(SnapId, u32, usize)>,
     /// bumped on every slot write (invalidates `last_snap`)
     writes: usize,
+    /// slot offset of the current (innermost inlined) frame: `slot`,
+    /// `peek`, `set_slot` and `forget_slot` take frame-relative slots
+    pub off: usize,
+    /// inlined frames, outermost first (copied into snapshots)
+    pub frames: Vec<SnapFrame>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -47,6 +52,8 @@ impl IrBuilder {
             consts: HashMap::new(),
             last_snap: None,
             writes: 0,
+            off: 0,
+            frames: Vec::new(),
         }
     }
 
@@ -103,6 +110,7 @@ impl IrBuilder {
     /// The value of stack slot `slot`; `ty` is the type observed in the
     /// interpreter right now (its guard checks that on later runs).
     pub fn slot(&mut self, slot: usize, ty: IrType) -> Ref {
+        let slot = self.abs(slot);
         if let Some(r) = self.slots[slot] {
             return r;
         }
@@ -113,11 +121,45 @@ impl IrBuilder {
     }
 
     /// The value currently mapped to `slot`, if any (no load).
-    pub fn peek(&self, slot: usize) -> Option<Ref> {
+    pub fn peek(&mut self, slot: usize) -> Option<Ref> {
+        let slot = self.abs(slot);
         self.slots[slot]
     }
 
+    /// Frame-relative slot -> trace slot (growing the slot map).
+    fn abs(&mut self, slot: usize) -> usize {
+        let s = self.off + slot;
+        if s >= self.slots.len() {
+            self.slots.resize(s + 1, None);
+            self.dirty.resize(s + 1, false);
+        }
+        s
+    }
+
+    /// Enters an inlined call frame whose base is frame-relative slot
+    /// `base` of the current frame.
+    pub fn push_frame(&mut self, f: SnapFrame) {
+        self.off = f.base as usize;
+        self.frames.push(f);
+        self.writes += 1;
+    }
+
+    /// Leaves the innermost inlined frame: its slots (from its function
+    /// slot up) are dead.
+    pub fn pop_frame(&mut self) -> Option<SnapFrame> {
+        let f = self.frames.pop()?;
+        let from = f.base as usize - 1;
+        for s in from..self.slots.len() {
+            self.slots[s] = None;
+            self.dirty[s] = false;
+        }
+        self.off = self.frames.last().map_or(0, |g| g.base as usize);
+        self.writes += 1;
+        Some(f)
+    }
+
     pub fn set_slot(&mut self, slot: usize, v: Ref) {
+        let slot = self.abs(slot);
         self.slots[slot] = Some(v);
         self.dirty[slot] = true;
         self.writes += 1;
@@ -126,6 +168,7 @@ impl IrBuilder {
     /// Forget a slot's value (written in a way the trace doesn't model):
     /// the next read reloads it.
     pub fn forget_slot(&mut self, slot: usize) {
+        let slot = self.abs(slot);
         self.slots[slot] = None;
         self.dirty[slot] = false;
         self.writes += 1;
@@ -147,7 +190,7 @@ impl IrBuilder {
             .map(|(s, v)| SnapEntry { slot: s as u16, value: v.unwrap() })
             .collect();
         let id = SnapId(self.trace.snapshots.len() as u32);
-        self.trace.snapshots.push(Snapshot { pc: self.pc, entries, ref_limit: Ref(self.trace.insts.len() as u32) });
+        self.trace.snapshots.push(Snapshot { pc: self.pc, entries, ref_limit: Ref(self.trace.insts.len() as u32), frames: self.frames.clone() });
         self.last_snap = Some((id, self.pc, self.writes));
         id
     }

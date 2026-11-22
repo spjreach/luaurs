@@ -23,7 +23,8 @@ root = Path(os.environ["ROOT"])
 repeats = int(os.environ["REPEATS"])
 inner_runs = int(os.environ["INNER_RUNS"])
 commands = {
-    "luaurs JIT": (os.environ["LUAURS_BIN"], {"LUAU_TRACE": "1", "LUAU_TRACE_LOG": "1"}),
+    # (trace logging costs time: only with TRACE_EVENTS=1, for the event counts)
+    "luaurs JIT": (os.environ["LUAURS_BIN"], {"LUAU_TRACE": "1", **({"LUAU_TRACE_LOG": "1"} if os.environ.get("TRACE_EVENTS") == "1" else {})}),
     "C++ Luau": (os.environ["LUAU_REF"], {}),
     "LuaJIT 2.1": (os.environ["LUAJIT_BIN"], {}),
 }
@@ -112,6 +113,17 @@ with tempfile.TemporaryDirectory(prefix="luaurs-luajit-bench-") as td:
                 results[vm][bench].append(float(match.group(1)) * 1000.0)
                 print(f"sample {sample + 1}/{repeats}: {bench} on {vm}: process {wall_ms:.1f} ms", flush=True)
 
+    if os.environ.get("TRACE_EVENTS") != "1":
+        # timed runs had logging off: count events in one untimed, logged run
+        for bench, script in prepared:
+            env = os.environ.copy()
+            env.update({"LUAU_TRACE": "1", "LUAU_TRACE_LOG": "1"})
+            proc = subprocess.run([os.environ["LUAURS_BIN"], str(script)], env=env, cwd=root / "bench",
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=240)
+            for line in proc.stdout.splitlines():
+                for event in trace_events:
+                    if line.startswith(f"[TRACE] {event} "):
+                        trace_events[event] += 1
     if trace_events["compiled"] == 0:
         raise SystemExit("luaurs emitted no compiled trace events; refusing to label these timings as JIT")
 
@@ -131,5 +143,5 @@ with tempfile.TemporaryDirectory(prefix="luaurs-luajit-bench-") as td:
         medians = [statistics.median(results[vm][bench]) for vm in commands]
         print(f"| {bench} | {medians[0]:.3f} | {medians[1]:.3f} | {medians[2]:.3f} |")
     print(f"\nSamples per VM: {repeats}; executions averaged per process: {inner_runs}; outputs matched exactly.")
-    print("luaurs trace events across samples: " + ", ".join(f"{event}={count}" for event, count in trace_events.items()))
+    print("luaurs trace events (" + ("timed samples" if os.environ.get("TRACE_EVENTS") == "1" else "one untimed logged run per benchmark") + "): " + ", ".join(f"{event}={count}" for event, count in trace_events.items()))
 PY

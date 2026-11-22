@@ -66,7 +66,10 @@ pub fn validate(t: &Trace) -> Result<(), String> {
             Op::AddI32(a, b) => t.ty(*a) == IrType::I32 && t.ty(*b) == IrType::I32,
             Op::ASize(tab) | Op::GuardPlainTable { t: tab, .. } => t.ty(*tab) == IrType::Table,
             Op::ARef { t: tab, idx } => t.ty(*tab) == IrType::Table && t.ty(*idx) == IrType::I32 && inst.ty == IrType::Ptr,
-            Op::XLoad { p, .. } | Op::XStore { p, .. } => t.ty(*p) == IrType::Ptr,
+            Op::XLoad { p, .. } | Op::XStore { p, .. } | Op::GuardFlag { p, .. } => t.ty(*p) == IrType::Ptr,
+            Op::ULoad { cl, .. } => t.ty(*cl) == IrType::Function,
+            Op::ClEnv { cl } => t.ty(*cl) == IrType::Function && inst.ty == IrType::Ptr,
+            Op::GuardProto { f, p, .. } => t.ty(*f) == IrType::Function && t.ty(*p) == IrType::Ptr,
             _ => true,
         };
         if !ok {

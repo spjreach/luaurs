@@ -29,6 +29,13 @@ const OFF_T_METATABLE: i32 = offset_of!(LuaTable, metatable) as i32;
 const OFF_T_READONLY: i32 = offset_of!(LuaTable, readonly) as i32;
 const OFF_GLOBAL: i32 = offset_of!(lua_State, global) as i32;
 const OFF_INTERRUPT: i32 = (offset_of!(global_State, cb) + offset_of!(lua_Callbacks, interrupt)) as i32;
+const OFF_CI: i32 = offset_of!(lua_State, ci) as i32;
+const OFF_CI_FUNC: i32 = offset_of!(CallInfo, func) as i32;
+const OFF_STACK_LAST: i32 = offset_of!(lua_State, stack_last) as i32;
+const OFF_UV_V: i32 = offset_of!(UpVal, v) as i32;
+const OFF_CL_ENV: i32 = offset_of!(Closure, env) as i32;
+const OFF_CL_P: i32 = (CLOSURE_HEADER + offset_of!(LClosure, p)) as i32;
+const OFF_CL_UPREFS: i32 = (CLOSURE_HEADER + offset_of!(LClosure, uprefs)) as i32;
 
 /// r13 = base, r12 = L (as in the method JIT); rax, rcx, rdx and xmm0/1 are
 /// scratch.
@@ -119,7 +126,7 @@ pub unsafe fn compile(t: &Trace) -> Result<Code, String> {
         }
         let defines = !matches!(
             inst.op,
-            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. }
+            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. }
         );
         if !defines {
             continue;
@@ -151,6 +158,24 @@ pub unsafe fn compile(t: &Trace) -> Result<Code, String> {
     }
     a.mov_rr(R::R13, R::Rdi);
     a.mov_rr(R::R12, R::Rsi);
+    // entry checks (exit through the entry snapshot: nothing written yet):
+    // the recorded closure, and stack room for inlined frames
+    if t.closure != 0 {
+        // (L->ci->func: a vararg frame's base isn't right above it)
+        a.load(R::Rax, R::R12, OFF_CI);
+        a.load(R::Rax, R::Rax, OFF_CI_FUNC);
+        a.load(R::Rax, R::Rax, 0);
+        a.mov_ri64(R::Rcx, t.closure as u64);
+        a.cmp_rr(R::Rax, R::Rcx);
+        a.jcc(Cond::NE, stubs[0]);
+    }
+    if t.stack_need > 0 {
+        a.load(R::Rax, R::R12, OFF_STACK_LAST);
+        a.sub_rr(R::Rax, R::R13);
+        a.mov_ri(R::Rcx, (t.stack_need as u64) * TV as u64);
+        a.cmp_rr(R::Rax, R::Rcx);
+        a.jcc(Cond::L, stubs[0]);
+    }
 
     let g = |r: Ref| match home[r.index()] {
         Home::G(r) => Ok(r),
@@ -345,7 +370,68 @@ pub unsafe fn compile(t: &Trace) -> Result<Code, String> {
                     a.movapd(d, X(1));
                 }
             }
-            Op::Pow(..) | Op::Math1(..) => return Err("pow / math builtins not supported yet".into()),
+            Op::Pow(..) => return Err("pow not supported yet".into()),
+            Op::Math1(bfid, x) => {
+                use luau_common::bytecode::BuiltinFunction as B;
+                if let Home::F(d) = dst {
+                    let x = f(*x)?;
+                    let b = *bfid;
+                    if b == B::MathSqrt as u8 {
+                        a.sd_rr(0x51, d, x);
+                    } else if b == B::MathFloor as u8 {
+                        a.roundsd(d, x, 1);
+                    } else if b == B::MathCeil as u8 {
+                        a.roundsd(d, x, 2);
+                    } else if b == B::MathAbs as u8 {
+                        a.mov_ri64(R::Rax, 0x7fff_ffff_ffff_ffff);
+                        a.movq_xr(X(0), R::Rax);
+                        a.movapd(X(1), x);
+                        a.andpd(X(1), X(0));
+                        a.movapd(d, X(1));
+                    } else {
+                        return Err(format!("math builtin {}", b));
+                    }
+                }
+            }
+            Op::FrameFunc => {
+                if let Home::G(d) = dst {
+                    a.load(d, R::R12, OFF_CI);
+                    a.load(d, d, OFF_CI_FUNC);
+                    a.load(d, d, 0);
+                }
+            }
+            Op::ClEnv { cl } => {
+                if let Home::G(d) = dst {
+                    a.load(d, g(*cl)?, OFF_CL_ENV);
+                }
+            }
+            Op::GuardProto { f: fv, p, snap } => {
+                // (a C closure has its function pointer there: never a proto)
+                a.load(R::Rax, g(*fv)?, OFF_CL_P);
+                a.cmp_rr(R::Rax, g(*p)?);
+                a.jcc(Cond::NE, stub(*snap));
+            }
+            Op::ULoad { cl, idx, by_ref, snap } => {
+                let s = stub(*snap);
+                let disp = OFF_CL_UPREFS + *idx as i32 * TV;
+                a.mov_rr(R::Rcx, g(*cl)?);
+                if *by_ref {
+                    a.cmp32_mi(R::Rcx, disp + OFF_TT, LUA_TUPVAL as i32);
+                    a.jcc(Cond::NE, s);
+                    a.load(R::Rcx, R::Rcx, disp);
+                    a.load(R::Rcx, R::Rcx, OFF_UV_V);
+                } else {
+                    a.add_ri(R::Rcx, disp);
+                }
+                let tag = inst.ty.tag().ok_or("ULoad of a non-Lua type")?;
+                a.cmp32_mi(R::Rcx, OFF_TT, tag);
+                a.jcc(Cond::NE, s);
+                load_value(&mut a, dst, inst.ty, R::Rcx, 0)?;
+            }
+            Op::GuardFlag { p, off, snap } => {
+                a.cmp8_mi(g(*p)?, *off, 0);
+                a.jcc(Cond::E, stub(*snap));
+            }
             Op::NumToI32 { a: x, snap } => {
                 if let Home::G(d) = dst {
                     let x = f(*x)?;
@@ -492,6 +578,14 @@ fn store_value(a: &mut Asm, home: &[Home], t: &Trace, v: Ref, base: R, disp: i32
         }
         (Home::None, Op::KNum(n)) => {
             a.mov_ri64(R::Rax, n.to_bits());
+            a.store(base, disp, R::Rax);
+        }
+        (Home::None, Op::KPtr(p)) => {
+            a.mov_ri64(R::Rax, *p as u64);
+            a.store(base, disp, R::Rax);
+        }
+        (Home::None, Op::KInt(n)) => {
+            a.mov_ri64(R::Rax, *n as u64);
             a.store(base, disp, R::Rax);
         }
         (Home::None, _) if ty == IrType::Nil => {}

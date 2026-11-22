@@ -52,11 +52,21 @@ pub struct Trace {
     pub side_exits: u32,
     /// last bytecode index of the loop body (exits past it left the loop)
     pub end_pc: u32,
+    /// the closure the trace was recorded for, when it depends on it
+    /// (upvalues, environment): checked at entry. 0: any closure of `proto`
+    pub closure: usize,
+    /// stack slots (from the frame base) the trace may touch, inlined
+    /// frames included: checked against the stack's size at entry
+    pub stack_need: u32,
+    /// GC objects the machine code refers to (kept alive while it exists)
+    pub gc_refs: Vec<(usize, u8)>,
+    /// prototypes inlined into the trace (besides `proto`)
+    pub protos: Vec<usize>,
 }
 
 impl Trace {
     pub fn new(id: TraceId, proto: *mut Proto, start_pc: u32) -> Trace {
-        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX }
+        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new() }
     }
 
     pub fn inst(&self, r: Ref) -> &Inst {

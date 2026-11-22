@@ -65,6 +65,16 @@ pub fn with<R>(f: impl FnOnce(&mut JitState) -> R) -> R {
     STATE.with(|s| f(&mut s.borrow_mut()))
 }
 
+/// Like `with`, but does nothing while the thread's state is being torn
+/// down or is in use (functions freed during thread exit).
+pub fn try_with(f: impl FnOnce(&mut JitState)) {
+    let _ = STATE.try_with(|s| {
+        if let Ok(mut s) = s.try_borrow_mut() {
+            f(&mut s)
+        }
+    });
+}
+
 pub fn enabled() -> bool {
     with(|s| s.enabled)
 }
