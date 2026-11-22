@@ -192,8 +192,15 @@ fn compile_file(name: &str, format: Format, stats: &mut Stats, opts: &Options, o
     true
 }
 
+#[cfg(not(all(target_arch = "x86_64", windows)))]
+fn codegen_size(_name: &str, _bytecode: &[u8]) -> usize {
+    // (no native code generator on this platform)
+    0
+}
+
 /// Loads the module and runs the port's JIT over it; returns the size of the
 /// generated native code.
+#[cfg(all(target_arch = "x86_64", windows))]
 fn codegen_size(name: &str, bytecode: &[u8]) -> usize {
     use luau_rt::linit::luaL_newstate;
     use luau_rt::lstate::lua_close;
