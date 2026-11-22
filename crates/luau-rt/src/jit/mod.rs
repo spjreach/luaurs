@@ -201,6 +201,10 @@ thread_local! {
     static STOPPED: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Iterations a numeric loop must have left for native code to enter its
+/// trace (or record one).
+const SHORT_TRIP: u32 = 32;
+
 /// A new hot counter for one compiled loop instruction (lives as long as
 /// the code).
 pub fn new_loop_counter() -> *mut u32 {
@@ -303,6 +307,18 @@ pub unsafe extern "sysv64-unwind" fn native_loop_hook(
         return npc as usize;
     }
     let base = (*L).base;
+    // A numeric loop with few iterations left gains nothing from entering a
+    // trace (and the entry costs more than the native iterations): stay
+    // native and look again in a while.
+    if insn & 0xff == luau_common::bytecode::Opcode::ForNLoop as u32 && !is_recording() {
+        let ra = base.add(((insn >> 8) & 0xff) as usize);
+        let (limit, stepv, idx) = (crate::lobject::nvalue(ra), crate::lobject::nvalue(ra.add(1)), crate::lobject::nvalue(ra.add(2)));
+        let left = ((limit - idx) / stepv).floor();
+        if left < SHORT_TRIP as f64 {
+            *ctr = 1024;
+            return npc as usize;
+        }
+    }
     let resume = on_backedge(L, p, header, base).unwrap_or(header);
     let npc = code.add(resume as usize);
     let r = if is_recording() || !native_entry(p, npc) { run_until_native(L, npc) } else { npc as usize };

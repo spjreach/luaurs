@@ -3191,7 +3191,8 @@ unsafe fn translate_pass(
             entry[j] = true;
         }
         // loop exits are reached from the loop instruction's slow path too
-        if is(O::ForGLoop) && j + len < n {
+        // (and from trace exits when the tracing JIT is on)
+        if (is(O::ForGLoop) || ((is(O::ForNLoop) || is(O::JumpBack)) && crate::jit::state::trace_enabled())) && j + len < n {
             entry[j + len] = true;
         }
         // registers captured by reference can be read and written by other
