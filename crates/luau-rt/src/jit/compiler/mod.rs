@@ -13,20 +13,26 @@ use super::trace::Trace;
 pub struct CompiledTrace {
     pub entry: usize,
     pub size: usize,
+    /// root trace: where a side trace jumps to run it again (after the
+    /// prologue: base and L already in r13 / r12)
+    pub reentry: usize,
 }
 
 pub type TraceFn = unsafe extern "sysv64" fn(*mut crate::lobject::TValue, *mut crate::lobject::lua_State) -> u32;
 
-pub fn compile(t: &Trace) -> Result<CompiledTrace, String> {
+/// `link_to`: for a side trace, the root trace's re-entry address it ends
+/// by jumping to. `t.tag` and `t.link_table` must be set.
+pub fn compile(t: &Trace, link_to: Option<usize>) -> Result<CompiledTrace, String> {
     super::ir::validate(t)?;
     #[cfg(all(target_arch = "x86_64", windows))]
     {
-        let code = unsafe { x64::compile(t)? };
+        let code = unsafe { x64::compile(t, link_to)? };
         let entry = crate::codegen::mem::with_code(|m| unsafe { m.place(&code.bytes) }).ok_or("out of executable memory")?;
-        Ok(CompiledTrace { entry, size: code.bytes.len() })
+        Ok(CompiledTrace { entry, size: code.bytes.len(), reentry: entry + code.reentry })
     }
     #[cfg(not(all(target_arch = "x86_64", windows)))]
     {
+        let _ = link_to;
         Err("no trace compiler for this platform".into())
     }
 }

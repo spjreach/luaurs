@@ -58,6 +58,9 @@ pub struct Recorder {
     gc_refs: Vec<(usize, u8)>,
     /// inlined prototypes (the trace is dropped when one is freed)
     protos: Vec<usize>,
+    /// side trace: the loop header it ends at (its root's), and the parent
+    /// exit it continues
+    side: Option<(u32, (u16, u32))>,
 }
 
 /// Deepest call inlining.
@@ -115,7 +118,39 @@ impl Recorder {
             stack_need: nslots,
             gc_refs: Vec::new(),
             protos: Vec::new(),
+            side: None,
         }
+    }
+
+    /// Starts recording a side trace at `start_pc` (where exit `parent` of
+    /// a trace of the loop at `header` resumes), up to the loop header.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn new_side(
+        id: TraceId,
+        proto: *mut Proto,
+        cl: *mut Closure,
+        start_pc: u32,
+        base: StkId,
+        max_len: usize,
+        header: u32,
+        loop_end: u32,
+        parent: (u16, u32),
+    ) -> Recorder {
+        let mut r = Recorder::new(id, proto, cl, start_pc, base, max_len);
+        r.loop_end = loop_end;
+        r.side = Some((header, parent));
+        // snapshot 0: the start, nothing done (the entry checks exit here)
+        r.b.snapshot();
+        r
+    }
+
+    pub fn is_side(&self) -> bool {
+        self.side.is_some()
+    }
+
+    /// The loop header the trace belongs to.
+    pub fn header(&self) -> u32 {
+        self.side.map_or(self.start_pc, |(h, _)| h)
     }
 
     /// Whether the interpreter is in the frame the recorder expects next
@@ -173,6 +208,25 @@ impl Recorder {
     /// stack at `base`).
     pub unsafe fn step(&mut self, pc: u32, base: StkId) -> Step {
         let inlined = self.funcs.len() > 1;
+        if let Some((header, _)) = self.side {
+            if pc == header && !inlined {
+                return match self.close_side() {
+                    Ok(t) => Step::Closed(t),
+                    Err(e) => Step::Abort(e),
+                };
+            }
+            if !inlined && (pc < header || pc > self.loop_end) {
+                return Step::Abort(AbortReason::LeftLoop);
+            }
+            self.steps += 1;
+            if self.b.trace.insts.len() > self.max_len {
+                return Step::Abort(AbortReason::TooLong);
+            }
+            return match self.record(pc, base) {
+                Ok(()) => Step::Continue,
+                Err(e) => Step::Abort(e),
+            };
+        }
         if pc == self.start_pc && self.steps > 0 && !inlined {
             return match self.close() {
                 Ok(t) => Step::Closed(t),
@@ -182,7 +236,7 @@ impl Recorder {
         // outside the loop: a break, a goto out of the body or the loop's
         // own exit path; the trace can't close there
         if self.steps > 0 && !inlined && (pc < self.start_pc || pc > self.loop_end) {
-            return Step::Abort(AbortReason::UnsupportedControlFlow);
+            return Step::Abort(AbortReason::LeftLoop);
         }
         self.steps += 1;
         if self.b.trace.insts.len() > self.max_len {
@@ -472,7 +526,7 @@ impl Recorder {
             }
         } else if o(O::ForNLoop) {
             let target = (pc as i64 + 1 + d_of(insn) as i64) as u32;
-            if target != self.start_pc {
+            if target != self.header() {
                 return Err(AbortReason::UnsupportedControlFlow);
             }
             let (lim_v, step_v, idx_v) = ((*base.add(a)).value.n, (*base.add(a + 1)).value.n, (*base.add(a + 2)).value.n);
@@ -505,7 +559,7 @@ impl Recorder {
             }
         } else if o(O::JumpBack) {
             let target = (pc as i64 + 1 + d_of(insn) as i64) as u32;
-            if target != self.start_pc {
+            if target != self.header() {
                 return Err(AbortReason::UnsupportedControlFlow);
             }
         } else if o(O::GetTableN) {
@@ -822,6 +876,24 @@ impl Recorder {
             t.fallback = Some(Box::new(self.close_with(&rec, false)?.0));
         }
         Ok(t)
+    }
+
+    /// Finishes a side trace at the loop header: linear code whose last
+    /// snapshot (every slot it wrote, resuming at the header) is what it
+    /// stores before jumping back into the root trace.
+    fn close_side(&mut self) -> R<Trace> {
+        let (header, parent) = self.side.unwrap();
+        let mut out = std::mem::replace(&mut self.b.trace, Trace::new(TraceId(0), std::ptr::null_mut(), 0));
+        let entries: Vec<SnapEntry> = self.b.written().into_iter().map(|(s, v)| SnapEntry { slot: s as u16, value: v }).collect();
+        out.snapshots.push(Snapshot { pc: header, entries, ref_limit: Ref(out.insts.len() as u32), frames: vec![] });
+        out.start_pc = header;
+        out.end_pc = self.loop_end;
+        out.loop_ref = None;
+        out.side_of = Some(parent);
+        out.protos = self.protos.clone();
+        out.stack_need = self.stack_need as u32;
+        super::ir::validate(&out).map_err(AbortReason::Internal)?;
+        Ok(out)
     }
 
     /// Instructions computing the same value on every iteration when their

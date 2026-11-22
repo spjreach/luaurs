@@ -65,12 +65,20 @@ fn needs_reg(ty: IrType) -> Option<bool> {
 
 pub struct Code {
     pub bytes: Vec<u8>,
+    /// offset of the root trace's re-entry point
+    pub reentry: usize,
 }
 
 /// Compiles `t`. Fails (cleanly) on anything the backend doesn't handle yet.
-pub unsafe fn compile(t: &Trace) -> Result<Code, String> {
+pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String> {
     let n = t.insts.len();
-    let loop_at = t.loop_ref.ok_or("trace has no loop")?.index();
+    let side = link_to.is_some();
+    // (a side trace is linear: no loop)
+    let loop_at = match t.loop_ref {
+        Some(r) => r.index(),
+        None if side => usize::MAX,
+        None => return Err("trace has no loop".into()),
+    };
     const END: usize = usize::MAX;
 
     // ---- liveness -----------------------------------------------------
@@ -158,11 +166,16 @@ pub unsafe fn compile(t: &Trace) -> Result<Code, String> {
     let stubs: Vec<Label> = (0..t.snapshots.len() + 1).map(|_| a.label()).collect();
     let interrupt_stub = stubs[t.snapshots.len()];
     let used_g: Vec<R> = [R::Rbx, R::Rbp, R::R12, R::R13, R::R14, R::R15].to_vec();
-    for &r in &used_g {
-        a.push(r);
+    // a side trace runs inside its root's native frame: entered from an
+    // exit stub with everything set up, it has no prologue
+    if !side {
+        for &r in &used_g {
+            a.push(r);
+        }
+        a.mov_rr(R::R13, R::Rdi);
+        a.mov_rr(R::R12, R::Rsi);
     }
-    a.mov_rr(R::R13, R::Rdi);
-    a.mov_rr(R::R12, R::Rsi);
+    let reentry = a.pos() as usize;
     // entry checks (exit through the entry snapshot: nothing written yet):
     // the recorded closure, and stack room for inlined frames
     if t.closure != 0 {
@@ -556,35 +569,65 @@ pub unsafe fn compile(t: &Trace) -> Result<Code, String> {
             Op::Phi { .. } => {}
         }
     }
-    // back edge: interrupt check, PHIs take their back values, loop
-    a.load(R::Rax, R::R12, OFF_GLOBAL);
-    a.cmp64_mi(R::Rax, OFF_INTERRUPT, 0);
-    a.jcc(Cond::NE, interrupt_stub);
-    let moves: Vec<(Home, Home)> = t
-        .insts
-        .iter()
-        .enumerate()
-        .filter_map(|(j, x)| match x.op {
-            Op::Phi { back, .. } => Some((home[j], home[back.index()])),
-            _ => None,
-        })
-        .collect();
-    parallel_move(&mut a, &moves)?;
-    a.jmp(loop_top);
+    if let Some(root) = link_to {
+        // end of a side trace: the state goes to the stack (its last
+        // snapshot) and the root trace runs again from its pre-roll
+        let sn = &t.snapshots[back_snap.0 as usize];
+        for e in &sn.entries {
+            store_value(&mut a, &home, t, e.value, R::R13, e.slot as i32 * TV)?;
+        }
+        a.mov_ri64(R::Rax, root as u64);
+        a.jmp_r(R::Rax);
+    } else {
+        // back edge: interrupt check, PHIs take their back values, loop
+        a.load(R::Rax, R::R12, OFF_GLOBAL);
+        a.cmp64_mi(R::Rax, OFF_INTERRUPT, 0);
+        a.jcc(Cond::NE, interrupt_stub);
+        let moves: Vec<(Home, Home)> = t
+            .insts
+            .iter()
+            .enumerate()
+            .filter_map(|(j, x)| match x.op {
+                Op::Phi { back, .. } => Some((home[j], home[back.index()])),
+                _ => None,
+            })
+            .collect();
+        parallel_move(&mut a, &moves)?;
+        a.jmp(loop_top);
+    }
 
     // exit stubs: write the snapshot's slots back, return its index
+    // exit codes: (tag << 16) | snapshot; the high bit: interrupted at the
+    // loop header
     let mut snaps: Vec<&Snapshot> = t.snapshots.iter().collect();
     let interrupt_snap = Snapshot { pc: t.start_pc, ..t.snapshots[back_snap.0 as usize].clone() };
-    snaps.push(&interrupt_snap);
+    if !side {
+        snaps.push(&interrupt_snap);
+    }
+    if t.snapshots.len() > 0xffff {
+        return Err("too many snapshots".into());
+    }
+    let tag = (t.tag as u32 & 0x7fff) << 16;
     for (k, sn) in snaps.iter().enumerate() {
         a.bind(stubs[k]);
         for e in &sn.entries {
             store_value(&mut a, &home, t, e.value, R::R13, e.slot as i32 * TV)?;
         }
-        // the interrupt exit reports the loop-closing snapshot's index with
-        // the high bit set (the interpreter resumes at the header)
-        let id = if k == t.snapshots.len() { 0x8000_0000 | back_snap.0 } else { k as u32 };
-        a.mov_ri(R::Rax, id as u64);
+        if k == t.snapshots.len() {
+            a.mov_ri(R::Rax, (0x8000_0000 | tag | back_snap.0) as u64);
+        } else {
+            // a side trace attached to this exit continues the work
+            if t.link_table != 0 {
+                let none = a.label();
+                a.mov_ri64(R::Rax, (t.link_table + k * 8) as u64);
+                a.load(R::Rax, R::Rax, 0);
+                a.test_rr(R::Rax, R::Rax);
+                a.jcc(Cond::E, none);
+                a.jmp_r(R::Rax);
+                a.bind(none);
+            }
+            a.mov_ri(R::Rax, (tag | k as u32) as u64);
+        }
         a.jmp(exit);
     }
     a.bind(exit);
@@ -595,7 +638,7 @@ pub unsafe fn compile(t: &Trace) -> Result<Code, String> {
     if !a.finish() {
         return Err("assembler: unresolved label".into());
     }
-    Ok(Code { bytes: a.code })
+    Ok(Code { bytes: a.code, reentry })
 }
 
 /// d = x op y (scalar double), without clobbering x or y.

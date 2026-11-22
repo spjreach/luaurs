@@ -27,6 +27,9 @@ pub enum AbortReason {
     TooLong,
     /// left the function, or control flow the recorder doesn't follow
     UnsupportedControlFlow,
+    /// the recorded iteration left the loop (its last one): not the loop's
+    /// fault, so it is recorded again later without a penalty
+    LeftLoop,
     /// a call, yield, error or other VM re-entry during recording
     LeftFrame,
     Internal(String),
@@ -66,11 +69,25 @@ pub struct Trace {
     /// registers across the loop): compiled instead when this one runs out
     /// of registers
     pub fallback: Option<Box<Trace>>,
+    /// side trace: (tag of the parent trace, its snapshot this trace
+    /// continues from); it ends by jumping back into the root trace
+    pub side_of: Option<(u16, u32)>,
+    /// short id in exit codes (`(tag << 16) | snapshot`), once compiled
+    pub tag: u16,
+    /// per snapshot: machine code its exit stub continues at instead of
+    /// returning (a side trace), 0 for none. Leaked: compiled code refers
+    /// to it for as long as the code exists
+    pub link_table: usize,
+    /// per snapshot: exits taken, and side trace recordings tried
+    pub exit_counts: Vec<u32>,
+    pub exit_tries: Vec<u8>,
+    /// root trace: tags of its side traces
+    pub sides: Vec<u16>,
 }
 
 impl Trace {
     pub fn new(id: TraceId, proto: *mut Proto, start_pc: u32) -> Trace {
-        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None }
+        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new() }
     }
 
     pub fn inst(&self, r: Ref) -> &Inst {

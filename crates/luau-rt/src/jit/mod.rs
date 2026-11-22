@@ -54,6 +54,9 @@ pub fn is_recording() -> bool {
 /// interpreter).
 pub const EXIT_STORM_LIMIT: u32 = 16;
 
+/// Exits through one snapshot before a side trace is recorded from it.
+pub const HOTEXIT: u32 = 10;
+
 /// `on_backedge` result: the trace left through a snapshot inside inlined
 /// calls; their frames were pushed and `L->ci` resumes at its savedpc.
 pub const RESUME_FRAME: u32 = u32::MAX;
@@ -90,7 +93,15 @@ pub fn forget_proto(p: *mut Proto) {
     }
     state::try_with(|s| {
         if !s.traces.is_empty() {
-            s.traces.retain(|&(q, _), t| q != p as usize && !t.protos.contains(&(p as usize)));
+            let dead: Vec<(usize, u32)> = s
+                .traces
+                .iter()
+                .filter(|(&(q, _), t)| q == p as usize || t.protos.contains(&(p as usize)))
+                .map(|(&k, _)| k)
+                .collect();
+            for k in dead {
+                s.remove_root(k);
+            }
         }
         s.hot.forget_proto(p);
     });
@@ -126,33 +137,70 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
             }
         };
         let f: compiler::TraceFn = std::mem::transmute(entry);
+        let t0 = cycles();
         let ex = f(base, L);
+        LAST_RUN.with(|c| c.set(cycles().wrapping_sub(t0)));
         if ex & 0x8000_0000 != 0 {
             // interrupted at the back edge: resume at the header
             return resume_at(header);
         }
+        let (tag, k) = (((ex >> 16) & 0x7fff) as u16, ex & 0xffff);
         debug::log(debug::Event::SideExit { id: id.0, snap: ex });
-        // a side exit: exits back into the loop body count toward the storm
-        // limit (see EXIT_STORM_LIMIT), which drops the trace for a
-        // re-record. Leaving the loop is normal.
-        let (storm, resume, frames) = state::with(|s| {
-            let t = s.traces.get_mut(&(p as usize, header)).expect("trace vanished");
-            let sn = &t.snapshots[ex as usize];
-            let in_loop = !sn.frames.is_empty() || (sn.pc >= t.start_pc && sn.pc <= t.end_pc);
-            if in_loop {
-                t.side_exits += 1;
+        let key = (p as usize, header);
+        // Leaving the loop is normal. An exit back into the loop body that
+        // gets hot is continued by a side trace (recorded from there to the
+        // loop header, then linked to the exit); exits that can't be
+        // side-traced count toward the storm limit, which drops the trace
+        // for a re-record.
+        let (storm, resume, frames, side) = state::with(|s| {
+            let max_sides = 64;
+            let (nsides, root_end) = match s.traces.get(&key) {
+                Some(r) => (r.sides.len(), r.end_pc),
+                None => return (false, header, None, None),
+            };
+            let recording = is_recording();
+            let t = s.by_tag_mut(tag).expect("exit from an unknown trace");
+            let sn = &t.snapshots[k as usize];
+            let in_loop = !sn.frames.is_empty() || (sn.pc >= header && sn.pc <= root_end);
+            let traceable = in_loop && sn.frames.is_empty() && sn.pc != header && t.exit_tries[k as usize] < 3 && nsides < max_sides;
+            let (pc, frames) = (sn.pc, if sn.frames.is_empty() { None } else { Some(sn.clone()) });
+            let mut side = None;
+            // (an in-body guard resuming at the header is a while loop's
+            // condition failing: the loop's normal end, like leaving it)
+            let loop_end_exit = sn.pc == header && k != 0;
+            let mut count_storm = in_loop && !traceable && !loop_end_exit;
+            if traceable {
+                t.exit_counts[k as usize] += 1;
+                if t.exit_counts[k as usize] >= HOTEXIT && !recording {
+                    t.exit_counts[k as usize] = 0;
+                    t.exit_tries[k as usize] += 1;
+                    side = Some((tag, k, pc));
+                }
+            } else if !in_loop {
+                count_storm = false;
             }
-            let frames = if sn.frames.is_empty() { None } else { Some(sn.clone()) };
-            (t.side_exits >= EXIT_STORM_LIMIT, sn.pc, frames)
+            let root = s.traces.get_mut(&key).unwrap();
+            if count_storm {
+                root.side_exits += 1;
+            }
+            (root.side_exits >= EXIT_STORM_LIMIT, pc, frames, side.map(|x| (x, root.end_pc)))
         });
         if storm {
             let reason = trace::AbortReason::Internal("side exit storm".into());
             debug::log(debug::Event::TraceAbort { id: id.0, pc: header, reason: &reason });
             state::with(|s| {
-                s.traces.remove(&(p as usize, header));
+                s.remove_root(key);
                 s.hot.penalize(p, header);
-                s.aborts.push((id, header, reason));
+                s.note_abort((id, header, reason));
             });
+        } else if let Some(((ptag, k, pc), end)) = side {
+            // record a side trace from the exit's pc (the interpreter runs
+            // on from there)
+            let (sid, max_len) = state::with(|s| (s.new_id(), s.max_trace_len));
+            debug::log(debug::Event::TraceStart { id: sid.0, pc });
+            let rec = recorder::Recorder::new_side(sid, p, crate::lobject::clvalue((*(*L).ci).func), pc, base, max_len, header, end, (ptag, k));
+            RECORDER.with(|r| *r.borrow_mut() = Some((rec, base)));
+            RECORDING.with(|r| r.set(true));
         }
         // Resume where the guard's snapshot says, even when the trace is
         // dropped (resuming at `header` would replay the iteration).
@@ -198,56 +246,103 @@ pub unsafe fn record_step(L: *mut lua_State, p: *mut Proto, pc: u32, base: StkId
         }
     });
     let Some(result) = result else { return };
-    let (id, header, proto) = RECORDER.with(|r| {
+    let (id, header, proto, side) = RECORDER.with(|r| {
         let r = r.borrow();
         let (rec, _) = r.as_ref().unwrap();
-        (rec.id(), rec.start_pc(), rec_proto(rec))
+        (rec.id(), rec.header(), rec_proto(rec), rec.is_side())
     });
     RECORDER.with(|r| *r.borrow_mut() = None);
     RECORDING.with(|r| r.set(false));
     match result {
-        recorder::Step::Closed(mut t) => {
-            optimizer::optimize(&mut t);
-            let _ = debug::dump_ir(&t);
-            let mut compiled = compiler::compile(&t);
-            if compiled.is_err() {
-                if let Some(mut fb) = t.fallback.take() {
-                    optimizer::optimize(&mut fb);
-                    if let Ok(c) = compiler::compile(&fb) {
-                        t = *fb;
-                        compiled = Ok(c);
-                    }
-                }
-            }
-            t.fallback = None;
-            match compiled {
-                Ok(native) => {
-                    t.native = Some(native);
-                    // (constants come from prototypes, which outlive the
-                    // trace: it's dropped when any of them is freed)
-                    let _ = L;
-                    debug::log(debug::Event::TraceCompiled { id: id.0, pc: header, insts: t.len() });
-                    state::with(|s| s.traces.insert((proto as usize, header), t));
-                }
-                Err(e) => {
-                    let reason = trace::AbortReason::Internal(format!("compile: {}", e));
-                    debug::log(debug::Event::TraceAbort { id: id.0, pc: header, reason: &reason });
-                    state::with(|s| {
-                        s.hot.penalize(proto, header);
-                        s.aborts.push((id, header, reason));
-                    });
-                }
-            }
+        recorder::Step::Closed(t) => {
+            let _ = L;
+            finish_trace(t, id, header, proto);
         }
         recorder::Step::Abort(reason) => {
             debug::log(debug::Event::TraceAbort { id: id.0, pc, reason: &reason });
             state::with(|s| {
-                s.hot.penalize(proto, header);
-                s.aborts.push((id, pc, reason));
+                if !side && reason != trace::AbortReason::LeftLoop {
+                    s.hot.penalize(proto, header);
+                }
+                s.note_abort((id, pc, reason));
             });
         }
         recorder::Step::Continue => unreachable!(),
     }
+}
+
+/// Optimizes, compiles and installs a recorded trace (a root trace for its
+/// loop, or a side trace linked to its parent's exit).
+fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mut Proto) {
+    let side_of = t.side_of;
+    let root_key = (proto as usize, header);
+    // a side trace ends by running its root again
+    let link_to = match side_of {
+        Some(_) => match state::with(|s| s.traces.get(&root_key).and_then(|r| r.native.map(|n| n.reentry))) {
+            Some(r) => Some(r),
+            None => return,
+        },
+        None => None,
+    };
+    let Some(tag) = state::with(|s| s.new_tag()) else { return };
+    let prepare = |t: &mut trace::Trace| {
+        optimizer::optimize(t);
+        t.tag = tag;
+        let n = t.snapshots.len().max(1);
+        t.link_table = Box::leak(vec![0usize; n].into_boxed_slice()).as_mut_ptr() as usize;
+        t.exit_counts = vec![0; n];
+        t.exit_tries = vec![0; n];
+    };
+    prepare(&mut t);
+    let _ = debug::dump_ir(&t);
+    let mut compiled = compiler::compile(&t, link_to);
+    if compiled.is_err() {
+        if let Some(mut fb) = t.fallback.take() {
+            prepare(&mut fb);
+            if let Ok(c) = compiler::compile(&fb, link_to) {
+                fb.side_of = side_of;
+                t = *fb;
+                compiled = Ok(c);
+            }
+        }
+    }
+    t.fallback = None;
+    let native = match compiled {
+        Ok(n) => n,
+        Err(e) => {
+            let reason = trace::AbortReason::Internal(format!("compile: {}", e));
+            debug::log(debug::Event::TraceAbort { id: id.0, pc: header, reason: &reason });
+            state::with(|s| {
+                // (a root that doesn't compile waits longer to be recorded
+                // again; a side trace's exit has its own retry limit)
+                if side_of.is_none() {
+                    s.hot.penalize(proto, header);
+                }
+                s.note_abort((id, header, reason));
+            });
+            return;
+        }
+    };
+    t.native = Some(native);
+    debug::log(debug::Event::TraceCompiled { id: id.0, pc: header, insts: t.len() });
+    state::with(|s| match side_of {
+        None => {
+            s.remove_root(root_key);
+            s.by_tag.insert(tag, state::TraceKey::Root(root_key.0, root_key.1));
+            s.traces.insert(root_key, t);
+        }
+        Some((ptag, k)) => {
+            // link: the parent's exit stub jumps here from now on
+            let Some(parent) = s.by_tag_mut(ptag) else { return };
+            let slot = (parent.link_table as *mut usize).wrapping_add(k as usize);
+            unsafe { *slot = native.entry };
+            s.by_tag.insert(tag, state::TraceKey::Side(tag));
+            s.sides.insert(tag, t);
+            if let Some(r) = s.traces.get_mut(&root_key) {
+                r.sides.push(tag);
+            }
+        }
+    });
 }
 
 fn rec_proto(r: &recorder::Recorder) -> *mut Proto {
@@ -279,7 +374,36 @@ const SHORT_TRIP: u32 = 32;
 /// A new hot counter for one compiled loop instruction (lives as long as
 /// the code).
 pub fn new_loop_counter() -> *mut u32 {
-    Box::leak(Box::new(1u32))
+    Box::leak(Box::new(LoopCell { ctr: 1, entries: 0, cycles: 0 })) as *mut LoopCell as *mut u32
+}
+
+/// Per compiled loop instruction: the counter native code decrements
+/// (first field), and how long its trace runs per entry from native code.
+#[repr(C)]
+struct LoopCell {
+    ctr: u32,
+    entries: u32,
+    cycles: u64,
+}
+
+/// Cycles a trace must run per entry, on average, to be entered from
+/// native code: entering (through the hook) costs a few hundred cycles, so
+/// a loop that only runs a few iterations per entry is faster left native.
+const MIN_TRACE_CYCLES: u64 = 800;
+
+thread_local! {
+    /// cycles the last trace run took (rdtsc)
+    static LAST_RUN: Cell<u64> = const { Cell::new(u64::MAX) };
+}
+
+#[inline(always)]
+fn cycles() -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        std::arch::x86_64::_rdtsc()
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    0
 }
 
 /// True when the single-step interpreter must call into the JIT before each
@@ -390,7 +514,9 @@ pub unsafe extern "sysv64-unwind" fn native_loop_hook(
         }
     }
     let depth = ci_depth(L);
+    LAST_RUN.with(|c| c.set(u64::MAX));
     let resume = on_backedge(L, p, header, base).unwrap_or(header);
+    let ran = LAST_RUN.with(|c| c.get());
     let r = if resume == RESUME_FRAME {
         // inside inlined calls: interpret until back in this frame
         run_until_native(L, (*(*L).ci).savedpc, depth)
@@ -404,5 +530,20 @@ pub unsafe extern "sysv64-unwind" fn native_loop_hook(
         s.traces.contains_key(&(p as usize, header)) || (s.enabled && !s.hot.is_blacklisted(p, header) && s.traces.len() < s.max_traces)
     });
     *ctr = if again { 1 } else { u32::MAX };
+    if ran != u64::MAX {
+        // a trace ran: is it worth entering from here?
+        let cell = &mut *(ctr as *mut LoopCell);
+        cell.entries += 1;
+        cell.cycles += ran;
+        if cell.entries >= 64 {
+            let short = cell.cycles / (cell.entries as u64) < MIN_TRACE_CYCLES;
+            cell.entries = 0;
+            cell.cycles = 0;
+            if short {
+                // stay native (look again in a while)
+                cell.ctr = 1 << 16;
+            }
+        }
+    }
     r
 }
