@@ -50,11 +50,13 @@ pub struct Trace {
     /// [`EXIT_STORM_LIMIT`](super::EXIT_STORM_LIMIT) of them so the loop is
     /// re-recorded for the current types
     pub side_exits: u32,
+    /// last bytecode index of the loop body (exits past it left the loop)
+    pub end_pc: u32,
 }
 
 impl Trace {
     pub fn new(id: TraceId, proto: *mut Proto, start_pc: u32) -> Trace {
-        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0 }
+        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX }
     }
 
     pub fn inst(&self, r: Ref) -> &Inst {

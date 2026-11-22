@@ -9536,6 +9536,12 @@ unsafe extern "sysv64-unwind" fn s_OP_FOR_G_LOOP(L: *mut lua_State, mut pc: *con
                         index += 1;
                     }
                     if found {
+                        if SS && crate::jit::state::trace_enabled() {
+                            let p = (*(*L).ci).p;
+                            if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                                pc = (*p).code.add(resume as usize);
+                            }
+                        }
                         become dispatch(L, pc, base, k);
                     }
                     let sizenode = 1i32 << (*h).lsizenode;
@@ -9553,6 +9559,11 @@ unsafe extern "sysv64-unwind" fn s_OP_FOR_G_LOOP(L: *mut lua_State, mut pc: *con
                     }
                     if !found {
                         pc = pc.add(1);
+                    } else if SS && crate::jit::state::trace_enabled() {
+                        let p = (*(*L).ci).p;
+                        if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                            pc = (*p).code.add(resume as usize);
+                        }
                     }
                 } else {
                     (*(*(*L).ci).p).execcount += 1;
@@ -10506,6 +10517,12 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_BACK(L: *mut lua_State, mut pc: *cons
                 check_gc!();
                 (*(*(*L).ci).p).execcount += 1;
                 pc = pc.add(1).offset(id(insn));
+                if SS && crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        pc = (*p).code.add(resume as usize);
+                    }
+                }
     }
     become dispatch(L, pc, base, k);
 }
@@ -21460,6 +21477,12 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_LOOP(L: *mut lua_State, 
                         index += 1;
                     }
                     if found {
+                        if SS && crate::jit::state::trace_enabled() {
+                            let p = (*(*L).ci).p;
+                            if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                                pc = (*p).code.add(resume as usize);
+                            }
+                        }
                         return pc;
                     }
                     let sizenode = 1i32 << (*h).lsizenode;
@@ -21477,6 +21500,11 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_LOOP(L: *mut lua_State, 
                     }
                     if !found {
                         pc = pc.add(1);
+                    } else if SS && crate::jit::state::trace_enabled() {
+                        let p = (*(*L).ci).p;
+                        if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                            pc = (*p).code.add(resume as usize);
+                        }
                     }
                 } else {
                     (*(*(*L).ci).p).execcount += 1;
@@ -22384,6 +22412,12 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_BACK(L: *mut lua_State, m
                 check_gc!();
                 (*(*(*L).ci).p).execcount += 1;
                 pc = pc.add(1).offset(id(insn));
+                if SS && crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        pc = (*p).code.add(resume as usize);
+                    }
+                }
     }
     return pc;
 }

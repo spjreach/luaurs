@@ -512,6 +512,7 @@ impl Recorder {
             .collect();
 
         let mut out = Trace::new(rec.id, rec.proto, rec.start_pc);
+        out.end_pc = self.loop_end;
         let mut map: Vec<Option<Ref>> = vec![None; n];
         let push = |out: &mut Trace, inst: Inst| -> Ref {
             out.insts.push(inst);

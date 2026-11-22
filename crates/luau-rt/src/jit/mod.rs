@@ -76,7 +76,11 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
                 // trace is dropped. Returning `header` here replays the
                 // iteration that was about to leave the loop.
                 let resume = if ex & 0x8000_0000 != 0 { header } else { t.snapshots[ex as usize].pc };
-                t.side_exits += 1;
+                // leaving the loop is normal; exits back into the body are
+                // what a storm is made of
+                if resume >= t.start_pc && resume <= t.end_pc {
+                    t.side_exits += 1;
+                }
                 (t.side_exits >= EXIT_STORM_LIMIT, resume)
             });
             if storm {
@@ -177,4 +181,136 @@ pub unsafe fn record_step(_L: *mut lua_State, p: *mut Proto, pc: u32, base: StkI
 
 fn rec_proto(r: &recorder::Recorder) -> *mut Proto {
     r.proto()
+}
+
+// ---------------------------------------------------------------------------
+// Native code (method JIT) integration.
+//
+// With native code, the method JIT keeps running everything; each compiled
+// loop instruction (FORNLOOP, JUMPBACK) decrements a counter and, at zero,
+// calls `native_loop_hook`. The hook runs the loop instruction, then the
+// loop's trace when there is one, or starts recording and runs the
+// single-step interpreter for the iteration being recorded. Whenever the
+// interpreter has to take over (recording, a trace exit in the middle of the
+// body), it runs only until the frame reaches a pc native code can enter.
+
+thread_local! {
+    /// CallInfo depth the innermost single-step run stops at (-1: none)
+    static STOP_DEPTH: Cell<isize> = const { Cell::new(-1) };
+    /// the single-step run stopped (instead of leaving the VM)
+    static STOPPED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// A new hot counter for one compiled loop instruction (lives as long as
+/// the code).
+pub fn new_loop_counter() -> *mut u32 {
+    Box::leak(Box::new(1u32))
+}
+
+/// True when the single-step interpreter must call into the JIT before each
+/// instruction (recording, or a run that stops at native code).
+#[inline(always)]
+pub fn ss_hooks() -> bool {
+    RECORDING.with(|r| r.get()) || STOP_DEPTH.with(|d| d.get()) >= 0
+}
+
+#[inline(always)]
+unsafe fn ci_depth(L: *mut lua_State) -> isize {
+    (*L).ci.offset_from((*L).base_ci)
+}
+
+/// Single-step interpreter, before instruction `pc` of `p`: true when the
+/// run should stop and return to native code.
+pub unsafe fn should_stop(L: *mut lua_State, p: *mut Proto, pc: *const crate::lobject::Instruction) -> bool {
+    let d = STOP_DEPTH.with(|d| d.get());
+    if d < 0 {
+        return false;
+    }
+    let cur = ci_depth(L);
+    let stop = if cur < d {
+        // the frame returned: its caller continues in the interpreter
+        true
+    } else {
+        cur == d && !is_recording() && native_entry(p, pc)
+    };
+    if stop {
+        STOPPED.with(|s| s.set(true));
+    }
+    stop
+}
+
+#[cfg(all(target_arch = "x86_64", windows))]
+unsafe fn native_entry(p: *mut Proto, pc: *const crate::lobject::Instruction) -> bool {
+    crate::lvmexecute::native_addr(p, pc) != 0
+}
+#[cfg(not(all(target_arch = "x86_64", windows)))]
+unsafe fn native_entry(_p: *mut Proto, _pc: *const crate::lobject::Instruction) -> bool {
+    false
+}
+
+struct StopGuard(isize);
+impl Drop for StopGuard {
+    fn drop(&mut self) {
+        STOP_DEPTH.with(|d| d.set(self.0));
+    }
+}
+
+/// Runs the current frame from `pc` in the single-step interpreter until
+/// it can continue natively. Returns what `native_loop_hook` returns.
+#[cfg(all(target_arch = "x86_64", windows))]
+unsafe fn run_until_native(L: *mut lua_State, pc: *const crate::lobject::Instruction) -> usize {
+    (*(*L).ci).savedpc = pc;
+    let depth = ci_depth(L);
+    let _g = StopGuard(STOP_DEPTH.with(|d| d.replace(depth)));
+    STOPPED.with(|s| s.set(false));
+    crate::lvmexecute::execute_single_step(L);
+    if STOPPED.with(|s| s.replace(false)) {
+        if ci_depth(L) == depth {
+            (*(*L).ci).savedpc as usize
+        } else {
+            1
+        }
+    } else {
+        // returned to C, yielded, or broke
+        0
+    }
+}
+
+/// Called by native code when a loop instruction's counter (`ctr`) reaches
+/// zero; the frame is on the stack. Returns 0 when the VM was left, 1 to
+/// interpret the frame on top at its savedpc, or the pc to continue at in
+/// this function.
+#[cfg(all(target_arch = "x86_64", windows))]
+pub unsafe extern "sysv64-unwind" fn native_loop_hook(
+    L: *mut lua_State,
+    pc: *const crate::lobject::Instruction,
+    base: StkId,
+    k: *mut crate::lobject::TValue,
+    ctr: *mut u32,
+) -> usize {
+    let p = (*(*L).ci).p;
+    let insn = *pc;
+    let step = crate::lvmexecute::STEPS[(insn & 0xff) as usize].expect("loop instruction step");
+    let npc = step(L, pc, base, k);
+    if npc.is_null() {
+        return 0;
+    }
+    let code = (*p).code;
+    let header = (pc.offset_from(code) + 1 + ((insn as i32) >> 16) as isize) as u32;
+    if npc != code.add(header as usize) {
+        // the loop ended
+        *ctr = 1;
+        return npc as usize;
+    }
+    let base = (*L).base;
+    let resume = on_backedge(L, p, header, base).unwrap_or(header);
+    let npc = code.add(resume as usize);
+    let r = if is_recording() || !native_entry(p, npc) { run_until_native(L, npc) } else { npc as usize };
+    // when to call again: every time while a trace exists or the loop may
+    // still get one; practically never once it's given up on
+    let again = state::with(|s| {
+        s.traces.contains_key(&(p as usize, header)) || (s.enabled && !s.hot.is_blacklisted(p, header) && s.traces.len() < s.max_traces)
+    });
+    *ctr = if again { 1 } else { u32::MAX };
+    r
 }

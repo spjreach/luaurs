@@ -161,9 +161,11 @@ fn aux_not(aux: u32) -> i32 {
 /// `luau_execute`: runs Lua frames until a frame with
 /// `LUA_CALLINFO_RETURN` returns or the thread yields/breaks.
 pub unsafe fn luau_execute(L: *mut lua_State) {
-    // (the tracing JIT records and enters traces from the single-step
-    // interpreter for now)
-    if (*L).singlestep || crate::jit::state::trace_enabled() {
+    // The tracing JIT records from the single-step interpreter. With native
+    // code, loops run natively and call `jit::native_loop_hook` when hot
+    // (which runs the single-step interpreter just while recording);
+    // without it, everything runs single-step so back edges are seen.
+    if (*L).singlestep || (crate::jit::state::trace_enabled() && ENTER_STUB.load(std::sync::atomic::Ordering::Relaxed) == 0) {
         execute::<true>(L)
     } else {
         execute_threaded(L)
@@ -236,6 +238,12 @@ unsafe fn tm_cfunc(fn_: *const TValue) -> bool {
 #[inline(always)]
 unsafe fn vec3(v: *const f32) -> (f32, f32, f32) {
     (*v, *v.add(1), f32::from_bits(*(v.add(2) as *const u32)))
+}
+
+/// Runs `L->ci` from its savedpc in the single-step interpreter (tracing
+/// JIT: recording, and stretches between a trace exit and native code).
+pub(crate) unsafe fn execute_single_step(L: *mut lua_State) {
+    execute::<true>(L)
 }
 
 unsafe fn execute<const SS: bool>(L: *mut lua_State) {
@@ -348,9 +356,15 @@ unsafe fn execute<const SS: bool>(L: *mut lua_State) {
     let mut ovr: u32 = NO_OVR;
 
     loop {
-        if SS && crate::jit::is_recording() {
+        if SS && crate::jit::ss_hooks() {
             let p = (*(*L).ci).p;
-            crate::jit::record_step(L, p, pc.offset_from((*p).code) as u32, base);
+            if crate::jit::is_recording() {
+                crate::jit::record_step(L, p, pc.offset_from((*p).code) as u32, base);
+            }
+            if crate::jit::should_stop(L, p, pc) {
+                (*(*L).ci).savedpc = pc;
+                return;
+            }
         }
         if SS {
             if let Some(step) = (*(*L).global).cb.debugstep {
@@ -1367,6 +1381,15 @@ unsafe fn execute<const SS: bool>(L: *mut lua_State) {
                         }
                         index += 1;
                     }
+                    if found {
+                        if SS && crate::jit::state::trace_enabled() {
+                            let p = (*(*L).ci).p;
+                            if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                                pc = (*p).code.add(resume as usize);
+                            }
+                        }
+                        continue;
+                    }
                     let sizenode = 1i32 << (*h).lsizenode;
                     while ((index - sizearray) as u32) < sizenode as u32 {
                         let n = (*h).node.add((index - sizearray) as usize);
@@ -2046,7 +2069,7 @@ pub(crate) fn handlers_table() -> usize {
 /// Native code address of `pc` in `p` (0 when `p` has no native code).
 #[cfg(all(target_arch = "x86_64", windows))]
 #[inline(always)]
-unsafe fn native_addr(p: *mut Proto, pc: *const Instruction) -> usize {
+pub(crate) unsafe fn native_addr(p: *mut Proto, pc: *const Instruction) -> usize {
     let np = (*p).execdata as *const crate::codegen::x64::NativeProto;
     if np.is_null() {
         return 0;

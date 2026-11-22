@@ -47,6 +47,9 @@ struct Site {
     /// a bail of the carried-register check of the loop at this head
     /// (recompile without carrying there)
     carry_fail: Option<usize>,
+    /// tracing JIT hot counter of the loop instruction at `i` (0: none):
+    /// the stub calls `jit::native_loop_hook` instead of the step
+    hook: usize,
 }
 
 struct Edge {
@@ -149,9 +152,38 @@ impl<'f> Tr<'f> {
             cont: None,
             next_i: 0,
             carry_fail: None,
+            hook: 0,
         });
         self.slow_cache = Some((self.st.ver, bail, l));
         l
+    }
+
+    /// With the tracing JIT on: a counter decremented at this loop
+    /// instruction; at zero the loop's state goes to the stack and
+    /// `jit::native_loop_hook` runs the instruction (and records or runs a
+    /// trace). Emitted right after the loop checks (rax/rcx are free).
+    fn trace_counter(&mut self) {
+        if !crate::jit::state::trace_enabled() {
+            return;
+        }
+        let ctr = crate::jit::new_loop_counter();
+        let l = self.a.label();
+        self.sites.push(Site {
+            label: l,
+            i: self.i,
+            bail: false,
+            snap: self.st.snapshot_live(&self.live[self.i]),
+            reload: Vec::new(),
+            verify: Vec::new(),
+            safeenv: false,
+            cont: None,
+            next_i: 0,
+            carry_fail: None,
+            hook: ctr as usize,
+        });
+        self.a.mov_ri(R::Rax, ctr as u64);
+        self.a.add32_mi(R::Rax, 0, -1);
+        self.a.jcc(Cond::E, l);
     }
 
     /// Makes sure `r` has tag `t` (the caller checked `can_be`).
@@ -183,6 +215,7 @@ impl<'f> Tr<'f> {
             cont: None,
             next_i: 0,
             carry_fail: Some(head),
+            hook: 0,
         });
         self.a.cmp32_mi(R::R13, reg(r as i32) + TT, t as i32);
         self.a.jcc(Cond::NE, l);
@@ -1597,8 +1630,9 @@ impl<'f> Tr<'f> {
         let tl = self.carry_inner.get(&target).copied().unwrap_or(self.labels[target]);
         let prep = target.wrapping_sub(1);
         let stepk = if prep < self.n { self.stepk[prep] } else { None };
+        emit_loop_checks(&mut self.a, s);
+        self.trace_counter();
         let a = &mut self.a;
-        emit_loop_checks(a, s);
         let (ol, os, oi) = (reg(ra as i32), reg(ra as i32 + 1), reg(ra as i32 + 2));
         a.movsd_load(X(0), R::R13, oi);
         a.addsd_m(X(0), R::R13, os);
@@ -3728,6 +3762,7 @@ unsafe fn translate_pass(
             tr.flush_here();
             let s = tr.slow(false);
             emit_loop_checks(&mut tr.a, s);
+            tr.trace_counter();
             let tl = tr.labels[jt];
             tr.a.jmp(tl);
         } else if is(O::JumpIf) || is(O::JumpIfNot) {
@@ -3801,6 +3836,20 @@ unsafe fn translate_pass(
         let op = op_of(insn);
         let step = STEPS[op as usize]? as usize;
         let pc = code as usize + s.i * 4;
+        if s.hook != 0 {
+            // rax = 0: left the VM; 1: interpret the frame on top; else the
+            // pc to continue at in this function
+            emit_args(a, pc);
+            a.mov_ri(R::R8, s.hook as u64);
+            a.call_abs(crate::jit::native_loop_hook as usize);
+            a.test_rr(R::Rax, R::Rax);
+            a.jcc(Cond::E, tr.cx.ret);
+            a.load(R::R13, R::R12, OFF_BASE);
+            a.cmp_ri(R::Rax, 1);
+            a.jcc(Cond::E, tr.cx.interp);
+            a.jmp(tr.cx.dispatch);
+            continue;
+        }
         if s.bail {
             // record what was seen (the function is recompiled for it), run
             // the instruction, and stay in the interpreter
