@@ -131,12 +131,19 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             v.extend(st.meta);
         }
     }
+    // a PHI lives from the loop head (all of them are written at once
+    // there: none may share a register) to its last use - not to the
+    // loop's end: the back edge only writes it (its back value may then
+    // take its register, see the allocation)
+    let phi_block_end = t.insts.iter().enumerate().filter(|(_, x)| matches!(x.op, Op::Phi { .. })).map(|(j, _)| j).max().unwrap_or(0);
     for (i, inst) in t.insts.iter().enumerate() {
         match inst.op {
             Op::Phi { pre, back } => {
                 touch(pre, loop_at, &mut last, &mut used);
                 touch(back, END, &mut last, &mut used);
-                last[i] = END;
+                if last[i] < phi_block_end {
+                    last[i] = phi_block_end;
+                }
                 used[i] = true;
             }
             _ => {
@@ -177,9 +184,22 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     let mut active: Vec<usize> = Vec::new();
     let mut dying: Vec<Vec<usize>> = vec![Vec::new(); n + 1];
     let end_of = |v: usize, last: &[usize], used: &[bool]| if used[v] { last[v] } else { v };
+    // back value -> its PHI
+    let mut phi_of: Vec<Option<usize>> = vec![None; n];
+    for (j, x) in t.insts.iter().enumerate() {
+        if let Op::Phi { back, .. } = x.op {
+            phi_of[back.index()] = Some(j);
+        }
+    }
+    // registers handed from a dying PHI to its back value (not freed)
+    let mut handed = vec![false; n];
     for (i, inst) in t.insts.iter().enumerate() {
         // values whose last use was the previous instruction are free now
         for &v in &dying[i] {
+            if handed[v] {
+                active.retain(|&w| w != v);
+                continue;
+            }
             match home[v] {
                 Home::G(r) => free_g.push(r),
                 Home::F(x) => free_x.push(x),
@@ -206,6 +226,22 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
         }
         let Some(fp) = needs_reg(inst.ty) else { continue };
         let end = end_of(i, &last, &used);
+        // a back value computed from its PHI's last use takes the PHI's
+        // register (no move at the back edge); only for instructions
+        // without exits that allow their result in an operand's register
+        if let Some(p) = phi_of[i] {
+            let shares = matches!(inst.op, Op::Add(..) | Op::Sub(..) | Op::Mul(..) | Op::Div(..) | Op::AddI32(..) | Op::Neg(_));
+            if shares && last[p] == i && !handed[p] && matches!((home[p], fp), (Home::G(_), false) | (Home::F(_), true)) {
+                home[i] = home[p];
+                handed[p] = true;
+                active.retain(|&w| w != p);
+                active.push(i);
+                if end != END {
+                    dying[(end + 1).min(n)].push(i);
+                }
+                continue;
+            }
+        }
         let reg = if fp { free_x.pop().map(Home::F) } else { free_g.pop().map(Home::G) };
         home[i] = match reg {
             Some(h) => {
@@ -1012,9 +1048,12 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             Op::AddI32(x, y) => {
                 if let Home::G(d) = dst {
                     let (x, y) = (g(*x)?, g(*y)?);
-                    a.mov_rr32(R::Rax, x);
-                    a.alu32_rr(0x01, R::Rax, y);
-                    a.mov_rr32(d, R::Rax);
+                    if d == y {
+                        a.alu32_rr(0x01, d, x);
+                    } else {
+                        a.mov_rr32(d, x);
+                        a.alu32_rr(0x01, d, y);
+                    }
                 }
             }
             Op::ASize(tb) => {
@@ -1026,15 +1065,21 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 if let Home::G(d) = dst {
                     let is_base = t.ty(*tb) == IrType::Ptr;
                     let (tb, idx) = (g(*tb)?, g(*idx)?);
-                    a.mov_rr32(R::Rax, idx);
-                    a.shl_ri(R::Rax, 4);
-                    if is_base {
-                        a.add_rr(R::Rax, tb);
+                    if is_base && d != tb {
+                        a.mov_rr32(d, idx);
+                        a.shl_ri(d, 4);
+                        a.add_rr(d, tb);
                     } else {
-                        a.load(R::Rcx, tb, OFF_T_ARRAY);
-                        a.add_rr(R::Rax, R::Rcx);
+                        a.mov_rr32(R::Rax, idx);
+                        a.shl_ri(R::Rax, 4);
+                        if is_base {
+                            a.add_rr(R::Rax, tb);
+                        } else {
+                            a.load(R::Rcx, tb, OFF_T_ARRAY);
+                            a.add_rr(R::Rax, R::Rcx);
+                        }
+                        a.mov_rr(d, R::Rax);
                     }
-                    a.mov_rr(d, R::Rax);
                 }
             }
             Op::ABase(tb) => {
