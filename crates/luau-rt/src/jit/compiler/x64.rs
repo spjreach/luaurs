@@ -129,6 +129,9 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             let v = &mut sink_vals[st.snap as usize];
             v.extend(st.fields.iter().map(|f| f.1));
             v.extend(st.meta);
+            if let Some((x, e)) = sk.entry {
+                v.extend([x, e]);
+            }
         }
     }
     // a PHI lives from the loop head (all of them are written at once
@@ -1330,7 +1333,7 @@ fn materialize(a: &mut Asm, home: &[Home], t: &Trace, sid: u32, sn: &Snapshot) -
         let st = sk.states.iter().find(|s| s.snap == sid).ok_or("sunk table without a state for this exit")?;
         // registers the rest of the exit still needs survive the call
         let mut live: Vec<Home> = Vec::new();
-        for v in sn.entries.iter().map(|e| e.value).chain(st.fields.iter().map(|f| f.1)).chain(st.meta) {
+        for v in sn.entries.iter().map(|e| e.value).chain(st.fields.iter().map(|f| f.1)).chain(st.meta).chain(sk.entry.map(|e| e.0)) {
             let h = home[v.index()];
             if matches!(h, Home::G(_) | Home::F(_)) && !live.contains(&h) {
                 live.push(h);
@@ -1345,6 +1348,26 @@ fn materialize(a: &mut Asm, home: &[Home], t: &Trace, sid: u32, sn: &Snapshot) -
                     }
                 }
             }
+        }
+        // (a table carried around the loop: in its first iteration it is
+        // still the entry table)
+        let done = a.label();
+        if let Some((x, flag)) = sk.entry {
+            let build = a.label();
+            match (home[flag.index()], &t.inst(flag).op) {
+                (Home::G(r), _) => a.test_rr(r, r),
+                (Home::S(s), _) => {
+                    a.load(R::Rax, R::Rsp, spill_off(s));
+                    a.test_rr(R::Rax, R::Rax);
+                }
+                (h, _) => return Err(format!("first-iteration flag {} has no home {:?}", flag.0, h)),
+            }
+            a.jcc(Cond::E, build);
+            for e2 in sn.entries.iter().filter(|x| x.value == e.value) {
+                store_value(a, home, t, x, R::R13, e2.slot as i32 * TV)?;
+            }
+            a.jmp(done);
+            a.bind(build);
         }
         if sk.tpl != 0 {
             call_out(a, &live, helpers::dup_table as usize, &[Arg::L, Arg::Imm(sk.tpl as u64)]);
@@ -1378,6 +1401,7 @@ fn materialize(a: &mut Asm, home: &[Home], t: &Trace, sid: u32, sn: &Snapshot) -
             a.mov_ri64(R::Rax, tag);
             a.store(R::R13, disp + OFF_TAGWORD, R::Rax);
         }
+        a.bind(done);
     }
     Ok(())
 }

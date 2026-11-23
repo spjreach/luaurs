@@ -35,6 +35,15 @@ pub fn move_before_loop(t: &mut Trace, moved: &[usize]) {
     order.extend(moved.iter().copied());
     order.push(l);
     order.extend((l + 1..n).filter(|i| !set.contains(i)));
+    reorder(t, &order);
+}
+
+/// Renumbers the trace: instruction `order[k]` becomes number k (every
+/// reference remapped; `order` is a permutation keeping definitions
+/// before uses, Phi back values excepted). Returns old -> new.
+pub fn reorder(t: &mut Trace, order: &[usize]) -> Vec<u32> {
+    let n = t.insts.len();
+    let loop_ref = t.loop_ref;
     let mut new_of = vec![0u32; n];
     for (new, &old) in order.iter().enumerate() {
         new_of[old] = new as u32;
@@ -55,7 +64,20 @@ pub fn move_before_loop(t: &mut Trace, moved: &[usize]) {
         }
         sn.ref_limit = Ref(u32::MAX);
     }
-    t.loop_ref = Some(rm(loop_ref));
+    t.loop_ref = loop_ref.map(rm);
+    for sk in &mut t.sinks {
+        sk.at = rm(sk.at);
+        if let Some((x, e)) = sk.entry.as_mut() {
+            *x = rm(*x);
+            *e = rm(*e);
+        }
+        for st in &mut sk.states {
+            for f in &mut st.fields {
+                f.1 = rm(f.1);
+            }
+            st.meta = st.meta.map(rm);
+        }
+    }
     // each snapshot covers what is defined before its first user (or
     // everything it names)
     for (i, inst) in t.insts.iter().enumerate() {
@@ -70,4 +92,5 @@ pub fn move_before_loop(t: &mut Trace, moved: &[usize]) {
         }
     }
     let _ = Op::Nop;
+    new_of
 }

@@ -126,6 +126,10 @@ pub struct Sink {
     pub narray: u32,
     pub nhash: u32,
     pub states: Vec<SinkState>,
+    /// a table carried around the loop (see `optimizer::sink`): (the
+    /// table it was on entry, a Boolean that is true until the first
+    /// iteration ends) - exits before then store that table itself
+    pub entry: Option<(Ref, Ref)>,
 }
 
 /// A sunk table's contents at the exits through snapshot `snap`.
