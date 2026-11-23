@@ -65,6 +65,8 @@ pub struct Recorder {
     /// the result's trace slot, the pc the interpreter must be at next). Its
     /// type is the one the interpreter produced.
     pending: Option<(Option<Ref>, usize, u32)>,
+    /// the thread being recorded
+    l: *mut lua_State,
 }
 
 /// Deepest call inlining.
@@ -124,6 +126,7 @@ impl Recorder {
             protos: Vec::new(),
             side: None,
             pending: None,
+            l: std::ptr::null_mut(),
         }
     }
 
@@ -147,6 +150,10 @@ impl Recorder {
         // snapshot 0: the start, nothing done (the entry checks exit here)
         r.b.snapshot();
         r
+    }
+
+    pub fn set_state(&mut self, l: *mut lua_State) {
+        self.l = l;
     }
 
     pub fn is_side(&self) -> bool {
@@ -755,6 +762,8 @@ impl Recorder {
             let tpl = self.b.kptr((*kv).value.gc as usize, IrType::Table);
             let v = self.b.emit(Op::DupTable { tpl }, IrType::Table);
             self.b.set_slot(a, v);
+        } else if o(O::Namecall) {
+            self.record_namecall(insn, aux, base)?;
         } else if o(O::GetUpval) {
             let (cl, clr) = self.cur_closure();
             let ur = Closure::uprefs(cl).add(bb);
@@ -837,10 +846,16 @@ impl Recorder {
         if (*kv).tt != LUA_TSTRING {
             return Err(unsupported_type("non-string field key"));
         }
+        let k = self.konst(kidx)?;
+        self.field_ref_str(h, t, tsvalue(kv), k, store)
+    }
+
+    /// `field_ref` for a key string `ks` (IR value `k`).
+    unsafe fn field_ref_str(&mut self, h: *mut LuaTable, t: Ref, ks: *mut TString, k: Ref, store: bool) -> R<(Ref, *const TValue)> {
         if store && (*h).readonly != 0 {
             return Err(unsupported_type("store into a read-only table"));
         }
-        let res = crate::ltable::luaH_getstr(h, tsvalue(kv));
+        let res = crate::ltable::luaH_getstr(h, ks);
         if res == luaO_nilobject() || (*res).tt == LUA_TNIL {
             return Err(unsupported_type("missing field"));
         }
@@ -849,10 +864,77 @@ impl Recorder {
         if idx < 0 || idx >= (1isize << (*h).lsizenode) {
             return Err(AbortReason::Internal("field outside the hash part".into()));
         }
-        let k = self.konst(kidx)?;
         let snap = self.b.snapshot();
         let p = self.b.emit(Op::HRef { t, k, idx: idx as u32, lsize: (*h).lsizenode, store, snap }, IrType::Ptr);
         Ok((p, res))
+    }
+
+    /// NAMECALL A B K: R(A+1) = R(B); R(A) = the method K, found in the
+    /// table itself, or in its metatable's __index table (classes), or in
+    /// the string library for strings.
+    unsafe fn record_namecall(&mut self, insn: u32, aux: u32, base: StkId) -> R<()> {
+        let (a, bb) = (a_of(insn), b_of(insn));
+        let kv = (*self.cur_proto()).k.add(aux as usize);
+        if (*kv).tt != LUA_TSTRING {
+            return Err(unsupported_type("non-string method name"));
+        }
+        let ks = tsvalue(kv);
+        let recv = base.add(bb);
+        let obj = self.read(bb, base)?;
+        let k = self.konst(aux as usize)?;
+        let g = (*self.l).global;
+        let method = if (*recv).tt == LUA_TTABLE {
+            let h = hvalue(recv);
+            let own = crate::ltable::luaH_getstr(h, ks);
+            if own != luaO_nilobject() && (*own).tt != LUA_TNIL {
+                let (p, val) = self.field_ref_str(h, obj, ks, k, false)?;
+                let ty = IrType::of_tag((*val).tt).ok_or(unsupported_type("method type"))?;
+                let snap = self.b.snapshot();
+                self.b.emit(Op::XLoad { p, snap }, ty)
+            } else {
+                // not in the table: its metatable's __index table
+                let mt = (*h).metatable;
+                if mt.is_null() {
+                    return Err(unsupported_type("missing method"));
+                }
+                let snap = self.b.snapshot();
+                self.b.emit(Op::HMiss { t: obj, k, snap }, IrType::Nil);
+                let mtr = self.b.emit(Op::TMeta { t: obj, snap }, IrType::Table);
+                let idx_name = (*g).tmname[crate::ltm::TM_INDEX as usize];
+                let kidx = self.b.kptr(idx_name as usize, IrType::String);
+                let (ip, iv) = self.field_ref_str(mt, mtr, idx_name, kidx, false)?;
+                if (*iv).tt != LUA_TTABLE {
+                    return Err(unsupported_type("__index is not a table"));
+                }
+                let snap = self.b.snapshot();
+                let idx = self.b.emit(Op::XLoad { p: ip, snap }, IrType::Table);
+                let (p, val) = self.field_ref_str(hvalue(iv), idx, ks, k, false)?;
+                let ty = IrType::of_tag((*val).tt).ok_or(unsupported_type("method type"))?;
+                let snap = self.b.snapshot();
+                self.b.emit(Op::XLoad { p, snap }, ty)
+            }
+        } else if (*recv).tt == LUA_TSTRING {
+            // the string library (the string metatable's __index: permanent)
+            let smt = (*g).mt[LUA_TSTRING as usize];
+            if smt.is_null() {
+                return Err(unsupported_type("strings without a metatable"));
+            }
+            let idx_name = (*g).tmname[crate::ltm::TM_INDEX as usize];
+            let lib = crate::ltable::luaH_getstr(smt, idx_name);
+            if (*lib).tt != LUA_TTABLE {
+                return Err(unsupported_type("string __index is not a table"));
+            }
+            let libr = self.b.kptr((*lib).value.gc as usize, IrType::Table);
+            let (p, val) = self.field_ref_str(hvalue(lib), libr, ks, k, false)?;
+            let ty = IrType::of_tag((*val).tt).ok_or(unsupported_type("method type"))?;
+            let snap = self.b.snapshot();
+            self.b.emit(Op::XLoad { p, snap }, ty)
+        } else {
+            return Err(unsupported_type("method call on this type"));
+        };
+        self.b.set_slot(a + 1, obj);
+        self.b.set_slot(a, method);
+        Ok(())
     }
 
     /// FASTCALL1/2/2K/3 of any builtin that doesn't change tables or
@@ -945,7 +1027,7 @@ impl Recorder {
         }
         let cl = clvalue(fv);
         if (*cl).isC != 0 {
-            return Err(AbortReason::UnsupportedOpcode("Call (C function)"));
+            return self.record_c_call(pc, insn, base, cl);
         }
         if bb == 0 || c == 0 {
             return Err(unsupported_type("call with variable arguments or results"));
@@ -980,6 +1062,43 @@ impl Recorder {
             self.b.set_slot(i, nil);
         }
         self.stack_need = self.stack_need.max(fb + nargs + (*cl).stacksize as usize + LUA_MINSTACK as usize);
+        Ok(())
+    }
+
+    /// CALL of a C function that is a builtin with a fast implementation
+    /// (`string.sub` through a method call, `math.sin` through a local, ...).
+    unsafe fn record_c_call(&mut self, pc: u32, insn: u32, base: StkId, cl: *mut Closure) -> R<()> {
+        let (a, bb, c) = (a_of(insn), b_of(insn), c_of(insn));
+        let Some(fp) = Closure::c(cl).f.map(|f| f as usize) else {
+            return Err(AbortReason::UnsupportedOpcode("Call (C function)"));
+        };
+        let Some(bfid) = builtin_of(self.l, fp) else {
+            return Err(AbortReason::UnsupportedOpcode("Call (C function)"));
+        };
+        if bb == 0 || bb - 1 > 3 || !(1..=2).contains(&c) {
+            return Err(unsupported_type("builtin call with variable or many arguments/results"));
+        }
+        let (nargs, nres) = (bb - 1, c as i32 - 1);
+        let f = self.read(a, base)?;
+        let snap = self.b.snapshot();
+        self.b.emit(Op::GuardCFunc { f, fp, snap }, IrType::Nil);
+        let mut args = [Ref(0); 3];
+        for k in 0..nargs {
+            args[k] = self.read(a + 1 + k, base)?;
+            if self.b.trace.ty(args[k]) == IrType::Vector {
+                return Err(unsupported_type("vector builtin argument"));
+            }
+        }
+        let buf = Box::leak(vec![0u64; 8].into_boxed_slice()).as_mut_ptr() as usize;
+        let snap = self.b.snapshot();
+        let v = self.b.emit(Op::Builtin { bfid, args, nargs: nargs as u8, nres: nres as u8, buf, snap }, IrType::Nil);
+        let next = pc + if op_of(insn) == O::CallFb as u8 { 2 } else { 1 };
+        if nres == 1 {
+            self.b.set_slot(a, v);
+            self.pending = Some((Some(v), self.b.off + a, next));
+        } else {
+            self.pending = Some((None, 0, next));
+        }
         Ok(())
     }
 
@@ -1464,6 +1583,12 @@ fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *v = rm(*v);
         }
         TLen { t } => *t = rm(*t),
+        TMeta { t, .. } => *t = rm(*t),
+        HMiss { t, k, .. } => {
+            *t = rm(*t);
+            *k = rm(*k);
+        }
+        GuardCFunc { f, .. } => *f = rm(*f),
         SLen { s } => *s = rm(*s),
         DupTable { tpl } => *tpl = rm(*tpl),
         Builtin { args, nargs, .. } => {
@@ -1500,9 +1625,90 @@ fn set_snapshot(op: &mut Op, s: SnapId) {
         | GuardProto { snap, .. }
         | HRef { snap, .. }
         | GuardUvSlot { snap, .. }
-        | Builtin { snap, .. } => *snap = s,
+        | Builtin { snap, .. }
+        | TMeta { snap, .. }
+        | HMiss { snap, .. }
+        | GuardCFunc { snap, .. } => *snap = s,
         _ => {}
     }
+}
+
+/// The fast builtin a standard library C function corresponds to (found by
+/// name in the globals: `math.sin` is MathSin, `type` is Type, ...).
+unsafe fn builtin_of(l: *mut lua_State, fp: usize) -> Option<u8> {
+    use luau_common::bytecode::BuiltinFunction as B;
+    thread_local! {
+        static MAP: std::cell::RefCell<Option<HashMap<usize, u8>>> = const { std::cell::RefCell::new(None) };
+    }
+    if l.is_null() {
+        return None;
+    }
+    MAP.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.is_none() {
+            let mut map = HashMap::new();
+            let globals = (*l).gt;
+            let banned = [B::Rawset, B::TableInsert, B::TableUnpack, B::SelectVararg, B::Setmetatable, B::TableClear, B::Vector];
+            for id in 1..=255u8 {
+                let Ok(b) = B::try_from(id) else { continue };
+                if banned.contains(&b) {
+                    continue;
+                }
+                let name = format!("{:?}", b);
+                let (lib, fname) = ["Math", "Bit32", "String", "Buffer"]
+                    .iter()
+                    .find(|p| name.starts_with(*p) && name.len() > p.len())
+                    .map(|p| (Some(p.to_lowercase()), name[p.len()..].to_lowercase()))
+                    .unwrap_or((None, name.to_lowercase()));
+                let table = match lib {
+                    Some(lib) => match get_by_name(globals, lib.as_bytes()) {
+                        Some(v) if (*v).tt == LUA_TTABLE => hvalue(v),
+                        _ => continue,
+                    },
+                    None => globals,
+                };
+                if let Some(v) = get_by_name(table, fname.as_bytes()) {
+                    if (*v).tt == LUA_TFUNCTION && (*clvalue(v)).isC != 0 {
+                        if let Some(f) = Closure::c(clvalue(v)).f {
+                            map.insert(f as usize, id);
+                        }
+                    }
+                }
+            }
+            *m = Some(map);
+        }
+        m.as_ref().unwrap().get(&fp).copied()
+    })
+}
+
+/// A string-keyed entry of `h` by the key's bytes, or of its metatable's
+/// __index table (sandboxed globals are a proxy like that).
+unsafe fn get_by_name(h: *mut LuaTable, name: &[u8]) -> Option<*const TValue> {
+    if let Some(v) = get_own_by_name(h, name) {
+        return Some(v);
+    }
+    let mt = (*h).metatable;
+    if mt.is_null() {
+        return None;
+    }
+    match get_own_by_name(mt, b"__index") {
+        Some(i) if (*i).tt == LUA_TTABLE && hvalue(i) != h => get_own_by_name(hvalue(i), name),
+        _ => None,
+    }
+}
+
+unsafe fn get_own_by_name(h: *mut LuaTable, name: &[u8]) -> Option<*const TValue> {
+    let n = 1usize << (*h).lsizenode;
+    for i in 0..n {
+        let node = (*h).node.add(i);
+        if (*node).key.tt() == LUA_TSTRING && (*crate::ltable::gval(node)).tt != LUA_TNIL {
+            let ts = (*node).key.value.gc as *mut TString;
+            if std::slice::from_raw_parts(getstr(ts), (*ts).len as usize) == name {
+                return Some(crate::ltable::gval(node));
+            }
+        }
+    }
+    None
 }
 
 /// Builtin names for abort diagnostics ("builtin:MathMax"; built once).

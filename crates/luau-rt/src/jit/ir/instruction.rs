@@ -128,6 +128,12 @@ pub enum Op {
     TLen { t: Ref },
     /// length of string `s` (a Number)
     SLen { s: Ref },
+    /// the metatable of table `t`; exits through `snap` when it has none
+    TMeta { t: Ref, snap: SnapId },
+    /// exits through `snap` unless `t[k]` (a string key) is nil
+    HMiss { t: Ref, k: Ref, snap: SnapId },
+    /// exits through `snap` unless `f` is a C function with code at `fp`
+    GuardCFunc { f: Ref, fp: usize, snap: SnapId },
     /// a new table (`NEWTABLE`)
     NewTable { narray: u32, nhash: u32 },
     /// a copy of template table `tpl` (`DUPTABLE`; a Table constant)
@@ -198,6 +204,9 @@ impl Inst {
             XStore { p, v } => vec![*p, *v],
             GuardPlainTable { t, .. } => vec![*t],
             FrameFunc | NewTable { .. } => vec![],
+            TMeta { t, .. } => vec![*t],
+            HMiss { t, k, .. } => vec![*t, *k],
+            GuardCFunc { f, .. } => vec![*f],
             Barrier { t, v } => vec![*t, *v],
             TLen { t } => vec![*t],
             SLen { s } => vec![*s],
@@ -217,7 +226,7 @@ impl Inst {
         use Op::*;
         match &self.op {
             SLoad { guarded: true, snap, .. } => Some(*snap),
-            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } => {
+            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } => {
                 Some(*snap)
             }
             _ => None,

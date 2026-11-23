@@ -42,6 +42,8 @@ const OFF_MARKED: i32 = offset_of!(GCheader, marked) as i32;
 const OFF_TS_LEN: i32 = offset_of!(TString, len) as i32;
 const OFF_TOTALBYTES: i32 = offset_of!(global_State, totalbytes) as i32;
 const OFF_GCTHRESHOLD: i32 = offset_of!(global_State, GCthreshold) as i32;
+const OFF_T_META: i32 = offset_of!(LuaTable, metatable) as i32;
+const OFF_CL_CFUNC: i32 = (CLOSURE_HEADER + offset_of!(CClosure, f)) as i32;
 const OFF_CL_ENV: i32 = offset_of!(Closure, env) as i32;
 const OFF_CL_P: i32 = (CLOSURE_HEADER + offset_of!(LClosure, p)) as i32;
 const OFF_CL_UPREFS: i32 = (CLOSURE_HEADER + offset_of!(LClosure, uprefs)) as i32;
@@ -143,7 +145,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         }
         let defines = !matches!(
             inst.op,
-            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. }
+            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. } | Op::HMiss { .. } | Op::GuardCFunc { .. }
         ) && !matches!(inst.op, Op::Builtin { nres: 0, .. });
         if !defines {
             continue;
@@ -529,6 +531,28 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                     load_value(&mut a, dst, inst.ty, R::Rcx, 0)?;
                 }
             }
+            Op::TMeta { t: tb, snap } => {
+                let tb = g(*tb)?;
+                a.load(R::Rax, tb, OFF_T_META);
+                a.test_rr(R::Rax, R::Rax);
+                a.jcc(Cond::E, stub(*snap));
+                if let Home::G(d) = dst {
+                    a.mov_rr(d, R::Rax);
+                }
+            }
+            Op::HMiss { t: tb, k, snap } => {
+                let live = live_across(i);
+                call_out(&mut a, &live, helpers::getstr as usize, &[Arg::G(g(*tb)?), Arg::G(g(*k)?)]);
+                a.cmp32_mi(R::Rax, OFF_TT, LUA_TNIL as i32);
+                a.jcc(Cond::NE, stub(*snap));
+            }
+            Op::GuardCFunc { f: fv, fp, snap } => {
+                // (a Lua closure has its proto there: never C code)
+                a.load(R::Rax, g(*fv)?, OFF_CL_CFUNC);
+                a.mov_ri64(R::Rcx, *fp as u64);
+                a.cmp_rr(R::Rax, R::Rcx);
+                a.jcc(Cond::NE, stub(*snap));
+            }
             Op::HSlot { t: tb, idx } => {
                 if let Home::G(d) = dst {
                     let tb = g(*tb)?;
@@ -898,6 +922,10 @@ mod helpers {
         if crate::lgc::isblack(t as *mut GCObject) && crate::lgc::iswhite(v) {
             crate::lgc::luaC_barriertable(L, t, v);
         }
+    }
+
+    pub unsafe extern "sysv64" fn getstr(t: *mut LuaTable, k: *mut TString) -> *const TValue {
+        crate::ltable::luaH_getstr(t, k)
     }
 
     pub unsafe extern "sysv64" fn strcmp(a: *const TString, b: *const TString) -> i64 {

@@ -202,7 +202,8 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
             // on from there)
             let (sid, max_len) = state::with(|s| (s.new_id(), s.max_trace_len));
             debug::log(debug::Event::TraceStart { id: sid.0, pc });
-            let rec = recorder::Recorder::new_side(sid, p, crate::lobject::clvalue((*(*L).ci).func), pc, base, max_len, header, end, (ptag, k));
+            let mut rec = recorder::Recorder::new_side(sid, p, crate::lobject::clvalue((*(*L).ci).func), pc, base, max_len, header, end, (ptag, k));
+            rec.set_state(L);
             RECORDER.with(|r| *r.borrow_mut() = Some((rec, base)));
             RECORDING.with(|r| r.set(true));
         }
@@ -226,7 +227,8 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
     });
     if let Some((id, max_len)) = start {
         debug::log(debug::Event::TraceStart { id: id.0, pc: header });
-        let rec = recorder::Recorder::new(id, p, crate::lobject::clvalue((*(*L).ci).func), header, base, max_len);
+        let mut rec = recorder::Recorder::new(id, p, crate::lobject::clvalue((*(*L).ci).func), header, base, max_len);
+        rec.set_state(L);
         RECORDER.with(|r| *r.borrow_mut() = Some((rec, base)));
         RECORDING.with(|r| r.set(true));
     }
