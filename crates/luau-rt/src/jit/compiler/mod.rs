@@ -20,24 +20,33 @@ pub struct CompiledTrace {
 
 pub type TraceFn = unsafe extern "sysv64" fn(*mut crate::lobject::TValue, *mut crate::lobject::lua_State) -> u32;
 
-/// `link_to`: for a side trace, the root trace's re-entry address it ends
-/// by jumping to. `t.tag` and `t.link_table` must be set.
-pub fn compile(t: &Trace, link_to: Option<usize>) -> Result<CompiledTrace, String> {
+/// How a trace ends: looping, jumping to its root's re-entry (a side
+/// trace), or jumping through a link cell to another loop's trace.
+#[derive(Clone, Copy, PartialEq)]
+pub enum End {
+    Loop,
+    Root(usize),
+    Cell(usize),
+}
+
+/// `t.tag` and `t.link_table` must be set. Side traces (`t.side_of`) have
+/// no prologue: they run in their root's frame.
+pub fn compile(t: &Trace, end: End) -> Result<CompiledTrace, String> {
     super::ir::validate(t)?;
     #[cfg(all(target_arch = "x86_64", windows))]
     {
-        let code = unsafe { x64::compile(t, link_to)? };
+        let code = unsafe { x64::compile(t, end)? };
         // (LUAU_TRACE_ASM=dir: the machine code, for a disassembler)
         if let Some(dir) = std::env::var_os("LUAU_TRACE_ASM") {
             let _ = std::fs::create_dir_all(&dir);
-            let _ = std::fs::write(std::path::Path::new(&dir).join(format!("trace-{}{}.bin", t.id.0, if link_to.is_some() { "s" } else { "" })), &code.bytes);
+            let _ = std::fs::write(std::path::Path::new(&dir).join(format!("trace-{}{}.bin", t.id.0, if t.side_of.is_some() { "s" } else { "" })), &code.bytes);
         }
         let entry = crate::codegen::mem::with_code(|m| unsafe { m.place(&code.bytes) }).ok_or("out of executable memory")?;
         Ok(CompiledTrace { entry, size: code.bytes.len(), reentry: entry + code.reentry })
     }
     #[cfg(not(all(target_arch = "x86_64", windows)))]
     {
-        let _ = link_to;
+        let _ = end;
         Err("no trace compiler for this platform".into())
     }
 }

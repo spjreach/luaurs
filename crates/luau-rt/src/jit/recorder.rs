@@ -166,7 +166,7 @@ impl Recorder {
     pub unsafe fn new(id: TraceId, proto: *mut Proto, cl: *mut Closure, start_pc: u32, base: StkId, max_len: usize) -> Recorder {
         let nslots = (*proto).maxstacksize as usize;
         let loop_end = find_loop_end(proto, start_pc);
-        Recorder {
+        let mut r = Recorder {
             b: IrBuilder::new(Trace::new(id, proto, start_pc), nslots, start_pc),
             proto,
             start_pc,
@@ -194,7 +194,11 @@ impl Recorder {
             builtin_undo: None,
             builtin_call: None,
             deferred_call: None,
-        }
+        };
+        // snapshot 0: the entry (a trace that doesn't loop exits there from
+        // its entry checks)
+        r.b.snapshot();
+        r
     }
 
     /// Starts recording a side trace at `start_pc` (where exit `parent` of
@@ -409,6 +413,16 @@ impl Recorder {
             }
         }
         let inlined = self.funcs.len() > 1;
+        // another loop's header with a compiled trace: run that one next
+        if self.steps > 0 && !inlined && pc != self.header() && self.top.is_none() && self.pending.is_none() {
+            let p = self.proto as usize;
+            if state_has_trace(p, pc) {
+                return match self.close_link(pc) {
+                    Ok(t) => Step::Closed(t),
+                    Err(e) => Step::Abort(e),
+                };
+            }
+        }
         if let Some((header, _)) = self.side {
             if pc == header && !inlined {
                 return match self.close_side() {
@@ -416,9 +430,8 @@ impl Recorder {
                     Err(e) => Step::Abort(e),
                 };
             }
-            if !inlined && (pc < header || pc > self.loop_end) {
-                return Step::Abort(AbortReason::LeftLoop);
-            }
+            // (outside the loop: on to an enclosing loop's header, or the
+            // recording ends when the function returns)
             self.steps += 1;
             if self.b.trace.insts.len() > self.max_len {
                 return Step::Abort(AbortReason::TooLong);
@@ -2578,6 +2591,27 @@ impl Recorder {
         Ok(out)
     }
 
+    /// Finishes a trace at the header `target` of another loop that has a
+    /// trace: linear code whose last snapshot (every slot it wrote,
+    /// resuming at `target`) is stored before that loop's trace runs.
+    fn close_link(&mut self, target: u32) -> R<Trace> {
+        let mut out = std::mem::replace(&mut self.b.trace, Trace::new(TraceId(0), std::ptr::null_mut(), 0));
+        let entries: Vec<SnapEntry> = self.b.written().into_iter().map(|(s, v)| SnapEntry { slot: s as u16, value: v }).collect();
+        out.snapshots.push(Snapshot { pc: target, entries, ref_limit: Ref(out.insts.len() as u32), frames: vec![], top: None, stack_current: self.b.reload });
+        out.start_pc = self.header();
+        out.end_pc = self.loop_end;
+        out.loop_ref = None;
+        out.side_of = self.side.map(|s| s.1);
+        out.link = Some((self.proto as usize, target));
+        out.varargs = self.varargs;
+        out.inserts = self.inserts;
+        out.protos = self.protos.clone();
+        out.gc_refs = self.gc_refs.clone();
+        out.stack_need = self.stack_need as u32;
+        super::ir::validate(&out).map_err(AbortReason::Internal)?;
+        Ok(out)
+    }
+
     /// Instructions computing the same value on every iteration when their
     /// operands do (`HRef` is hoisted as a check: the body uses `HSlot`).
     fn hoistable(inst: &Inst) -> bool {
@@ -2937,6 +2971,11 @@ fn rec_key(t: &Trace, p: Ref) -> Option<(u8, Ref, u32)> {
         Op::ARef { t: tb, idx } => Some((1, tb, idx.0)),
         _ => None,
     }
+}
+
+/// Whether loop header `pc` of prototype `p` has a compiled trace.
+fn state_has_trace(p: usize, pc: u32) -> bool {
+    super::state::with(|s| s.traces.get(&(p, pc)).is_some_and(|t| t.native.is_some()))
 }
 
 /// How a closure is built (`Op::MakeClosure`): DUPCLOSURE of the constant

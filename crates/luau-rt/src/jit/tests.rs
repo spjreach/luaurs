@@ -36,7 +36,7 @@ fn sum_loop() -> Trace {
 #[test]
 fn hand_built_loop_compiles() {
     let t = sum_loop();
-    let code = unsafe { super::compiler::x64::compile(&t, None) }.expect("sum_loop should compile");
+    let code = unsafe { super::compiler::x64::compile(&t, super::compiler::End::Loop) }.expect("sum_loop should compile");
     assert!(!code.bytes.is_empty());
 }
 

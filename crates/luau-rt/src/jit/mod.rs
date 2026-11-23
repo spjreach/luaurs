@@ -208,22 +208,48 @@ unsafe fn handle_exit(L: *mut lua_State, p: *mut Proto, header: u32, base: StkId
                 Some(pc)
             }
         };
+        let (tag, k) = (((ex >> 16) & 0x7fff) as u16, ex & 0xffff);
         if ex & 0x8000_0000 != 0 {
-            // interrupted at the back edge, or GC work is due (traces that
-            // allocate exit for it): resume at the header
+            // interrupted at a back edge or link, or GC work is due (traces
+            // that allocate exit for it): resume where it was going (a
+            // loop's header, or the header a link goes to)
+            let at = state::with(|s| s.by_tag_mut(tag).map(|t| if t.loop_ref.is_some() { t.start_pc } else { t.snapshots[k as usize].pc })).unwrap_or(header);
             if crate::lgc::luaC_needsGC(L) {
                 // the collector may shrink (move) the stack: the caller
                 // reloads its frame (RESUME_FRAME)
                 let ci = (*L).ci;
-                (*ci).savedpc = (*(*ci).p).code.add(header as usize);
+                (*ci).savedpc = (*(*ci).p).code.add(at as usize);
                 crate::lgc::luaC_step(L, true);
                 return Some(RESUME_FRAME);
             }
-            return resume_at(header);
+            return resume_at(at);
         }
-        let (tag, k) = (((ex >> 16) & 0x7fff) as u16, ex & 0xffff);
         debug::log(debug::Event::SideExit { id: id.0, snap: ex });
-        let key = (p as usize, header);
+        // (the trace that exited may be another loop's: traces link)
+        let Some((key, dead)) = state::with(|s| s.root_key_of(tag)) else {
+            return resume_at(header);
+        };
+        if dead {
+            // a dropped trace still running: resume as its snapshot says
+            let (pc, sn) = state::with(|s| {
+                let t = s.by_tag_mut(tag).unwrap();
+                let sn = t.snapshots[k as usize].clone();
+                (sn.pc, sn)
+            });
+            let keep = (*L).top;
+            if !sn.frames.is_empty() {
+                push_frames(L, base, &sn);
+                if let Some(tp) = sn.top {
+                    (*L).top = if tp == recorder::KEEP_TOP { keep } else { base.add(tp as usize) };
+                }
+                return Some(RESUME_FRAME);
+            }
+            if let Some(tp) = sn.top {
+                (*L).top = if tp == recorder::KEEP_TOP { keep } else { base.add(tp as usize) };
+            }
+            return resume_at(pc);
+        }
+        let header = key.1;
         // Leaving the loop is normal. An exit back into the loop body that
         // gets hot is continued by a side trace (recorded from there to the
         // loop header, then linked to the exit); exits that can't be
@@ -244,7 +270,9 @@ unsafe fn handle_exit(L: *mut lua_State, p: *mut Proto, header: u32, base: StkId
             let tries = t.exit_tries[k as usize];
             // (an exit whose side trace left the loop is the loop's end)
             let leaves = tries == EXIT_LEAVES;
-            let traceable = in_loop && !leaves && sn.pc != header && t.exit_tries[k as usize] < 3 && nsides < max_sides;
+            // (an exit leaving the loop too: its side trace may run on to an
+            // enclosing loop's trace)
+            let traceable = !leaves && sn.pc != header && t.exit_tries[k as usize] < 3 && nsides < max_sides;
             let (pc, frames, top) = (sn.pc, if sn.frames.is_empty() { None } else { Some(sn.clone()) }, sn.top);
             let mut side = None;
             // (an in-body guard resuming at the header is a while loop's
@@ -373,13 +401,26 @@ pub unsafe fn record_step(L: *mut lua_State, p: *mut Proto, pc: u32, base: StkId
 fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mut Proto) {
     let side_of = t.side_of;
     let root_key = (proto as usize, header);
-    // a side trace ends by running its root again
-    let link_to = match side_of {
-        Some(_) => match state::with(|s| s.traces.get(&root_key).and_then(|r| r.native.map(|n| n.reentry))) {
-            Some(r) => Some(r),
+    t.root_key = root_key;
+    // how it ends: looping; a side trace by running its root again; a
+    // trace ending at another loop's header by running that loop's trace
+    // (through a cell: that trace may come and go)
+    let link_to = match (side_of, t.link) {
+        (_, Some(target)) => {
+            let cell = Box::leak(Box::new(0usize)) as *mut usize as usize;
+            let re = state::with(|s| {
+                s.link_cells.entry(target).or_default().push(cell);
+                s.traces.get(&target).and_then(|r| r.native.map(|n| n.reentry))
+            });
+            unsafe { *(cell as *mut usize) = re.unwrap_or(0) };
+            t.link_cell = cell;
+            compiler::End::Cell(cell)
+        }
+        (Some(_), None) => match state::with(|s| s.traces.get(&root_key).and_then(|r| r.native.map(|n| n.reentry))) {
+            Some(r) => compiler::End::Root(r),
             None => return,
         },
-        None => None,
+        (None, None) => compiler::End::Loop,
     };
     let Some(tag) = state::with(|s| s.new_tag()) else { return };
     let prepare = |t: &mut trace::Trace| {
@@ -389,6 +430,11 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
         t.link_table = Box::leak(vec![0usize; n].into_boxed_slice()).as_mut_ptr() as usize;
         t.exit_counts = vec![0; n];
         t.exit_tries = vec![0; n];
+        t.exit_seen = Box::leak(vec![0u8; n].into_boxed_slice()).as_mut_ptr();
+        // (exiting where a link has no trace: nothing to continue)
+        if t.link.is_some() {
+            t.exit_tries[n - 1] = EXIT_LEAVES;
+        }
     };
     prepare(&mut t);
     let _ = debug::dump_ir(&t);
@@ -438,6 +484,8 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
             s.remove_root(root_key);
             s.by_tag.insert(tag, state::TraceKey::Root(root_key.0, root_key.1));
             s.traces.insert(root_key, t);
+            // traces linking to this loop run this one from now on
+            s.set_links(root_key, native.reentry);
         }
         Some((ptag, k)) => {
             // link: the parent's exit stub jumps here from now on
@@ -487,6 +535,10 @@ thread_local! {
     static STOPPED: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Exits through one snapshot that take the full path before native code's
+/// cached entry handles them itself.
+const FAST_AFTER: u8 = 40;
+
 /// Iterations a numeric loop must have left for native code to enter its
 /// trace (or record one).
 const SHORT_TRIP: u32 = 32;
@@ -494,7 +546,7 @@ const SHORT_TRIP: u32 = 32;
 /// A new hot counter for one compiled loop instruction (lives as long as
 /// the code).
 pub fn new_loop_counter() -> *mut u32 {
-    Box::leak(Box::new(LoopCell { ctr: 1, entries: 0, cycles: 0, entry: 0, exits: std::ptr::null(), nexits: 0, tag: 0, need: 0, gen: 0 })) as *mut LoopCell as *mut u32
+    Box::leak(Box::new(LoopCell { ctr: 1, entries: 0, cycles: 0, entry: 0, exits: std::ptr::null(), seen: std::ptr::null_mut(), nexits: 0, tag: 0, need: 0, gen: 0 })) as *mut LoopCell as *mut u32
 }
 
 /// Per compiled loop instruction: the counter native code decrements
@@ -507,6 +559,9 @@ struct LoopCell {
     /// cached root trace of the loop (valid while `gen` is current)
     entry: usize,
     exits: *const u32,
+    /// per exit: times seen on the full path (the fast path only after
+    /// FAST_AFTER: side traces may continue those exits)
+    seen: *mut u8,
     nexits: u32,
     tag: u16,
     need: u32,
@@ -718,7 +773,8 @@ pub unsafe extern "sysv64-unwind" fn native_loop_hook(
         let k = ex & 0xffff;
         if ex & 0x8000_0000 == 0 && ((ex >> 16) & 0x7fff) as u16 == cell.tag && k < cell.nexits {
             let e = *cell.exits.add(k as usize);
-            if e & trace::FAST_EXIT != 0 {
+            let seen = cell.seen.add(k as usize);
+            if e & trace::FAST_EXIT != 0 && *seen >= FAST_AFTER {
                 debug::log(debug::Event::SideExit { id: 0, snap: ex });
                 *ctr = 1;
                 note_run(cell, ran);
@@ -727,6 +783,10 @@ pub unsafe extern "sysv64-unwind" fn native_loop_hook(
             }
         }
         // anything else: the full treatment
+        if ex & 0x8000_0000 == 0 && ((ex >> 16) & 0x7fff) as u16 == cell.tag && k < cell.nexits {
+            let seen = cell.seen.add(k as usize);
+            *seen = (*seen).saturating_add(1);
+        }
         LAST_RUN.with(|c| c.set(ran));
         let id = state::with(|s| s.traces.get(&(p as usize, header)).map(|t| t.id)).unwrap_or(trace::TraceId(0));
         let resume = handle_exit(L, p, header, base, id, ex, false).unwrap_or(header);
@@ -751,6 +811,7 @@ pub unsafe extern "sysv64-unwind" fn native_loop_hook(
             if let Some(n) = t.native {
                 cell.entry = n.entry;
                 cell.exits = t.exit_pcs.as_ptr();
+                cell.seen = t.exit_seen;
                 cell.nexits = t.exit_pcs.len() as u32;
                 cell.tag = t.tag;
                 cell.need = t.stack_need;

@@ -26,6 +26,11 @@ pub struct JitState {
     pub sides: HashMap<u16, Trace>,
     /// compiled traces by tag: a root's (proto, header), or a side trace
     pub by_tag: HashMap<u16, TraceKey>,
+    /// dropped traces by tag (code linked to them may still be running:
+    /// their exits must resolve)
+    pub dead: HashMap<u16, Trace>,
+    /// cells of traces linking to a loop's root trace, by (proto, header)
+    pub link_cells: HashMap<(usize, u32), Vec<usize>>,
     next_tag: u16,
 }
 
@@ -33,6 +38,7 @@ pub struct JitState {
 pub enum TraceKey {
     Root(usize, u32),
     Side(u16),
+    Dead(u16),
 }
 
 impl JitState {
@@ -53,6 +59,8 @@ impl JitState {
             aborts: Vec::new(),
             sides: HashMap::new(),
             by_tag: HashMap::new(),
+            dead: HashMap::new(),
+            link_cells: HashMap::new(),
             next_tag: 1,
         }
     }
@@ -79,6 +87,22 @@ impl JitState {
         match *self.by_tag.get(&tag)? {
             TraceKey::Root(p, pc) => self.traces.get_mut(&(p, pc)),
             TraceKey::Side(t) => self.sides.get_mut(&t),
+            TraceKey::Dead(t) => self.dead.get_mut(&t),
+        }
+    }
+
+    /// The loop a trace (by tag) belongs to, and whether it was dropped.
+    pub fn root_key_of(&mut self, tag: u16) -> Option<((usize, u32), bool)> {
+        let dead = matches!(self.by_tag.get(&tag)?, TraceKey::Dead(_));
+        Some((self.by_tag_mut(tag)?.root_key, dead))
+    }
+
+    /// Points every link to loop `key` at `reentry` (0: unlinked).
+    pub fn set_links(&mut self, key: (usize, u32), reentry: usize) {
+        if let Some(cells) = self.link_cells.get(&key) {
+            for &c in cells {
+                unsafe { *(c as *mut usize) = reentry };
+            }
         }
     }
 
@@ -87,11 +111,15 @@ impl JitState {
     pub fn remove_root(&mut self, key: (usize, u32)) {
         if let Some(t) = self.traces.remove(&key) {
             bump_generation();
-            self.by_tag.remove(&t.tag);
-            for st in t.sides {
-                self.sides.remove(&st);
-                self.by_tag.remove(&st);
+            self.set_links(key, 0);
+            for &st in &t.sides {
+                if let Some(side) = self.sides.remove(&st) {
+                    self.by_tag.insert(st, TraceKey::Dead(st));
+                    self.dead.insert(st, side);
+                }
             }
+            self.by_tag.insert(t.tag, TraceKey::Dead(t.tag));
+            self.dead.insert(t.tag, t);
         }
     }
 
@@ -166,10 +194,11 @@ pub fn set_enabled(enabled: bool) {
 /// Discard compiled traces, hot-loop history, and diagnostic aborts.
 pub fn flush() {
     with(|state| {
-        state.traces.clear();
+        let keys: Vec<(usize, u32)> = state.traces.keys().copied().collect();
+        for k in keys {
+            state.remove_root(k);
+        }
         bump_generation();
-        state.sides.clear();
-        state.by_tag.clear();
         state.hot = HotCounters::default();
         state.aborts.clear();
     });

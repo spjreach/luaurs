@@ -63,6 +63,14 @@ pub struct Trace {
     pub varargs: Option<u16>,
     /// tables this trace doesn't create (built on exits that need them)
     pub sinks: Vec<Sink>,
+    /// a trace ending at another loop's header: that loop's (proto,
+    /// header), run next through `link_cell`
+    pub link: Option<(usize, u32)>,
+    /// the cell holding the linked trace's re-entry (0: none - the trace
+    /// exits to the interpreter there)
+    pub link_cell: usize,
+    /// (proto, header) of the loop whose root trace this is or belongs to
+    pub root_key: (usize, u32),
     /// stack slots (from the frame base) the trace may touch, inlined
     /// frames included: checked against the stack's size at entry
     pub stack_need: u32,
@@ -98,6 +106,9 @@ pub struct Trace {
     /// bookkeeping (leaves the loop, or ends it at the header: no frames,
     /// no stack top) - native code's cached entry handles those itself
     pub exit_pcs: Box<[u32]>,
+    /// per snapshot: exits seen on the full path (leaked: LoopCells point
+    /// at it)
+    pub exit_seen: *mut u8,
 }
 
 /// A trace's return value when a C function it called yielded (the VM is
@@ -131,7 +142,7 @@ pub const FAST_EXIT: u32 = 0x8000_0000;
 
 impl Trace {
     pub fn new(id: TraceId, proto: *mut Proto, start_pc: u32) -> Trace {
-        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, varargs: None, sinks: Vec::new(), stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new(), inserts: false, storm_cycles: 0, exit_pcs: Box::new([]) }
+        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, varargs: None, sinks: Vec::new(), link: None, link_cell: 0, root_key: (0, 0), stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new(), inserts: false, storm_cycles: 0, exit_pcs: Box::new([]), exit_seen: std::ptr::null_mut() }
     }
 
     pub fn inst(&self, r: Ref) -> &Inst {

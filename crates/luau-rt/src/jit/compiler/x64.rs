@@ -94,14 +94,16 @@ pub struct Code {
 }
 
 /// Compiles `t`. Fails (cleanly) on anything the backend doesn't handle yet.
-pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String> {
+pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
+    use super::End;
     let n = t.insts.len();
-    let side = link_to.is_some();
-    // (a side trace is linear: no loop)
+    // side traces run in their root's frame: no prologue
+    let side = t.side_of.is_some();
+    // (a trace that doesn't loop ends by jumping somewhere)
     let loop_at = match t.loop_ref {
-        Some(r) => r.index(),
-        None if side => usize::MAX,
-        None => return Err("trace has no loop".into()),
+        Some(r) if end == End::Loop => r.index(),
+        None if end != End::Loop => usize::MAX,
+        _ => return Err("trace ending doesn't fit its loop".into()),
     };
     const END: usize = usize::MAX;
 
@@ -1066,9 +1068,21 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
             }
         }
     }
-    if let Some(root) = link_to {
-        // end of a side trace: the state goes to the stack (its last
-        // snapshot) and the root trace runs again from its pre-roll
+    if end != End::Loop {
+        // the end: the state goes to the stack (the last snapshot) and the
+        // next trace runs from its re-entry: the root's (a side trace), or
+        // another loop's through the link cell (which checks interrupts
+        // and GC first: links may form a cycle without a back edge)
+        if let End::Cell(_) = end {
+            a.load(R::Rax, R::R12, OFF_GLOBAL);
+            a.cmp64_mi(R::Rax, OFF_INTERRUPT, 0);
+            a.jcc(Cond::NE, interrupt_stub);
+            if allocates {
+                a.load(R::Rcx, R::Rax, OFF_TOTALBYTES);
+                a.cmp_rm(R::Rcx, R::Rax, OFF_GCTHRESHOLD);
+                a.jcc(Cond::AE, interrupt_stub);
+            }
+        }
         let sn = &t.snapshots[back_snap.0 as usize];
         materialize(&mut a, &home, t, back_snap.0, sn)?;
         for e in &sn.entries {
@@ -1076,8 +1090,21 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                 store_value(&mut a, &home, t, e.value, R::R13, e.slot as i32 * TV)?;
             }
         }
-        a.mov_ri64(R::Rax, root as u64);
-        a.jmp_r(R::Rax);
+        match end {
+            End::Root(root) => {
+                a.mov_ri64(R::Rax, root as u64);
+                a.jmp_r(R::Rax);
+            }
+            End::Cell(cell) => {
+                // (no trace there now: exit there)
+                a.mov_ri64(R::Rax, cell as u64);
+                a.load(R::Rax, R::Rax, 0);
+                a.test_rr(R::Rax, R::Rax);
+                a.jcc(Cond::E, stubs[back_snap.0 as usize]);
+                a.jmp_r(R::Rax);
+            }
+            End::Loop => unreachable!(),
+        }
     } else {
         // back edge: interrupt check, PHIs take their back values, loop
         a.load(R::Rax, R::R12, OFF_GLOBAL);
@@ -1105,8 +1132,9 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
     // exit codes: (tag << 16) | snapshot; the high bit: interrupted at the
     // loop header
     let mut snaps: Vec<&Snapshot> = t.snapshots.iter().collect();
-    let interrupt_snap = Snapshot { pc: t.start_pc, ..t.snapshots[back_snap.0 as usize].clone() };
-    if !side {
+    // (a loop resumes at its header; a link where it was going)
+    let interrupt_snap = if end == End::Loop { Snapshot { pc: t.start_pc, ..t.snapshots[back_snap.0 as usize].clone() } } else { t.snapshots[back_snap.0 as usize].clone() };
+    if !matches!(end, End::Root(_)) {
         snaps.push(&interrupt_snap);
     }
     if t.snapshots.len() > 0xffff {
