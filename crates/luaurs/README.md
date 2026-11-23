@@ -119,12 +119,19 @@ much slower; on loop-heavy code it can make it a lot faster. On the classic shoo
 
 | Benchmark | luaurs + tracing | C++ Luau | LuaJIT 2.1 |
 |---|---:|---:|---:|
-| spectral-norm | **5.4** | 50.2 | 2.0 |
-| n-body | **8.6** | 21.9 | 3.0 |
-| heapsort | **32.0** | 100.8 | 21.0 |
-| fannkuch-redux | **46.6** | 120.4 | 22.7 |
-| binary-trees | **82.8** | 111.5 | 57.7 |
-| mandel | **145.6** | 179.6 | 28.7 |
+| spectral-norm | **5.4** | 54.4 | 2.0 |
+| n-body | **7.3** | 24.8 | 3.3 |
+| heapsort | **40.4** | 111.7 | 22.7 |
+| fannkuch-redux | **61.6** | 134.7 | 24.0 |
+| binary-trees | **124.9** | 158.9 | 79.0 |
+| mandel | **137.3** | 207.2 | 34.0 |
+
+So it beats C++ Luau everywhere here, and LuaJIT is the next target. Traces handle calls
+(inlined), upvalues, closures, table fields, arrays and appends, `pairs`/`ipairs`, string and math
+builtins, plain C library functions like `string.format` or `math.random`, arithmetic metamethods,
+and loops inside loops. What still makes it give up on a loop (leaving it to the regular JIT):
+C functions that call back into Lua (`table.sort` with a comparator, `pcall`), comparison
+metamethods, vectors, vararg functions, and closures that capture a loop variable by reference.
 
 So it beats C++ Luau everywhere here, and LuaJIT is the next target. What it can't trace yet
 (it simply leaves those loops to the regular JIT): creating tables inside the loop, metamethods,
@@ -387,7 +394,7 @@ average. Right now luaurs wins 158 of 222 benchmarks; the rest are the to-do lis
 | Priority | Improvement | Status |
 |---|---|---|
 | High | Close the remaining benchmark gaps: `life`, `pcmmix` (about 8%), `air` (about 7%), `table.find` loops over numbers, `n-body-vector`, `%s` string interpolation (5–8%) | In progress. Done so far: `murmur128_int64` (now 1.25× faster than C++), proxy `__index` (about 1.7× faster), `table.find` on tables and strings (now even) |
-| High | Tracing JIT (LuaJIT-style, `LUAU_TRACE=1`): beat LuaJIT | In progress: loops, calls, upvalues, fields, math builtins and side traces compile; next are nested loops, cheaper trace entry, table allocation and metamethods |
+| High | Tracing JIT (LuaJIT-style, `LUAU_TRACE=1`): beat LuaJIT | In progress: most loop code traces now (see above); next is the code the traces compile to (codegen), where LuaJIT is still 2-4x ahead |
 | High | Keep integer (`int64`) loop variables in CPU registers across iterations | Planned (numbers and vectors already are) |
 | High | Expand JIT support beyond Windows x64 | Planned; Linux/macOS interpreter builds in progress |
 | High | More JIT/interpreter differential tests | Largely done: 84 of 96 opcodes covered; a random-program fuzzer against C++ Luau is running |
