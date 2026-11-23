@@ -146,10 +146,13 @@ pub enum Op {
     /// frame with `nargs` arguments above it, `nres` results left there;
     /// the slots `snap` lists are stored first (the GC and error handling
     /// see the frame), `L->ci->savedpc` is bytecode index `pc`
-    CCall { slot: u16, nargs: u8, nres: u8, pc: u32, snap: SnapId },
+    /// (`savedpc`: the instruction pointer to report; `frames`: a leaked
+    /// `Vec<SnapFrame>` of the inlined frames to materialize around the
+    /// call, 0 at the trace's own frame; `off`: the calling frame's base)
+    CCall { slot: u16, nargs: u8, nres: u8, savedpc: usize, frames: usize, off: u16, snap: SnapId },
     /// `R(a) = R(b) .. ... .. R(c)` (strings and numbers) by `luaV_concat`
     /// on the stack, after storing the slots `snap` lists
-    Concat { a: u16, b: u16, c: u16, pc: u32, snap: SnapId },
+    Concat { a: u16, b: u16, c: u16, savedpc: usize, frames: usize, off: u16, snap: SnapId },
     /// upvalue `idx` of closure `cl` = `v` (through the scratch TValue at
     /// `buf`); exits through `snap` if the upvalue is open on the trace's
     /// frames (the recorder handles those itself)
@@ -163,6 +166,10 @@ pub enum Op {
     /// stack slot `slot` (after a C call left a result there): guarded like
     /// SLoad, but where it is (never hoisted)
     SReload { slot: u16, snap: SnapId },
+    /// a closure (`NEWCLOSURE` / `DUPCLOSURE`) as described by the leaked
+    /// `ClosureSite` at `site`, inside closure `cl`, its captured register
+    /// values `vals[..nvals]` passed through the scratch TValues at `buf`
+    MakeClosure { cl: Ref, site: usize, vals: [Ref; 4], nvals: u8, buf: usize },
     /// a new table (`NEWTABLE`)
     NewTable { narray: u32, nhash: u32 },
     /// a copy of template table `tpl` (`DUPTABLE`; a Table constant)
@@ -236,6 +243,11 @@ impl Inst {
             UStore { cl, v, .. } => vec![*cl, *v],
             Not(a) | LudToI32(a) | I32ToLud(a) => vec![*a],
             TMeta { t, .. } => vec![*t],
+            MakeClosure { cl, vals, nvals, .. } => {
+                let mut v = vec![*cl];
+                v.extend_from_slice(&vals[..*nvals as usize]);
+                v
+            }
             TGet { t, k, .. } => vec![*t, *k],
             TSet { t, k, v, .. } => vec![*t, *k, *v],
             HMiss { t, k, .. } => vec![*t, *k],

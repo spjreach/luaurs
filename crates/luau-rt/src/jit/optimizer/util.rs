@@ -60,9 +60,16 @@ pub fn map_op(op: &Op, map: &[Ref]) -> Op {
         Op::FrameFunc => Op::FrameFunc,
         Op::Barrier { t, v } => Op::Barrier { t: r(*t), v: r(*v) },
         Op::TMeta { t, snap } => Op::TMeta { t: r(*t), snap: *snap },
-        Op::CCall { slot, nargs, nres, pc, snap } => Op::CCall { slot: *slot, nargs: *nargs, nres: *nres, pc: *pc, snap: *snap },
+        Op::MakeClosure { cl, site, vals, nvals, buf } => {
+            let mut v = *vals;
+            for x in v.iter_mut().take(*nvals as usize) {
+                *x = r(*x);
+            }
+            Op::MakeClosure { cl: r(*cl), site: *site, vals: v, nvals: *nvals, buf: *buf }
+        }
+        Op::CCall { slot, nargs, nres, savedpc, frames, off, snap } => Op::CCall { slot: *slot, nargs: *nargs, nres: *nres, savedpc: *savedpc, frames: *frames, off: *off, snap: *snap },
         Op::SReload { slot, snap } => Op::SReload { slot: *slot, snap: *snap },
-        Op::Concat { a, b, c, pc, snap } => Op::Concat { a: *a, b: *b, c: *c, pc: *pc, snap: *snap },
+        Op::Concat { a, b, c, savedpc, frames, off, snap } => Op::Concat { a: *a, b: *b, c: *c, savedpc: *savedpc, frames: *frames, off: *off, snap: *snap },
         Op::UStore { cl, idx, v, buf, snap } => Op::UStore { cl: r(*cl), idx: *idx, v: r(*v), buf: *buf, snap: *snap },
         Op::Not(a) => Op::Not(r(*a)),
         Op::LudToI32(a) => Op::LudToI32(r(*a)),

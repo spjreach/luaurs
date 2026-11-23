@@ -116,8 +116,8 @@ const OP_SUB_K: u8 = Opcode::SubK as u8;
 const OP_SUB_RK: u8 = Opcode::SubRk as u8;
 
 const NO_OVR: u32 = 256;
-const LCT_VAL: u32 = 0;
-const LCT_REF: u32 = 1;
+pub(crate) const LCT_VAL: u32 = 0;
+pub(crate) const LCT_REF: u32 = 1;
 const LCT_UPVAL: u32 = 2;
 const FBSLOT_SEALED: u32 = 0xffff_ffff;
 

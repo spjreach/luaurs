@@ -235,7 +235,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
     };
     // a trace that allocates checks for GC work at its back edge (and exits
     // for the collector to run: nothing collects while a trace runs)
-    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::Builtin { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. }));
+    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::Builtin { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::MakeClosure { .. }));
 
     // ---- emission -------------------------------------------------------
     let mut a = Asm::new();
@@ -283,6 +283,9 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
             let mut ops = inst.operands();
             if let Op::XStore { v, .. } = inst.op {
                 ops.retain(|&o| o != v);
+            }
+            if let Op::MakeClosure { vals, nvals, .. } = inst.op {
+                ops.retain(|o| !vals[..nvals as usize].contains(o));
             }
             if let Op::TGet { k, .. } | Op::TSet { k, .. } = inst.op {
                 ops.retain(|&o| o != k);
@@ -546,13 +549,13 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                     a.alu32_ri(6, d, 1);
                 }
             }
-            Op::Concat { a: ra, b, c, pc, snap } => {
+            Op::Concat { a: ra, b, c, savedpc, frames, off, snap } => {
                 for e in &t.snapshots[snap.0 as usize].entries {
                     store_value(&mut a, &home, t, e.value, R::R13, e.slot as i32 * TV)?;
                 }
-                let savedpc = (*t.proto).code.add(*pc as usize) as u64;
                 let live = live_across(i);
-                call_out(&mut a, &live, helpers::concat as usize, &[Arg::L, Arg::Imm(*ra as u64), Arg::Imm(*b as u64), Arg::Imm(*c as u64), Arg::Imm(savedpc)]);
+                let (ra, b, c) = (*ra - *off, *b - *off, *c - *off);
+                call_out(&mut a, &live, helpers::concat as usize, &[Arg::L, Arg::Imm(ra as u64), Arg::Imm(b as u64), Arg::Imm(c as u64), Arg::Imm(*savedpc as u64), Arg::Imm(*frames as u64)]);
                 a.load(R::R13, R::R12, OFF_BASE);
             }
             Op::UStore { cl, idx, v, buf, snap } => {
@@ -686,18 +689,17 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                 a.jcc(Cond::NE, stub(*snap));
                 load_value(&mut a, dst, inst.ty, R::R13, disp)?;
             }
-            Op::CCall { slot, nargs, nres, pc, snap } => {
+            Op::CCall { slot, nargs, nres, savedpc, frames, off, snap } => {
                 // the frame goes to the stack first
                 for e in &t.snapshots[snap.0 as usize].entries {
                     store_value(&mut a, &home, t, e.value, R::R13, e.slot as i32 * TV)?;
                 }
-                let savedpc = (*t.proto).code.add(*pc as usize) as u64;
                 let live = live_across(i);
                 call_out(
                     &mut a,
                     &live,
                     helpers::ccall as usize,
-                    &[Arg::L, Arg::Imm(*slot as u64), Arg::Imm(*nargs as u64), Arg::Imm(*nres as u64), Arg::Imm(savedpc)],
+                    &[Arg::L, Arg::Imm((*slot - *off) as u64), Arg::Imm(*nargs as u64), Arg::Imm(*nres as u64), Arg::Imm(*savedpc as u64), Arg::Imm(*frames as u64)],
                 );
                 // (the call may have moved the stack)
                 a.load(R::R13, R::R12, OFF_BASE);
@@ -720,6 +722,17 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                 call_out(&mut a, &live, helpers::tset as usize, &[Arg::L, Arg::G(g(*tb)?), Arg::Imm(*buf as u64)]);
                 a.test_rr(R::Rax, R::Rax);
                 a.jcc(Cond::E, stub(*snap));
+            }
+            Op::MakeClosure { cl, site, vals, nvals, buf } => {
+                a.mov_ri64(R::Rdx, *buf as u64);
+                for k in 0..*nvals as usize {
+                    store_value(&mut a, &home, t, vals[k], R::Rdx, k as i32 * TV)?;
+                }
+                let live = live_across(i);
+                call_out(&mut a, &live, helpers::make_closure as usize, &[Arg::L, Arg::G(g(*cl)?), Arg::Imm(*site as u64), Arg::Imm(*buf as u64)]);
+                if let Home::G(d) = dst {
+                    a.mov_rr(d, R::Rax);
+                }
             }
             Op::TMeta { t: tb, snap } => {
                 let tb = g(*tb)?;
@@ -1182,7 +1195,46 @@ mod helpers {
 
     /// A leaf C function in slot `slot` of the trace's frame (L->ci): a
     /// normal (non-yieldable) call leaving `nres` results at the slot.
-    pub unsafe extern "sysv64" fn ccall(L: *mut lua_State, slot: i64, nargs: i64, nres: i64, savedpc: *const u32) {
+    /// Makes the inlined frames of a call site real CallInfos (so errors
+    /// and tracebacks see them); returns the trace frame's CallInfo index.
+    unsafe fn push_virtual(L: *mut lua_State, frames: *const Vec<crate::jit::snapshots::SnapFrame>) -> isize {
+        let ci0 = (*L).ci.offset_from((*L).base_ci);
+        if frames.is_null() {
+            return ci0;
+        }
+        let base = (*L).base;
+        for f in (*frames).iter() {
+            let caller = (*L).ci;
+            (*caller).savedpc = (*(*caller).p).code.add(f.ret_pc as usize);
+            let func = base.add(f.base as usize - 1);
+            let cl = clvalue(func);
+            let ci = crate::ldo::incr_ci(L);
+            (*ci).func = func;
+            (*ci).p = Closure::proto(cl);
+            (*ci).base = func.add(1);
+            (*ci).top = (*ci).base.add(f.nargs as usize + (*cl).stacksize as usize);
+            (*ci).savedpc = std::ptr::null();
+            (*ci).flags = 0;
+            (*ci).nresults = f.nresults;
+        }
+        (*L).base = (*(*L).ci).base;
+        (*L).top = (*(*L).ci).top;
+        ci0
+    }
+
+    unsafe fn pop_virtual(L: *mut lua_State, ci0: isize) {
+        (*L).ci = (*L).base_ci.offset(ci0);
+        (*L).base = (*(*L).ci).base;
+        (*L).top = (*(*L).ci).top;
+    }
+
+    pub unsafe extern "sysv64" fn ccall(L: *mut lua_State, slot: i64, nargs: i64, nres: i64, savedpc: *const u32, frames: *const Vec<crate::jit::snapshots::SnapFrame>) {
+        let ci0 = push_virtual(L, frames);
+        ccall_here(L, slot, nargs, nres, savedpc);
+        pop_virtual(L, ci0);
+    }
+
+    unsafe fn ccall_here(L: *mut lua_State, slot: i64, nargs: i64, nres: i64, savedpc: *const u32) {
         // the interpreter's direct C call (a leaf function never yields)
         (*(*L).ci).savedpc = savedpc;
         let ra = (*L).base.add(slot as usize);
@@ -1229,11 +1281,13 @@ mod helpers {
     }
 
     /// CONCAT on the trace frame's slots b..c into a.
-    pub unsafe extern "sysv64" fn concat(L: *mut lua_State, a: i64, b: i64, c: i64, savedpc: *const u32) {
+    pub unsafe extern "sysv64" fn concat(L: *mut lua_State, a: i64, b: i64, c: i64, savedpc: *const u32, frames: *const Vec<crate::jit::snapshots::SnapFrame>) {
+        let ci0 = push_virtual(L, frames);
         (*(*L).ci).savedpc = savedpc;
         crate::lvmutils::luaV_concat(L, (c - b + 1) as i32, c as i32);
         let base = (*L).base;
         setobj(base.add(a as usize), base.add(b as usize));
+        pop_virtual(L, ci0);
     }
 
     /// Stores buf[0] into upvalue `idx` of `cl`: 0 (nothing done) when it is
@@ -1254,6 +1308,49 @@ mod helpers {
         1
     }
 
+    /// NEWCLOSURE / DUPCLOSURE as the interpreter does them.
+    pub unsafe extern "sysv64" fn make_closure(L: *mut lua_State, cl: *mut Closure, site: *const crate::jit::recorder::ClosureSite, buf: *const TValue) -> *mut Closure {
+        use crate::lfunc::luaF_newLclosure;
+        let site = &*site;
+        let src = |kind: u8, idx: u8| -> *const TValue {
+            if kind as u32 == crate::lvmexecute::LCT_VAL {
+                buf.add(idx as usize)
+            } else {
+                Closure::uprefs(cl).add(idx as usize)
+            }
+        };
+        if !site.dup {
+            let pv = site.target as *mut Proto;
+            let ncl = luaF_newLclosure(L, (*pv).nups as i32, (*cl).env, pv);
+            for (ui, &(kind, idx)) in site.caps.iter().enumerate() {
+                setobj(Closure::uprefs(ncl).add(ui), src(kind, idx));
+            }
+            return ncl;
+        }
+        let kcl = site.target as *mut Closure;
+        let mut ncl = if (*kcl).env == (*cl).env { kcl } else { luaF_newLclosure(L, (*kcl).nupvalues as i32, (*cl).env, Closure::proto(kcl)) };
+        let mut ui = 0usize;
+        while ui < site.caps.len() {
+            let (kind, idx) = site.caps[ui];
+            let uvp = src(kind, idx);
+            let dst = Closure::uprefs(ncl).add(ui);
+            if ncl == kcl && luaO_rawequalObj(dst, uvp) {
+                ui += 1;
+                continue;
+            }
+            if ncl == kcl && (*kcl).preload == 0 {
+                ncl = luaF_newLclosure(L, (*kcl).nupvalues as i32, (*cl).env, Closure::proto(kcl));
+                ui = 0;
+                continue;
+            }
+            setobj(dst, uvp);
+            crate::lgc::luaC_barrier(L, ncl as *mut GCObject, uvp);
+            ui += 1;
+        }
+        (*ncl).preload = 0;
+        ncl
+    }
+
     pub unsafe extern "sysv64" fn tget(t: *mut LuaTable, key: *const TValue) -> *const TValue {
         crate::ltable::luaH_get(t, key)
     }
@@ -1261,7 +1358,8 @@ mod helpers {
     /// Raw store; 0 (nothing done) for a key the interpreter must reject.
     pub unsafe extern "sysv64" fn tset(L: *mut lua_State, t: *mut LuaTable, buf: *const TValue) -> i64 {
         let key = buf;
-        if (*key).tt == LUA_TNIL || ((*key).tt == LUA_TNUMBER && (*key).value.n.is_nan()) {
+        // (a read-only table or a bad key: the interpreter raises the error)
+        if (*t).readonly != 0 || (*key).tt == LUA_TNIL || ((*key).tt == LUA_TNUMBER && (*key).value.n.is_nan()) {
             return 0;
         }
         let slot = crate::ltable::luaH_set(L, t, key);

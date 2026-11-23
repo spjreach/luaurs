@@ -722,6 +722,88 @@ impl Recorder {
             let enters = if step_v > 0.0 { idx_v <= lim_v } else { lim_v <= idx_v };
             let (x, y) = if step_v > 0.0 { (idx, limit) } else { (limit, idx) };
             self.b.emit(Op::Guard { cmp: if enters { Cmp::Le } else { Cmp::Nle }, a: x, b: y, snap }, IrType::Nil);
+        } else if o(O::ForGPrepInext) || o(O::ForGPrepNext) || o(O::ForGPrep) {
+            // an inner generic for over a table: the built-in iteration
+            // (unrolled with its FORGLOOP below)
+            let (cl, clr) = self.cur_closure();
+            if o(O::ForGPrep) {
+                if (*base.add(a)).tt != LUA_TTABLE || !(*hvalue(base.add(a))).metatable.is_null() {
+                    return Err(unsupported_type("generic for over an iterator"));
+                }
+                let t = self.read(a, base)?;
+                let snap = self.b.snapshot();
+                self.b.emit(Op::GuardPlainTable { t, store: false, snap }, IrType::Nil);
+                self.b.set_slot(a + 1, t);
+            } else {
+                if (*(*cl).env).safeenv == 0 || (*base.add(a + 1)).tt != LUA_TTABLE {
+                    return Err(unsupported_type("generic for over an iterator"));
+                }
+                if o(O::ForGPrepInext) {
+                    if (*base.add(a + 2)).tt != LUA_TNUMBER || (*base.add(a + 2)).value.n != 0.0 {
+                        return Err(unsupported_type("ipairs with a start value"));
+                    }
+                    let z = self.read(a + 2, base)?;
+                    let zero = self.b.knum(0.0);
+                    let snap = self.b.snapshot();
+                    self.b.emit(Op::Guard { cmp: Cmp::Eq, a: z, b: zero, snap }, IrType::Nil);
+                } else if (*base.add(a + 2)).tt != LUA_TNIL {
+                    return Err(unsupported_type("next with a start key"));
+                } else {
+                    self.read(a + 2, base)?;
+                }
+                self.guard_safeenv(clr);
+                self.read(a + 1, base)?;
+            }
+            let nil = self.b.knil();
+            self.b.set_slot(a, nil);
+            let zero = self.b.ki32(0);
+            let st = self.b.emit(Op::I32ToLud(zero), IrType::LightUserdata);
+            self.b.set_slot(a + 2, st);
+        } else if o(O::ForGLoop) && (pc as i64 + 1 + d_of(insn) as i64) as u32 != self.header() {
+            // an unrolled inner generic for: next array element, or the end
+            self.unrolled += 1;
+            if self.unrolled > UNROLL_LIMIT {
+                return Err(unsupported_type("inner loop too long to unroll"));
+            }
+            let aux = aux as i32;
+            if (*base.add(a)).tt != LUA_TNIL || (*base.add(a + 1)).tt != LUA_TTABLE || (*base.add(a + 2)).tt != LUA_TLIGHTUSERDATA {
+                return Err(unsupported_type("generic for over an iterator function"));
+            }
+            let h = hvalue(base.add(a + 1));
+            let i_now = (*base.add(a + 2)).value.p as usize;
+            let t = self.read(a + 1, base)?;
+            let st = self.read(a + 2, base)?;
+            let i = self.b.emit(Op::LudToI32(st), IrType::I32);
+            let size = self.b.emit(Op::ASize(t), IrType::I32);
+            let snap = self.b.snapshot();
+            let continues = i_now < (*h).sizearray as usize && (*(*h).array.add(i_now)).tt != LUA_TNIL;
+            if continues {
+                self.b.emit(Op::Guard { cmp: Cmp::Lt, a: i, b: size, snap }, IrType::Nil);
+                let p = self.b.emit(Op::ARef { t, idx: i }, IrType::Ptr);
+                let ety = IrType::of_tag((*(*h).array.add(i_now)).tt).ok_or(unsupported_type("array element type"))?;
+                let v = self.b.emit(Op::XLoad { p, snap }, ety);
+                let one = self.b.ki32(1);
+                let i1 = self.b.emit(Op::AddI32(i, one), IrType::I32);
+                let key = self.b.emit(Op::I32ToNum(i1), IrType::Number);
+                let st1 = self.b.emit(Op::I32ToLud(i1), IrType::LightUserdata);
+                self.b.set_slot(a + 2, st1);
+                self.b.set_slot(a + 3, key);
+                self.b.set_slot(a + 4, v);
+                for k in 2..aux.max(2) as usize {
+                    let nil = self.b.knil();
+                    self.b.set_slot(a + 3 + k, nil);
+                }
+            } else if i_now >= (*h).sizearray as usize && (aux < 0 || (*h).node == crate::ltable::dummynode()) {
+                // the end: past the array part, and (pairs) no hash part
+                self.b.emit(Op::Guard { cmp: Cmp::Nlt, a: i, b: size, snap }, IrType::Nil);
+                if aux >= 0 {
+                    let node = self.b.emit(Op::HSlot { t, idx: 0 }, IrType::Ptr);
+                    let dummy = self.b.kptr(crate::ltable::dummynode() as usize, IrType::Ptr);
+                    self.b.emit(Op::GuardSame { a: node, k: dummy, snap }, IrType::Nil);
+                }
+            } else {
+                return Err(unsupported_type("generic for over a hash part or a hole"));
+            }
         } else if o(O::ForGLoop) && (pc as i64 + 1 + d_of(insn) as i64) as u32 == self.header() {
             // pairs/ipairs over the array part: the next element, or exit
             // (the hash part, a hole, the end: the interpreter goes on)
@@ -1039,11 +1121,9 @@ impl Recorder {
                 // (the tag guards keep them strings/numbers: no __concat)
                 self.read(s, base)?;
             }
-            if self.funcs.len() > 1 {
-                return Err(unsupported_type("concatenation in an inlined function"));
-            }
             let snap = self.b.snapshot();
-            self.b.emit(Op::Concat { a: (self.b.off + a) as u16, b: (self.b.off + bb) as u16, c: (self.b.off + c) as u16, pc: pc + 1, snap }, IrType::Nil);
+            let (savedpc, frames) = self.call_context(pc + 1);
+            self.b.emit(Op::Concat { a: (self.b.off + a) as u16, b: (self.b.off + bb) as u16, c: (self.b.off + c) as u16, savedpc, frames, off: self.b.off as u16, snap }, IrType::Nil);
             for s in bb..=c {
                 self.b.forget_slot(s);
             }
@@ -1076,6 +1156,8 @@ impl Recorder {
                 let snap = self.b.snapshot();
                 self.b.emit(Op::UStore { cl: clr, idx: bb as u8, v, buf, snap }, IrType::Nil);
             }
+        } else if o(O::NewClosure) || o(O::DupClosure) {
+            self.record_closure(pc, insn, base)?;
         } else if o(O::Namecall) {
             self.record_namecall(insn, aux, base)?;
         } else if o(O::GetUpval) {
@@ -1278,13 +1360,27 @@ impl Recorder {
             return Err(unsupported_type("indexing a non-table"));
         }
         let h = hvalue(tv);
-        if !(*h).metatable.is_null() || (*h).readonly != 0 {
-            return Err(unsupported_type("store into a table with a metatable"));
+        if (*h).readonly != 0 {
+            return Err(unsupported_type("store into a read-only table"));
         }
         let t = self.read(tslot, base)?;
         self.mm_store_ok(Some(t))?;
         let snap = self.b.snapshot();
-        self.b.emit(Op::GuardPlainTable { t, store: true, snap }, IrType::Nil);
+        let mt = (*h).metatable;
+        if mt.is_null() {
+            self.b.emit(Op::GuardPlainTable { t, store: true, snap }, IrType::Nil);
+        } else {
+            // a metatable without __newindex: a raw store (checked at run
+            // time: the metatable is read, its __newindex must be absent)
+            let name = (*(*self.l).global).tmname[crate::ltm::TM_NEWINDEX as usize];
+            let ni = crate::ltable::luaH_getstr(mt, name);
+            if ni != luaO_nilobject() && (*ni).tt != LUA_TNIL {
+                return Err(unsupported_type("store into a table with __newindex"));
+            }
+            let mtr = self.b.emit(Op::TMeta { t, snap }, IrType::Table);
+            let k = self.b.kptr(name as usize, IrType::String);
+            self.b.emit(Op::HMiss { t: mtr, k, snap }, IrType::Nil);
+        }
         let buf = Box::leak(vec![0u64; 4].into_boxed_slice()).as_mut_ptr() as usize;
         self.b.emit(Op::TSet { t, k, v, buf, snap }, IrType::Nil);
         self.inserts = true;
@@ -1535,6 +1631,56 @@ impl Recorder {
         Ok(())
     }
 
+    /// NEWCLOSURE / DUPCLOSURE with value or upvalue captures (a reference
+    /// capture of a local would point into slots the trace keeps in
+    /// registers).
+    unsafe fn record_closure(&mut self, pc: u32, insn: u32, base: StkId) -> R<()> {
+        let a = a_of(insn);
+        let proto = self.cur_proto();
+        let dup = op_of(insn) == O::DupClosure as u8;
+        let (target, nups) = if dup {
+            let kv = (*proto).k.add(d_of(insn) as usize);
+            if (*kv).tt != LUA_TFUNCTION {
+                return Err(unsupported_type("DUPCLOSURE of a non-function"));
+            }
+            let kcl = clvalue(kv);
+            (kcl as usize, (*kcl).nupvalues as usize)
+        } else {
+            let pv = *(*proto).p.add(d_of(insn) as usize);
+            (pv as usize, (*pv).nups as usize)
+        };
+        let code = (*proto).code;
+        let mut caps = Vec::with_capacity(nups);
+        let mut vals = [Ref(0); 4];
+        let mut nvals = 0usize;
+        for ui in 0..nups {
+            let uinsn = *code.add(pc as usize + 1 + ui);
+            let (kind, idx) = (a_of(uinsn) as u8, b_of(uinsn));
+            if kind as u32 == crate::lvmexecute::LCT_REF {
+                return Err(unsupported_type("closure capturing a local by reference"));
+            }
+            if kind as u32 == crate::lvmexecute::LCT_VAL {
+                if nvals == 4 {
+                    return Err(unsupported_type("closure with many captured values"));
+                }
+                vals[nvals] = self.read(idx, base)?;
+                caps.push((kind, nvals as u8));
+                nvals += 1;
+            } else {
+                caps.push((kind, idx as u8));
+            }
+        }
+        let (_, clr) = self.cur_closure();
+        let site = Box::leak(Box::new(ClosureSite { dup, target, caps })) as *const ClosureSite as usize;
+        let buf = Box::leak(vec![0u64; 8].into_boxed_slice()).as_mut_ptr() as usize;
+        let v = self.b.emit(Op::MakeClosure { cl: clr, site, vals, nvals: nvals as u8, buf }, IrType::Function);
+        if !self.mm.is_empty() {
+            self.fresh.push(v);
+        }
+        self.b.set_slot(a, v);
+        Ok(())
+    }
+
     /// Inside a metamethod only tables created there may change (an exit
     /// re-runs it from the start).
     fn mm_store_ok(&self, t: Option<Ref>) -> R<()> {
@@ -1595,11 +1741,6 @@ impl Recorder {
         let Some(table_arg) = leaf_c(self.l, fp) else {
             return Err(AbortReason::UnsupportedOpcode("Call (C function)"));
         };
-        // (inlined frames are virtual: the function would see the wrong
-        // caller in error messages)
-        if self.funcs.len() > 1 {
-            return Err(unsupported_type("C call from an inlined function"));
-        }
         if c == 0 || c > 4 {
             return Err(unsupported_type("C call with variable or many results"));
         }
@@ -1620,13 +1761,24 @@ impl Recorder {
         }
         let ret_pc = pc + if op_of(insn) == O::CallFb as u8 { 2 } else { 1 };
         let snap = self.b.snapshot();
-        self.b.emit(Op::CCall { slot: (self.b.off + a) as u16, nargs: nargs as u8, nres: nres as u8, pc: ret_pc, snap }, IrType::Nil);
+        let (savedpc, frames) = self.call_context(ret_pc);
+        self.b.emit(Op::CCall { slot: (self.b.off + a) as u16, nargs: nargs as u8, nres: nres as u8, savedpc, frames, off: self.b.off as u16, snap }, IrType::Nil);
         // the call left everything from its function slot up undefined
         for s in a..a + 1 + nargs.max(nres) {
             self.b.forget_slot(s);
         }
         self.pending_c = Some((a, nres, ret_pc));
         Ok(())
+    }
+
+    /// For a call out of the trace at bytecode index `pc` of the current
+    /// function: the instruction pointer to report, and the inlined frames
+    /// to materialize around it (a leaked Vec, 0 at the trace's own frame:
+    /// errors and tracebacks then see the right functions and lines).
+    fn call_context(&self, pc: u32) -> (usize, usize) {
+        let savedpc = unsafe { (*self.cur_proto()).code.add(pc as usize) } as usize;
+        let frames = if self.b.frames.is_empty() { 0 } else { Box::leak(Box::new(self.b.frames.clone())) as *const Vec<SnapFrame> as usize };
+        (savedpc, frames)
     }
 
     /// RETURN from an inlined frame: its results go to the caller's slots.
@@ -2094,6 +2246,16 @@ fn rec_key(t: &Trace, p: Ref) -> Option<(u8, Ref, u32)> {
     }
 }
 
+/// How a closure is built (`Op::MakeClosure`): DUPCLOSURE of the constant
+/// closure `target`, or NEWCLOSURE of prototype `target`; per upvalue, its
+/// capture kind (LCT_VAL: index into the passed values; LCT_UPVAL: upvalue
+/// of the creating closure).
+pub struct ClosureSite {
+    pub dup: bool,
+    pub target: usize,
+    pub caps: Vec<(u8, u8)>,
+}
+
 /// Builtins the trace compiler has an instruction for.
 fn math1_supported(bfid: u8) -> bool {
     use luau_common::bytecode::BuiltinFunction as B;
@@ -2144,6 +2306,12 @@ fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
         }
         TLen { t } => *t = rm(*t),
         TMeta { t, .. } => *t = rm(*t),
+        MakeClosure { cl, vals, nvals, .. } => {
+            *cl = rm(*cl);
+            for x in vals.iter_mut().take(*nvals as usize) {
+                *x = rm(*x);
+            }
+        }
         TGet { t, k, .. } => {
             *t = rm(*t);
             *k = rm(*k);
@@ -2281,6 +2449,17 @@ unsafe fn leaf_c(l: *mut lua_State, fp: usize) -> Option<bool> {
                 ("string", &["format", "rep", "upper", "lower", "reverse", "find", "match", "len", "byte", "sub", "char"]),
                 ("table", &["concat"]),
             ];
+            // (globals: ipairs/pairs only build the iterator triple; their
+            // table argument is only type-checked)
+            for name in ["ipairs", "pairs"] {
+                if let Some(v) = get_by_name(globals, name.as_bytes()) {
+                    if (*v).tt == LUA_TFUNCTION && (*clvalue(v)).isC != 0 {
+                        if let Some(f) = Closure::c(clvalue(v)).f {
+                            map.insert(f as usize, true);
+                        }
+                    }
+                }
+            }
             for (lib, names) in leaves {
                 let Some(t) = get_by_name(globals, lib.as_bytes()) else { continue };
                 if (*t).tt != LUA_TTABLE {
