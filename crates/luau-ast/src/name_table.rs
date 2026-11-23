@@ -1,10 +1,12 @@
 //! Port of the `AstNameTable` from `Luau/Lexer.h` / `Ast/src/Lexer.cpp`.
 //!
 //! The C++ table interns names into a bump allocator and returns
-//! pointer-identity-compared `AstName` values. The Rust port interns names
-//! by leaking owned strings and handing out `&'static str`, which keeps
-//! cheap content equality while preserving the interned (deduplicated)
-//! property.
+//! pointer-identity-compared `AstName` values. The Rust port keeps the names
+//! in the table's own arena and hands out `&'static str`, which keeps cheap
+//! content equality while preserving the interned (deduplicated) property.
+//!
+//! The `'static` is a promise the caller keeps, as in C++: those strings
+//! are freed with the table, so it must outlive every AST parsed with it.
 //!
 //! Reserved words are pre-registered with their reserved lexeme type, so
 //! reading `and` yields `LexemeType::Reserved("and")` exactly like the C++

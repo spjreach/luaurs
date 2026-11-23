@@ -3258,8 +3258,10 @@ mod tests {
     use super::*;
 
     fn parse_ok(src: &str) -> AstStatBlock {
-        let mut names = AstNameTable::new();
-        let result = parse(src.as_bytes(), &mut names);
+        // The AST's names point into the table's storage: it must outlive
+        // the returned tree (leaked: tests only).
+        let names: &'static mut AstNameTable = Box::leak(Box::new(AstNameTable::new()));
+        let result = parse(src.as_bytes(), names);
         assert!(
             result.errors.is_empty(),
             "unexpected parse errors for {:?}: {:?}",
