@@ -107,6 +107,11 @@ pub struct Recorder {
     /// the builtin ran (else its fallback code is recorded): (builtin, the
     /// CALL's slot, arguments, results wanted, the pc after the CALL)
     deferred_call: Option<((u8, usize, [Ref; 3], usize), i32, u32)>,
+    /// a conditional jump just recorded: (its fall-through pc, its jump
+    /// target, the snapshots of its comparison guards) - those resume
+    /// where the other direction goes (set at the next step, which shows
+    /// the direction taken): a failed comparison has done nothing else
+    cmp_fix: Option<(u32, u32, Vec<SnapId>)>,
 }
 
 /// `Snapshot::top` of an exit that keeps the L->top the trace left (after
@@ -194,6 +199,7 @@ impl Recorder {
             builtin_undo: None,
             builtin_call: None,
             deferred_call: None,
+            cmp_fix: None,
         };
         // snapshot 0: the entry (a trace that doesn't loop exits there from
         // its entry checks)
@@ -331,6 +337,14 @@ impl Recorder {
     /// Records the instruction at `pc` (about to execute, with the frame's
     /// stack at `base`).
     pub unsafe fn step(&mut self, pc: u32, base: StkId) -> Step {
+        if let Some((fall, jump, snaps)) = self.cmp_fix.take() {
+            let other = if pc == jump { Some(fall) } else if pc == fall { Some(jump) } else { None };
+            if let Some(o) = other {
+                for s in snaps {
+                    self.b.trace.snapshots[s.0 as usize].pc = o;
+                }
+            }
+        }
         if let Some((c, nres, next)) = self.deferred_call.take() {
             if pc == next {
                 if let Err(e) = self.builtin_as_call(None, c, nres, pc, base) {
@@ -667,6 +681,10 @@ impl Recorder {
         let (a, bb, c) = (a_of(insn), b_of(insn), c_of(insn));
         // a guard taken now resumes at this instruction (it hasn't run yet)
         self.b.pc = pc;
+        if o(O::JumpIf) || o(O::JumpIfNot) || o(O::JumpIfEq) || o(O::JumpIfNotEq) || o(O::JumpIfLe) || o(O::JumpIfNotLe) || o(O::JumpIfLt) || o(O::JumpIfNotLt) || o(O::JumpXEqKN) || o(O::JumpXEqKNil) || o(O::JumpXEqKB) || o(O::JumpXEqKS) {
+            let len = op_len(op) as u32;
+            self.cmp_fix = Some((pc + len, (pc as i64 + 1 + d_of(insn) as i64) as u32, Vec::new()));
+        }
 
         if o(O::Nop) || o(O::Coverage) || o(O::Jump) || o(O::JumpX) {
             // (the interpreter follows the jump; the trace just continues)
@@ -740,7 +758,7 @@ impl Recorder {
             let v = self.read(a, base)?;
             // only nil/boolean values can change truthiness without a type change
             if matches!(self.b.trace.ty(v), IrType::Nil | IrType::Boolean) {
-                let snap = self.b.snapshot();
+                let snap = self.cmp_snapshot();
                 self.b.emit(Op::GuardTruthy { a: v, want: truthy, snap }, IrType::Nil);
             }
         } else if o(O::JumpIfEq) || o(O::JumpIfNotEq) || o(O::JumpIfLe) || o(O::JumpIfNotLe) || o(O::JumpIfLt) || o(O::JumpIfNotLt) {
@@ -758,7 +776,7 @@ impl Recorder {
                     let same = (*base.add(a)).value.gc == (*base.add(rb)).value.gc;
                     let x = self.read(a, base)?;
                     let y = self.read(rb, base)?;
-                    let snap = self.b.snapshot();
+                    let snap = self.cmp_snapshot();
                     let op = if same { Op::GuardSame { a: x, k: y, snap } } else { Op::GuardDiff { a: x, k: y, snap } };
                     self.b.emit(op, IrType::Nil);
                 }
@@ -771,7 +789,7 @@ impl Recorder {
                 let eq = crate::lobject::luaO_rawequalObj(base.add(a), base.add(rb));
                 let x = self.read(a, base)?;
                 let y = self.read(rb, base)?;
-                let snap = self.b.snapshot();
+                let snap = self.cmp_snapshot();
                 self.b.emit(Op::GuardVecEq { a: x, b: y, want: eq, snap }, IrType::Nil);
             } else if is_eq && ta != LUA_TNUMBER && ta != LUA_TVECTOR && ta != LUA_TUSERDATA {
                 // same non-number type: identity (strings are interned);
@@ -780,7 +798,7 @@ impl Recorder {
                 let (va, vb) = ((*base.add(a)).value.gc, (*base.add(rb)).value.gc);
                 let x = self.read(a, base)?;
                 let y = self.read(rb, base)?;
-                let snap = self.b.snapshot();
+                let snap = self.cmp_snapshot();
                 match ta {
                     LUA_TNIL => {}
                     LUA_TBOOLEAN => {
@@ -810,7 +828,7 @@ impl Recorder {
                     (false, true) => Cmp::Le,
                     (false, false) => Cmp::Nle,
                 };
-                let snap = self.b.snapshot();
+                let snap = self.cmp_snapshot();
                 self.b.emit(Op::Guard { cmp, a: r, b: zero, snap }, IrType::Nil);
             } else if ta != LUA_TNUMBER || tb != LUA_TNUMBER {
                 return Err(unsupported_type("comparison of non-numbers"));
@@ -826,7 +844,7 @@ impl Recorder {
                 } else {
                     (Cmp::Lt, Cmp::Nlt, va < vb)
                 };
-                let snap = self.b.snapshot();
+                let snap = self.cmp_snapshot();
                 let cmp = if holds { cmp_true } else { cmp_false };
                 self.b.emit(Op::Guard { cmp, a: x, b: y, snap }, IrType::Nil);
             }
@@ -841,7 +859,7 @@ impl Recorder {
             };
             let x = self.read(a, base)?;
             let eq = (*base.add(a)).value.n == kval;
-            let snap = self.b.snapshot();
+            let snap = self.cmp_snapshot();
             self.b.emit(Op::Guard { cmp: if eq { Cmp::Eq } else { Cmp::Ne }, a: x, b: k, snap }, IrType::Nil);
         } else if o(O::JumpXEqKNil) || o(O::JumpXEqKB) || o(O::JumpXEqKS) {
             // A comparison jump against a constant. Reading the slot pins
@@ -861,7 +879,7 @@ impl Recorder {
                 if o(O::JumpXEqKB) {
                     let x = self.read(a, base)?;
                     let want = (*tv).value.b != 0;
-                    let snap = self.b.snapshot();
+                    let snap = self.cmp_snapshot();
                     self.b.emit(Op::GuardTruthy { a: x, want, snap }, IrType::Nil);
                 } else if o(O::JumpXEqKS) {
                     let kv = (*(*proto).k.add((aux & 0xffffff) as usize)).value.gc as usize;
@@ -869,12 +887,12 @@ impl Recorder {
                         // equal (same object): pin it
                         let x = self.read(a, base)?;
                         let k = self.konst((aux & 0xffffff) as usize)?;
-                        let snap = self.b.snapshot();
+                        let snap = self.cmp_snapshot();
                         self.b.emit(Op::GuardSame { a: x, k, snap }, IrType::Nil);
                     } else {
                         let x = self.read(a, base)?;
                         let k = self.konst((aux & 0xffffff) as usize)?;
-                        let snap = self.b.snapshot();
+                        let snap = self.cmp_snapshot();
                         self.b.emit(Op::GuardDiff { a: x, k, snap }, IrType::Nil);
                     }
                 } else {
@@ -2589,6 +2607,19 @@ impl Recorder {
         out.stack_need = self.stack_need as u32;
         super::ir::validate(&out).map_err(AbortReason::Internal)?;
         Ok(out)
+    }
+
+    /// The snapshot of a conditional jump's comparison guard: its own (see
+    /// `cmp_fix`), unless inside a metamethod (exits re-run that).
+    fn cmp_snapshot(&mut self) -> SnapId {
+        if self.b.forced.is_some() {
+            return self.b.snapshot();
+        }
+        let s = self.b.snapshot_fresh();
+        if let Some((_, _, v)) = self.cmp_fix.as_mut() {
+            v.push(s);
+        }
+        s
     }
 
     /// Finishes a trace at the header `target` of another loop that has a

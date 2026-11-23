@@ -234,6 +234,15 @@ impl IrBuilder {
         id
     }
 
+    /// A snapshot of its own (not shared with other guards: its pc may be
+    /// changed).
+    pub fn snapshot_fresh(&mut self) -> SnapId {
+        self.last_snap = None;
+        let id = self.snapshot();
+        self.last_snap = None;
+        id
+    }
+
     /// Slots written by the trace and their values (for loop closing: the
     /// loop-carried values).
     pub fn written(&self) -> Vec<(usize, Ref)> {
