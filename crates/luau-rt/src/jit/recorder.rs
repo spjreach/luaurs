@@ -74,6 +74,9 @@ pub struct Recorder {
     unrolled: usize,
     /// a key may be added to a table (see Trace::inserts)
     inserts: bool,
+    /// a leaf C call just recorded: (first result's frame slot, results,
+    /// the pc the interpreter must be at next)
+    pending_c: Option<(usize, usize, u32)>,
 }
 
 /// `Op::Builtin::nres` for a call taking every result (the trace checks
@@ -145,6 +148,7 @@ impl Recorder {
             top: None,
             unrolled: 0,
             inserts: false,
+            pending_c: None,
         }
     }
 
@@ -282,6 +286,23 @@ impl Recorder {
                     Some(ty) if ty != IrType::Vector => self.b.trace.insts[r.index()].ty = ty,
                     _ => return Step::Abort(AbortReason::UnsupportedType("builtin result type")),
                 }
+            }
+        }
+        if let Some((slot, nres, next)) = self.pending_c.take() {
+            if pc != next {
+                return Step::Abort(AbortReason::Internal("C call didn't return normally".into()));
+            }
+            // the results, as the function left them (a result of another
+            // type exits after the call: never run it twice)
+            self.b.pc = pc;
+            for i in 0..nres {
+                let tv = base.add(slot + i);
+                let Some(ty) = IrType::of_tag((*tv).tt).filter(|t| *t != IrType::Vector) else {
+                    return Step::Abort(AbortReason::UnsupportedType("C function result type"));
+                };
+                let snap = self.b.snapshot();
+                let v = self.b.emit(Op::SReload { slot: (self.b.off + slot + i) as u16, snap }, ty);
+                self.b.set_slot(slot + i, v);
             }
         }
         let inlined = self.funcs.len() > 1;
@@ -1301,7 +1322,7 @@ impl Recorder {
             return Err(AbortReason::UnsupportedOpcode("Call (C function)"));
         };
         let Some(bfid) = builtin_of(self.l, fp) else {
-            return Err(AbortReason::UnsupportedOpcode("Call (C function)"));
+            return self.record_leaf_c_call(pc, insn, base, fp);
         };
         let nargs = self.call_args(a, bb)?;
         if nargs > 3 || c > 2 {
@@ -1331,6 +1352,46 @@ impl Recorder {
         } else {
             self.pending = Some((None, 0, next, false));
         }
+        Ok(())
+    }
+
+    /// CALL of a leaf C function (see `leaf_c`): the trace calls it directly.
+    unsafe fn record_leaf_c_call(&mut self, pc: u32, insn: u32, base: StkId, fp: usize) -> R<()> {
+        let (a, bb, c) = (a_of(insn), b_of(insn), c_of(insn));
+        let Some(table_arg) = leaf_c(self.l, fp) else {
+            return Err(AbortReason::UnsupportedOpcode("Call (C function)"));
+        };
+        // (inlined frames are virtual: the function would see the wrong
+        // caller in error messages)
+        if self.funcs.len() > 1 {
+            return Err(unsupported_type("C call from an inlined function"));
+        }
+        if c == 0 || c > 4 {
+            return Err(unsupported_type("C call with variable or many results"));
+        }
+        let nargs = self.call_args(a, bb)?;
+        let nres = c - 1;
+        let f = self.read(a, base)?;
+        let snap = self.b.snapshot();
+        self.b.emit(Op::GuardCFunc { f, fp, snap }, IrType::Nil);
+        for k in 0..nargs {
+            let tv = base.add(a + 1 + k);
+            let ok = matches!((*tv).tt, LUA_TNUMBER | LUA_TSTRING | LUA_TBOOLEAN | LUA_TNIL) || (k == 0 && table_arg && (*tv).tt == LUA_TTABLE);
+            if !ok {
+                // (other types could run metamethods: Lua code)
+                return Err(unsupported_type("C call argument type"));
+            }
+            // the tag guards keep the argument types
+            self.read(a + 1 + k, base)?;
+        }
+        let ret_pc = pc + if op_of(insn) == O::CallFb as u8 { 2 } else { 1 };
+        let snap = self.b.snapshot();
+        self.b.emit(Op::CCall { slot: (self.b.off + a) as u16, nargs: nargs as u8, nres: nres as u8, pc: ret_pc, snap }, IrType::Nil);
+        // the call left everything from its function slot up undefined
+        for s in a..a + 1 + nargs.max(nres) {
+            self.b.forget_slot(s);
+        }
+        self.pending_c = Some((a, nres, ret_pc));
         Ok(())
     }
 
@@ -1863,7 +1924,7 @@ fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *pre = rm(*pre);
             *back = rm(*back);
         }
-        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop | FrameFunc | NewTable { .. } => {}
+        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop | FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } => {}
     }
 }
 
@@ -1887,7 +1948,9 @@ fn set_snapshot(op: &mut Op, s: SnapId) {
         | TMeta { snap, .. }
         | HMiss { snap, .. }
         | GuardCFunc { snap, .. }
-        | TSet { snap, .. } => *snap = s,
+        | TSet { snap, .. }
+        | CCall { snap, .. }
+        | SReload { snap, .. } => *snap = s,
         _ => {}
     }
 }
@@ -1930,6 +1993,48 @@ unsafe fn builtin_of(l: *mut lua_State, fp: usize) -> Option<u8> {
                     if (*v).tt == LUA_TFUNCTION && (*clvalue(v)).isC != 0 {
                         if let Some(f) = Closure::c(clvalue(v)).f {
                             map.insert(f as usize, id);
+                        }
+                    }
+                }
+            }
+            *m = Some(map);
+        }
+        m.as_ref().unwrap().get(&fp).copied()
+    })
+}
+
+/// Whether C function `fp` is a standard library leaf function (it only
+/// reads its arguments: no callbacks into Lua, no yields, no table writes),
+/// and whether its first argument may be a table (`table.concat`).
+unsafe fn leaf_c(l: *mut lua_State, fp: usize) -> Option<bool> {
+    thread_local! {
+        static MAP: std::cell::RefCell<Option<HashMap<usize, bool>>> = const { std::cell::RefCell::new(None) };
+    }
+    if l.is_null() {
+        return None;
+    }
+    MAP.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.is_none() {
+            let mut map = HashMap::new();
+            let globals = (*l).gt;
+            let leaves: [(&str, &[&str]); 4] = [
+                ("math", &["random", "noise"]),
+                ("os", &["clock", "time"]),
+                ("string", &["format", "rep", "upper", "lower", "reverse", "find", "match", "len", "byte", "sub", "char"]),
+                ("table", &["concat"]),
+            ];
+            for (lib, names) in leaves {
+                let Some(t) = get_by_name(globals, lib.as_bytes()) else { continue };
+                if (*t).tt != LUA_TTABLE {
+                    continue;
+                }
+                for name in names {
+                    if let Some(v) = get_by_name(hvalue(t), name.as_bytes()) {
+                        if (*v).tt == LUA_TFUNCTION && (*clvalue(v)).isC != 0 {
+                            if let Some(f) = Closure::c(clvalue(v)).f {
+                                map.insert(f as usize, lib == "table");
+                            }
                         }
                     }
                 }

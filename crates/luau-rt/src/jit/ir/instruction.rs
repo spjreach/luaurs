@@ -141,6 +141,15 @@ pub enum Op {
     /// rehashed: see `Trace::inserts`); exits through `snap` for a nil or NaN
     /// key (the interpreter raises the error)
     TSet { t: Ref, k: Ref, v: Ref, buf: usize, snap: SnapId },
+    /// a call of a leaf C function (one that only reads its arguments: no
+    /// callbacks into Lua, no yields) in stack slot `slot` of the trace's
+    /// frame with `nargs` arguments above it, `nres` results left there;
+    /// the slots `snap` lists are stored first (the GC and error handling
+    /// see the frame), `L->ci->savedpc` is bytecode index `pc`
+    CCall { slot: u16, nargs: u8, nres: u8, pc: u32, snap: SnapId },
+    /// stack slot `slot` (after a C call left a result there): guarded like
+    /// SLoad, but where it is (never hoisted)
+    SReload { slot: u16, snap: SnapId },
     /// a new table (`NEWTABLE`)
     NewTable { narray: u32, nhash: u32 },
     /// a copy of template table `tpl` (`DUPTABLE`; a Table constant)
@@ -210,7 +219,7 @@ impl Inst {
             XLoad { p, .. } => vec![*p],
             XStore { p, v } => vec![*p, *v],
             GuardPlainTable { t, .. } => vec![*t],
-            FrameFunc | NewTable { .. } => vec![],
+            FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } => vec![],
             TMeta { t, .. } => vec![*t],
             TGet { t, k, .. } => vec![*t, *k],
             TSet { t, k, v, .. } => vec![*t, *k, *v],
@@ -235,7 +244,7 @@ impl Inst {
         use Op::*;
         match &self.op {
             SLoad { guarded: true, snap, .. } => Some(*snap),
-            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } => {
+            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } => {
                 Some(*snap)
             }
             _ => None,

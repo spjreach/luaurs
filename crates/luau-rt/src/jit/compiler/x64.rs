@@ -31,6 +31,7 @@ const OFF_GLOBAL: i32 = offset_of!(lua_State, global) as i32;
 const OFF_INTERRUPT: i32 = (offset_of!(global_State, cb) + offset_of!(lua_Callbacks, interrupt)) as i32;
 const OFF_CI: i32 = offset_of!(lua_State, ci) as i32;
 const OFF_CI_FUNC: i32 = offset_of!(CallInfo, func) as i32;
+const OFF_BASE: i32 = offset_of!(lua_State, base) as i32;
 const OFF_STACK_LAST: i32 = offset_of!(lua_State, stack_last) as i32;
 const OFF_UV_V: i32 = offset_of!(UpVal, v) as i32;
 const OFF_T_LSIZENODE: i32 = offset_of!(LuaTable, lsizenode) as i32;
@@ -175,7 +176,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         }
         let defines = !matches!(
             inst.op,
-            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. } | Op::HMiss { .. } | Op::GuardCFunc { .. } | Op::TSet { .. }
+            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. } | Op::HMiss { .. } | Op::GuardCFunc { .. } | Op::TSet { .. } | Op::CCall { .. }
         ) && !matches!(inst.op, Op::Builtin { nres: 0, .. });
         if !defines {
             continue;
@@ -234,7 +235,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
     };
     // a trace that allocates checks for GC work at its back edge (and exits
     // for the collector to run: nothing collects while a trace runs)
-    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::Builtin { .. } | Op::TSet { .. }));
+    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::Builtin { .. } | Op::TSet { .. } | Op::CCall { .. }));
 
     // ---- emission -------------------------------------------------------
     let mut a = Asm::new();
@@ -643,6 +644,29 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                     a.jcc(Cond::NE, s);
                     load_value(&mut a, dst, inst.ty, R::Rcx, 0)?;
                 }
+            }
+            Op::SReload { slot, snap } => {
+                let disp = *slot as i32 * TV;
+                let tag = inst.ty.tag().ok_or("SReload of a non-Lua type")?;
+                a.cmp32_mi(R::R13, disp + OFF_TT, tag);
+                a.jcc(Cond::NE, stub(*snap));
+                load_value(&mut a, dst, inst.ty, R::R13, disp)?;
+            }
+            Op::CCall { slot, nargs, nres, pc, snap } => {
+                // the frame goes to the stack first
+                for e in &t.snapshots[snap.0 as usize].entries {
+                    store_value(&mut a, &home, t, e.value, R::R13, e.slot as i32 * TV)?;
+                }
+                let savedpc = (*t.proto).code.add(*pc as usize) as u64;
+                let live = live_across(i);
+                call_out(
+                    &mut a,
+                    &live,
+                    helpers::ccall as usize,
+                    &[Arg::L, Arg::Imm(*slot as u64), Arg::Imm(*nargs as u64), Arg::Imm(*nres as u64), Arg::Imm(savedpc)],
+                );
+                // (the call may have moved the stack)
+                a.load(R::R13, R::R12, OFF_BASE);
             }
             Op::TGet { t: tb, k, buf } => {
                 a.mov_ri64(R::Rdx, *buf as u64);
@@ -1102,6 +1126,17 @@ mod helpers {
         if crate::lgc::isblack(t as *mut GCObject) && crate::lgc::iswhite(v) {
             crate::lgc::luaC_barriertable(L, t, v);
         }
+    }
+
+    /// A leaf C function in slot `slot` of the trace's frame (L->ci): a
+    /// normal (non-yieldable) call leaving `nres` results at the slot.
+    pub unsafe extern "sysv64" fn ccall(L: *mut lua_State, slot: i64, nargs: i64, nres: i64, savedpc: *const u32) {
+        let ci = (*L).ci;
+        (*ci).savedpc = savedpc;
+        let func = (*L).base.add(slot as usize);
+        (*L).top = func.add(1 + nargs as usize);
+        crate::ldo::luaD_callny(L, func, nres as i32);
+        (*L).top = (*(*L).ci).top;
     }
 
     pub unsafe extern "sysv64" fn tget(t: *mut LuaTable, key: *const TValue) -> *const TValue {

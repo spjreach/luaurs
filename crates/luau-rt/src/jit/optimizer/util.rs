@@ -60,6 +60,8 @@ pub fn map_op(op: &Op, map: &[Ref]) -> Op {
         Op::FrameFunc => Op::FrameFunc,
         Op::Barrier { t, v } => Op::Barrier { t: r(*t), v: r(*v) },
         Op::TMeta { t, snap } => Op::TMeta { t: r(*t), snap: *snap },
+        Op::CCall { slot, nargs, nres, pc, snap } => Op::CCall { slot: *slot, nargs: *nargs, nres: *nres, pc: *pc, snap: *snap },
+        Op::SReload { slot, snap } => Op::SReload { slot: *slot, snap: *snap },
         Op::TGet { t, k, buf } => Op::TGet { t: r(*t), k: r(*k), buf: *buf },
         Op::TSet { t, k, v, buf, snap } => Op::TSet { t: r(*t), k: r(*k), v: r(*v), buf: *buf, snap: *snap },
         Op::HMiss { t, k, snap } => Op::HMiss { t: r(*t), k: r(*k), snap: *snap },
