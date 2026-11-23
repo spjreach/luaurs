@@ -3045,7 +3045,7 @@ pub(crate) fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *pre = rm(*pre);
             *back = rm(*back);
         }
-        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop | FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } | GuardTop { .. } => {}
+        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop | FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } | GuardTop { .. } | Sunk => {}
         UStore { cl, v, .. } => {
             *cl = rm(*cl);
             *v = rm(*v);

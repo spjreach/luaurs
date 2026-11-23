@@ -61,6 +61,8 @@ pub struct Trace {
     /// the trace reads its own frame's varargs: there are this many
     /// (checked at entry)
     pub varargs: Option<u16>,
+    /// tables this trace doesn't create (built on exits that need them)
+    pub sinks: Vec<Sink>,
     /// stack slots (from the frame base) the trace may touch, inlined
     /// frames included: checked against the stack's size at entry
     pub stack_need: u32,
@@ -102,12 +104,34 @@ pub struct Trace {
 /// left).
 pub const EXIT_LEFT_VM: u32 = u32::MAX;
 
+/// A table the trace doesn't create (see `optimizer::sink`): exits through
+/// the snapshots in `states` build it.
+#[derive(Clone, Debug)]
+pub struct Sink {
+    /// its (now `Op::Sunk`) instruction: the value snapshots name
+    pub at: Ref,
+    /// template table to copy (DupTable), 0: a new table of this size
+    pub tpl: usize,
+    pub narray: u32,
+    pub nhash: u32,
+    pub states: Vec<SinkState>,
+}
+
+/// A sunk table's contents at the exits through snapshot `snap`.
+#[derive(Clone, Debug)]
+pub struct SinkState {
+    pub snap: u32,
+    /// (hash node, value) stored by then
+    pub fields: Vec<(u32, Ref)>,
+    pub meta: Option<Ref>,
+}
+
 /// `Trace::exit_pcs` flag.
 pub const FAST_EXIT: u32 = 0x8000_0000;
 
 impl Trace {
     pub fn new(id: TraceId, proto: *mut Proto, start_pc: u32) -> Trace {
-        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, varargs: None, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new(), inserts: false, storm_cycles: 0, exit_pcs: Box::new([]) }
+        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, varargs: None, sinks: Vec::new(), stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new(), inserts: false, storm_cycles: 0, exit_pcs: Box::new([]) }
     }
 
     pub fn inst(&self, r: Ref) -> &Inst {

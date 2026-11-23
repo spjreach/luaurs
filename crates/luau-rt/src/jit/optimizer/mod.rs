@@ -17,6 +17,7 @@ pub mod hoist_consts;
 pub mod licm;
 pub mod narrow;
 pub mod redundant;
+pub mod sink;
 pub mod strength;
 pub mod util;
 
@@ -62,6 +63,8 @@ pub fn optimize_checked(t: &mut Trace) -> Result<(), String> {
         }
     }
     hoist_consts::run(t);
+    validate(t)?;
+    sink::run(t);
     validate(t)
 }
 

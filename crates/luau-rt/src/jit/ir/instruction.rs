@@ -207,6 +207,9 @@ pub enum Op {
     /// `slot`, after storing the slots `snap` lists (only when there are
     /// any: the stack must hold the values they capture)
     CloseUpvals { slot: u16, snap: SnapId },
+    /// a table the trace doesn't create (`Trace::sinks` says how exits
+    /// build it); only snapshots name it
+    Sunk,
     /// a new table (`NEWTABLE`)
     NewTable { narray: u32, nhash: u32 },
     /// a copy of template table `tpl` (`DUPTABLE`; a Table constant)
@@ -285,7 +288,7 @@ impl Inst {
             XLoad { p, .. } => vec![*p],
             XStore { p, v } => vec![*p, *v],
             GuardPlainTable { t, .. } => vec![*t],
-            FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } | GuardTop { .. } => vec![],
+            FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } | GuardTop { .. } | Sunk => vec![],
             UStore { cl, v, .. } => vec![*cl, *v],
             Not(a) | LudToI32(a) | I32ToLud(a) => vec![*a],
             TMeta { t, .. } => vec![*t],

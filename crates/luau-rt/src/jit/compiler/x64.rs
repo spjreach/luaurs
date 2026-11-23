@@ -120,6 +120,15 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
     // iteration wrote. The recorder appends that snapshot last; using the
     // last snapshot (not the last *guard*) keeps the restore complete.
     let back_snap = SnapId(t.snapshots.len().checked_sub(1).ok_or("trace has no snapshot")? as u32);
+    // per snapshot: values exits through it need to build sunk tables
+    let mut sink_vals: Vec<Vec<Ref>> = vec![Vec::new(); t.snapshots.len()];
+    for sk in &t.sinks {
+        for st in &sk.states {
+            let v = &mut sink_vals[st.snap as usize];
+            v.extend(st.fields.iter().map(|f| f.1));
+            v.extend(st.meta);
+        }
+    }
     for (i, inst) in t.insts.iter().enumerate() {
         match inst.op {
             Op::Phi { pre, back } => {
@@ -138,10 +147,16 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
             for e in &t.snapshots[s.0 as usize].entries {
                 touch(e.value, i, &mut last, &mut used);
             }
+            for &v in &sink_vals[s.0 as usize] {
+                touch(v, i, &mut last, &mut used);
+            }
         }
     }
     for e in &t.snapshots[back_snap.0 as usize].entries {
         touch(e.value, END, &mut last, &mut used);
+    }
+    for &v in &sink_vals[back_snap.0 as usize] {
+        touch(v, END, &mut last, &mut used);
     }
 
     // ---- allocation -----------------------------------------------------
@@ -179,7 +194,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         }
         let defines = !matches!(
             inst.op,
-            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. } | Op::HMiss { .. } | Op::GuardCFunc { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::GuardVecEq { .. } | Op::CloseUpvals { .. } | Op::GuardTop { .. }
+            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. } | Op::HMiss { .. } | Op::GuardCFunc { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::GuardVecEq { .. } | Op::CloseUpvals { .. } | Op::GuardTop { .. } | Op::Sunk
         ) && !matches!(inst.op, Op::Builtin { nres: 0, .. });
         if !defines {
             continue;
@@ -1041,6 +1056,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                 a.bind(loop_top);
             }
             Op::Phi { .. } => {}
+            Op::Sunk => {}
         }
         if let Some(s) = spill_to {
             match dst {
@@ -1054,8 +1070,11 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         // end of a side trace: the state goes to the stack (its last
         // snapshot) and the root trace runs again from its pre-roll
         let sn = &t.snapshots[back_snap.0 as usize];
+        materialize(&mut a, &home, t, back_snap.0, sn)?;
         for e in &sn.entries {
-            store_value(&mut a, &home, t, e.value, R::R13, e.slot as i32 * TV)?;
+            if !matches!(t.inst(e.value).op, Op::Sunk) {
+                store_value(&mut a, &home, t, e.value, R::R13, e.slot as i32 * TV)?;
+            }
         }
         a.mov_ri64(R::Rax, root as u64);
         a.jmp_r(R::Rax);
@@ -1099,8 +1118,13 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
     a.jmp(exit);
     for (k, sn) in snaps.iter().enumerate() {
         a.bind(stubs[k]);
+        // (the interrupt exit stores the loop-close snapshot)
+        let sid = if k == t.snapshots.len() { back_snap.0 } else { k as u32 };
+        materialize(&mut a, &home, t, sid, sn)?;
         for e in &sn.entries {
-            store_value(&mut a, &home, t, e.value, R::R13, e.slot as i32 * TV)?;
+            if !matches!(t.inst(e.value).op, Op::Sunk) {
+                store_value(&mut a, &home, t, e.value, R::R13, e.slot as i32 * TV)?;
+            }
         }
         if k == t.snapshots.len() {
             a.mov_ri(R::Rax, (0x8000_0000 | tag | back_snap.0) as u64);
@@ -1208,6 +1232,7 @@ fn store_value(a: &mut Asm, home: &[Home], t: &Trace, v: Ref, base: R, disp: i32
             a.mov_ri64(R::Rax, *n as u64);
             a.store(base, disp, R::Rax);
         }
+        (Home::None, Op::Sunk) => return Err(format!("sunk table {} stored outside an exit", v.0)),
         (Home::None, _) if ty == IrType::Nil => {}
         (h, op) => return Err(format!("value {} ({:?}) has no home {:?}", v.0, op, h)),
     }
@@ -1216,6 +1241,71 @@ fn store_value(a: &mut Asm, home: &[Home], t: &Trace, v: Ref, base: R, disp: i32
     let extra = if ty == IrType::LightUserdata { LU_TAG_ITERATOR as u32 as u64 } else { 0 };
     a.mov_ri64(R::Rax, ((tag as u32 as u64) << 32) | extra);
     a.store(base, disp + OFF_TAGWORD, R::Rax);
+    Ok(())
+}
+
+/// Exit code: builds the sunk tables snapshot `sn` (number `sid`) holds,
+/// stores each into its slots (the caller stores the other entries).
+fn materialize(a: &mut Asm, home: &[Home], t: &Trace, sid: u32, sn: &Snapshot) -> Result<(), String> {
+    let mut done: Vec<Ref> = Vec::new();
+    for e in &sn.entries {
+        if !matches!(t.inst(e.value).op, Op::Sunk) || done.contains(&e.value) {
+            continue;
+        }
+        done.push(e.value);
+        let sk = t.sinks.iter().find(|s| s.at == e.value).ok_or("sunk table without a description")?;
+        let st = sk.states.iter().find(|s| s.snap == sid).ok_or("sunk table without a state for this exit")?;
+        // registers the rest of the exit still needs survive the call
+        let mut live: Vec<Home> = Vec::new();
+        for v in sn.entries.iter().map(|e| e.value).chain(st.fields.iter().map(|f| f.1)).chain(st.meta) {
+            let h = home[v.index()];
+            if matches!(h, Home::G(_) | Home::F(_)) && !live.contains(&h) {
+                live.push(h);
+            }
+        }
+        for s2 in &t.sinks {
+            if let Some(o) = s2.states.iter().find(|s| s.snap == sid) {
+                for v in o.fields.iter().map(|f| f.1).chain(o.meta) {
+                    let h = home[v.index()];
+                    if matches!(h, Home::G(_) | Home::F(_)) && !live.contains(&h) {
+                        live.push(h);
+                    }
+                }
+            }
+        }
+        if sk.tpl != 0 {
+            call_out(a, &live, helpers::dup_table as usize, &[Arg::L, Arg::Imm(sk.tpl as u64)]);
+        } else {
+            call_out(a, &live, helpers::new_table as usize, &[Arg::L, Arg::Imm(sk.narray as u64), Arg::Imm(sk.nhash as u64)]);
+        }
+        a.mov_rr(R::R11, R::Rax);
+        for &(node, v) in &st.fields {
+            a.load(R::R10, R::R11, OFF_T_NODE);
+            store_value(a, home, t, v, R::R10, node as i32 * NODE_SIZE)?;
+        }
+        if let Some(m) = st.meta {
+            let r = match (home[m.index()], &t.inst(m).op) {
+                (Home::G(r), _) => r,
+                (Home::S(s), _) => {
+                    a.load(R::Rax, R::Rsp, spill_off(s));
+                    R::Rax
+                }
+                (Home::None, Op::KPtr(p)) => {
+                    a.mov_ri64(R::Rax, *p as u64);
+                    R::Rax
+                }
+                (h, _) => return Err(format!("metatable {} has no home {:?}", m.0, h)),
+            };
+            a.store(R::R11, OFF_T_METATABLE, r);
+        }
+        let tag = ((LUA_TTABLE as u32 as u64) << 32) as u64;
+        for e2 in sn.entries.iter().filter(|x| x.value == e.value) {
+            let disp = e2.slot as i32 * TV;
+            a.store(R::R13, disp, R::R11);
+            a.mov_ri64(R::Rax, tag);
+            a.store(R::R13, disp + OFF_TAGWORD, R::Rax);
+        }
+    }
     Ok(())
 }
 
