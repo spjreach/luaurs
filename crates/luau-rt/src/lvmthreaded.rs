@@ -118,6 +118,40 @@ unsafe extern "sysv64-unwind" fn h_OP_BREAK(L: *mut lua_State, mut pc: *const In
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_BREAK;
     let op = x;
@@ -240,6 +274,40 @@ unsafe extern "sysv64-unwind" fn h_OP_GET_UDATA_KS(L: *mut lua_State, mut pc: *c
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_UDATA_KS;
     let op = x;
@@ -356,6 +424,40 @@ unsafe extern "sysv64-unwind" fn h_OP_SET_UDATA_KS(L: *mut lua_State, mut pc: *c
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SET_UDATA_KS;
     let op = x;
@@ -472,6 +574,40 @@ unsafe extern "sysv64-unwind" fn h_OP_NAMECALL_UDATA(L: *mut lua_State, mut pc: 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NAMECALL_UDATA;
     let op = x;
@@ -588,6 +724,40 @@ unsafe extern "sysv64-unwind" fn h_OP_NOP(L: *mut lua_State, mut pc: *const Inst
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NOP;
     let op = x;
@@ -702,6 +872,40 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_NIL(L: *mut lua_State, mut pc: *const
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_LOAD_NIL;
     let op = x;
@@ -817,6 +1021,40 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_B(L: *mut lua_State, mut pc: *const I
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_LOAD_B;
     let op = x;
@@ -933,6 +1171,40 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_N(L: *mut lua_State, mut pc: *const I
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_LOAD_N;
     let op = x;
@@ -1048,6 +1320,40 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_K(L: *mut lua_State, mut pc: *const I
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_LOAD_K;
     let op = x;
@@ -1163,6 +1469,40 @@ unsafe extern "sysv64-unwind" fn h_OP_MOVE(L: *mut lua_State, mut pc: *const Ins
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_MOVE;
     let op = x;
@@ -1296,6 +1636,40 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_GLOBAL(L: *mut lua_State, mut pc: *con
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_GLOBAL;
     let op = x;
@@ -1425,6 +1799,40 @@ unsafe extern "sysv64-unwind" fn h_OP_SET_GLOBAL(L: *mut lua_State, mut pc: *con
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SET_GLOBAL;
     let op = x;
@@ -1569,6 +1977,40 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_UPVAL(L: *mut lua_State, mut pc: *cons
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_UPVAL;
     let op = x;
@@ -1703,6 +2145,40 @@ unsafe extern "sysv64-unwind" fn s_OP_SET_UPVAL(L: *mut lua_State, mut pc: *cons
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SET_UPVAL;
     let op = x;
@@ -1821,6 +2297,40 @@ unsafe extern "sysv64-unwind" fn h_OP_CLOSE_UPVALS(L: *mut lua_State, mut pc: *c
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_CLOSE_UPVALS;
     let op = x;
@@ -1955,6 +2465,40 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_IMPORT(L: *mut lua_State, mut pc: *con
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_IMPORT;
     let op = x;
@@ -2100,6 +2644,40 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_TABLE_KS(L: *mut lua_State, mut pc: *c
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_TABLE_KS;
     let op = x;
@@ -2318,6 +2896,40 @@ unsafe extern "sysv64-unwind" fn s_OP_SET_TABLE_KS(L: *mut lua_State, mut pc: *c
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SET_TABLE_KS;
     let op = x;
@@ -2504,6 +3116,40 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_TABLE(L: *mut lua_State, mut pc: *cons
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_TABLE;
     let op = x;
@@ -2677,6 +3323,40 @@ unsafe extern "sysv64-unwind" fn s_OP_SET_TABLE(L: *mut lua_State, mut pc: *cons
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SET_TABLE;
     let op = x;
@@ -2829,6 +3509,40 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_TABLE_N(L: *mut lua_State, mut pc: *co
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_TABLE_N;
     let op = x;
@@ -2981,6 +3695,40 @@ unsafe extern "sysv64-unwind" fn s_OP_SET_TABLE_N(L: *mut lua_State, mut pc: *co
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SET_TABLE_N;
     let op = x;
@@ -3109,6 +3857,40 @@ unsafe extern "sysv64-unwind" fn h_OP_NEW_CLOSURE(L: *mut lua_State, mut pc: *co
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NEW_CLOSURE;
     let op = x;
@@ -3300,6 +4082,40 @@ unsafe extern "sysv64-unwind" fn s_OP_NAMECALL(L: *mut lua_State, mut pc: *const
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NAMECALL;
     let op = x;
@@ -3609,6 +4425,40 @@ unsafe extern "sysv64-unwind" fn s_OP_CALL(L: *mut lua_State, mut pc: *const Ins
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_CALL;
     let op = x;
@@ -3910,6 +4760,40 @@ unsafe extern "sysv64-unwind" fn s_OP_CALL_FB(L: *mut lua_State, mut pc: *const 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_CALL_FB;
     let op = x;
@@ -4142,6 +5026,40 @@ unsafe extern "sysv64-unwind" fn s_OP_RETURN(L: *mut lua_State, mut pc: *const I
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_RETURN;
     let op = x;
@@ -4287,6 +5205,40 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP(L: *mut lua_State, mut pc: *const Ins
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP;
     let op = x;
@@ -4401,6 +5353,40 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP_IF(L: *mut lua_State, mut pc: *const 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_IF;
     let op = x;
@@ -4518,6 +5504,40 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP_IF_NOT(L: *mut lua_State, mut pc: *co
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_IF_NOT;
     let op = x;
@@ -4664,6 +5684,40 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_EQ(L: *mut lua_State, mut pc: *con
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_IF_EQ;
     let op = x;
@@ -4857,6 +5911,40 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_NOT_EQ(L: *mut lua_State, mut pc: 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_IF_NOT_EQ;
     let op = x;
@@ -5043,6 +6131,40 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_LE(L: *mut lua_State, mut pc: *con
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_IF_LE;
     let op = x;
@@ -5203,6 +6325,40 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_NOT_LE(L: *mut lua_State, mut pc: 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_IF_NOT_LE;
     let op = x;
@@ -5363,6 +6519,40 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_LT(L: *mut lua_State, mut pc: *con
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_IF_LT;
     let op = x;
@@ -5523,6 +6713,40 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_NOT_LT(L: *mut lua_State, mut pc: 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_IF_NOT_LT;
     let op = x;
@@ -5686,6 +6910,40 @@ unsafe extern "sysv64-unwind" fn s_OP_ADD(L: *mut lua_State, mut pc: *const Inst
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_ADD;
     let op = x;
@@ -5839,6 +7097,40 @@ unsafe extern "sysv64-unwind" fn s_OP_SUB(L: *mut lua_State, mut pc: *const Inst
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SUB;
     let op = x;
@@ -5992,6 +7284,40 @@ unsafe extern "sysv64-unwind" fn s_OP_MUL(L: *mut lua_State, mut pc: *const Inst
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_MUL;
     let op = x;
@@ -6132,6 +7458,40 @@ unsafe extern "sysv64-unwind" fn s_OP_DIV(L: *mut lua_State, mut pc: *const Inst
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_DIV;
     let op = x;
@@ -6265,6 +7625,40 @@ unsafe extern "sysv64-unwind" fn s_OP_I_DIV(L: *mut lua_State, mut pc: *const In
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_I_DIV;
     let op = x;
@@ -6398,6 +7792,40 @@ unsafe extern "sysv64-unwind" fn s_OP_MOD(L: *mut lua_State, mut pc: *const Inst
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_MOD;
     let op = x;
@@ -6520,6 +7948,40 @@ unsafe extern "sysv64-unwind" fn h_OP_POW(L: *mut lua_State, mut pc: *const Inst
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_POW;
     let op = x;
@@ -6660,6 +8122,40 @@ unsafe extern "sysv64-unwind" fn s_OP_ADD_K(L: *mut lua_State, mut pc: *const In
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_ADD_K;
     let op = x;
@@ -6800,6 +8296,40 @@ unsafe extern "sysv64-unwind" fn s_OP_SUB_K(L: *mut lua_State, mut pc: *const In
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SUB_K;
     let op = x;
@@ -6940,6 +8470,40 @@ unsafe extern "sysv64-unwind" fn s_OP_MUL_K(L: *mut lua_State, mut pc: *const In
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_MUL_K;
     let op = x;
@@ -7073,6 +8637,40 @@ unsafe extern "sysv64-unwind" fn s_OP_DIV_K(L: *mut lua_State, mut pc: *const In
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_DIV_K;
     let op = x;
@@ -7206,6 +8804,40 @@ unsafe extern "sysv64-unwind" fn s_OP_I_DIV_K(L: *mut lua_State, mut pc: *const 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_I_DIV_K;
     let op = x;
@@ -7339,6 +8971,40 @@ unsafe extern "sysv64-unwind" fn s_OP_MOD_K(L: *mut lua_State, mut pc: *const In
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_MOD_K;
     let op = x;
@@ -7490,6 +9156,40 @@ unsafe extern "sysv64-unwind" fn s_OP_POW_K(L: *mut lua_State, mut pc: *const In
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_POW_K;
     let op = x;
@@ -7623,6 +9323,40 @@ unsafe extern "sysv64-unwind" fn h_OP_AND(L: *mut lua_State, mut pc: *const Inst
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_AND;
     let op = x;
@@ -7739,6 +9473,40 @@ unsafe extern "sysv64-unwind" fn h_OP_OR(L: *mut lua_State, mut pc: *const Instr
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_OR;
     let op = x;
@@ -7855,6 +9623,40 @@ unsafe extern "sysv64-unwind" fn h_OP_AND_K(L: *mut lua_State, mut pc: *const In
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_AND_K;
     let op = x;
@@ -7971,6 +9773,40 @@ unsafe extern "sysv64-unwind" fn h_OP_OR_K(L: *mut lua_State, mut pc: *const Ins
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_OR_K;
     let op = x;
@@ -8087,6 +9923,40 @@ unsafe extern "sysv64-unwind" fn h_OP_CONCAT(L: *mut lua_State, mut pc: *const I
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_CONCAT;
     let op = x;
@@ -8219,6 +10089,40 @@ unsafe extern "sysv64-unwind" fn s_OP_NOT(L: *mut lua_State, mut pc: *const Inst
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NOT;
     let op = x;
@@ -8352,6 +10256,40 @@ unsafe extern "sysv64-unwind" fn s_OP_MINUS(L: *mut lua_State, mut pc: *const In
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_MINUS;
     let op = x;
@@ -8509,6 +10447,40 @@ unsafe extern "sysv64-unwind" fn s_OP_LENGTH(L: *mut lua_State, mut pc: *const I
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_LENGTH;
     let op = x;
@@ -8637,6 +10609,40 @@ unsafe extern "sysv64-unwind" fn h_OP_NEW_TABLE(L: *mut lua_State, mut pc: *cons
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NEW_TABLE;
     let op = x;
@@ -8756,6 +10762,40 @@ unsafe extern "sysv64-unwind" fn h_OP_DUP_TABLE(L: *mut lua_State, mut pc: *cons
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_DUP_TABLE;
     let op = x;
@@ -8873,6 +10913,40 @@ unsafe extern "sysv64-unwind" fn h_OP_SET_LIST(L: *mut lua_State, mut pc: *const
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SET_LIST;
     let op = x;
@@ -9009,6 +11083,40 @@ unsafe extern "sysv64-unwind" fn h_OP_FOR_N_PREP(L: *mut lua_State, mut pc: *con
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FOR_N_PREP;
     let op = x;
@@ -9038,7 +11146,8 @@ unsafe extern "sysv64-unwind" fn h_OP_FOR_N_LOOP(L: *mut lua_State, pc: *const I
     macro_rules! jump { ($n:expr) => { become dispatch(L, pc.offset($n as isize), base, k) }; }
     let insn = *pc;
     let x: u8 = OP_FOR_N_LOOP;
-if (*(*L).global).cb.interrupt.is_some() || luaC_needsGC(L) {
+// (with tracing on, the full handler: it has the tracing JIT's hook)
+if (*(*L).global).cb.interrupt.is_some() || luaC_needsGC(L) || crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
     slow!();
 }
 let ra = base.add(ia(insn) as usize);
@@ -9163,6 +11272,40 @@ unsafe extern "sysv64-unwind" fn s_OP_FOR_N_LOOP(L: *mut lua_State, mut pc: *con
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FOR_N_LOOP;
     let op = x;
@@ -9179,12 +11322,7 @@ unsafe extern "sysv64-unwind" fn s_OP_FOR_N_LOOP(L: *mut lua_State, mut pc: *con
                 // instruction fetch to the floating point compare
                 if if step > 0.0 { idx <= limit } else { limit <= idx } {
                     pc = pc.offset(id(insn));
-                    if SS && crate::jit::state::trace_enabled() {
-                        let p = (*(*L).ci).p;
-                        if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
-                            pc = (*p).code.add(resume as usize);
-                        }
-                    }
+                    trace_backedge!();
                 } else {
                     std::hint::cold_path();
                 }
@@ -9297,6 +11435,40 @@ unsafe extern "sysv64-unwind" fn h_OP_FOR_G_PREP(L: *mut lua_State, mut pc: *con
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FOR_G_PREP;
     let op = x;
@@ -9356,7 +11528,8 @@ unsafe extern "sysv64-unwind" fn h_OP_FOR_G_LOOP(L: *mut lua_State, pc: *const I
     let x: u8 = OP_FOR_G_LOOP;
 // pairs/ipairs/generalized iteration over a table (array and hash part);
 // interrupts, GC steps and iterator functions take the full handler
-if (*(*L).global).cb.interrupt.is_some() || luaC_needsGC(L) {
+// (with tracing on, the full handler: it has the tracing JIT's hook)
+if (*(*L).global).cb.interrupt.is_some() || luaC_needsGC(L) || crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
     slow!();
 }
 let ra = base.add(ia(insn) as usize);
@@ -9500,6 +11673,40 @@ unsafe extern "sysv64-unwind" fn s_OP_FOR_G_LOOP(L: *mut lua_State, mut pc: *con
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FOR_G_LOOP;
     let op = x;
@@ -9559,11 +11766,8 @@ unsafe extern "sysv64-unwind" fn s_OP_FOR_G_LOOP(L: *mut lua_State, mut pc: *con
                     }
                     if !found {
                         pc = pc.add(1);
-                    } else if SS && crate::jit::state::trace_enabled() {
-                        let p = (*(*L).ci).p;
-                        if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
-                            pc = (*p).code.add(resume as usize);
-                        }
+                    } else {
+                        trace_backedge!();
                     }
                 } else {
                     (*(*(*L).ci).p).execcount += 1;
@@ -9689,6 +11893,40 @@ unsafe extern "sysv64-unwind" fn h_OP_FOR_G_PREP_INEXT(L: *mut lua_State, mut pc
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FOR_G_PREP_INEXT;
     let op = x;
@@ -9813,6 +12051,40 @@ unsafe extern "sysv64-unwind" fn h_OP_FOR_G_PREP_NEXT(L: *mut lua_State, mut pc:
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FOR_G_PREP_NEXT;
     let op = x;
@@ -9938,6 +12210,40 @@ unsafe extern "sysv64-unwind" fn h_OP_NATIVE_CALL(L: *mut lua_State, mut pc: *co
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NATIVE_CALL;
     let op = x;
@@ -10053,6 +12359,40 @@ unsafe extern "sysv64-unwind" fn h_OP_GET_VARARGS(L: *mut lua_State, mut pc: *co
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_VARARGS;
     let op = x;
@@ -10189,6 +12529,40 @@ unsafe extern "sysv64-unwind" fn h_OP_DUP_CLOSURE(L: *mut lua_State, mut pc: *co
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_DUP_CLOSURE;
     let op = x;
@@ -10367,6 +12741,40 @@ unsafe extern "sysv64-unwind" fn s_OP_PREP_VARARGS(L: *mut lua_State, mut pc: *c
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_PREP_VARARGS;
     let op = x;
@@ -10396,7 +12804,8 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP_BACK(L: *mut lua_State, pc: *const In
     macro_rules! jump { ($n:expr) => { become dispatch(L, pc.offset($n as isize), base, k) }; }
     let insn = *pc;
     let x: u8 = OP_JUMP_BACK;
-if (*(*L).global).cb.interrupt.is_some() || luaC_needsGC(L) {
+// (with tracing on, the full handler: it has the tracing JIT's hook)
+if (*(*L).global).cb.interrupt.is_some() || luaC_needsGC(L) || crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
     slow!();
 }
 (*(*(*L).ci).p).execcount += 1;
@@ -10509,6 +12918,40 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_BACK(L: *mut lua_State, mut pc: *cons
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_BACK;
     let op = x;
@@ -10517,12 +12960,7 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_BACK(L: *mut lua_State, mut pc: *cons
                 check_gc!();
                 (*(*(*L).ci).p).execcount += 1;
                 pc = pc.add(1).offset(id(insn));
-                if SS && crate::jit::state::trace_enabled() {
-                    let p = (*(*L).ci).p;
-                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
-                        pc = (*p).code.add(resume as usize);
-                    }
-                }
+                trace_backedge!();
     }
     become dispatch(L, pc, base, k);
 }
@@ -10632,6 +13070,40 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_KX(L: *mut lua_State, mut pc: *const 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_LOAD_KX;
     let op = x;
@@ -10748,6 +13220,40 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP_X(L: *mut lua_State, mut pc: *const I
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_X;
     let op = x;
@@ -10864,6 +13370,40 @@ unsafe extern "sysv64-unwind" fn h_OP_FAST_CALL(L: *mut lua_State, mut pc: *cons
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FAST_CALL;
     let op = x;
@@ -10995,6 +13535,40 @@ unsafe extern "sysv64-unwind" fn h_OP_COVERAGE(L: *mut lua_State, mut pc: *const
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_COVERAGE;
     let op = x;
@@ -11132,6 +13706,40 @@ unsafe extern "sysv64-unwind" fn s_OP_SUB_RK(L: *mut lua_State, mut pc: *const I
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SUB_RK;
     let op = x;
@@ -11272,6 +13880,40 @@ unsafe extern "sysv64-unwind" fn s_OP_DIV_RK(L: *mut lua_State, mut pc: *const I
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_DIV_RK;
     let op = x;
@@ -11529,6 +14171,40 @@ unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL1(L: *mut lua_State, mut pc: *con
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FAST_CALL1;
     let op = x;
@@ -11804,6 +14480,40 @@ unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL2(L: *mut lua_State, mut pc: *con
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FAST_CALL2;
     let op = x;
@@ -12081,6 +14791,40 @@ unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL2_K(L: *mut lua_State, mut pc: *c
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FAST_CALL2_K;
     let op = x;
@@ -12285,6 +15029,40 @@ unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL3(L: *mut lua_State, mut pc: *con
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FAST_CALL3;
     let op = x;
@@ -12421,6 +15199,40 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP_X_EQ_K_NIL(L: *mut lua_State, mut pc:
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_X_EQ_K_NIL;
     let op = x;
@@ -12552,6 +15364,40 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_X_EQ_K_B(L: *mut lua_State, mut pc: *
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_X_EQ_K_B;
     let op = x;
@@ -12685,6 +15531,40 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_X_EQ_K_N(L: *mut lua_State, mut pc: *
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_X_EQ_K_N;
     let op = x;
@@ -12819,6 +15699,40 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_X_EQ_K_S(L: *mut lua_State, mut pc: *
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_X_EQ_K_S;
     let op = x;
@@ -12938,6 +15852,40 @@ unsafe extern "sysv64-unwind" fn h_OP_CMP_PROTO(L: *mut lua_State, mut pc: *cons
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_CMP_PROTO;
     let op = x;
@@ -13057,6 +16005,40 @@ unsafe extern "sysv64-unwind" fn h_OP_FAST_P_CALL(L: *mut lua_State, mut pc: *co
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FAST_P_CALL;
     let op = x;
@@ -13209,6 +16191,40 @@ unsafe extern "sysv64-unwind" fn h_OP_NEW_CLASS_MEMBER(L: *mut lua_State, mut pc
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NEW_CLASS_MEMBER;
     let op = x;
@@ -13332,6 +16348,40 @@ unsafe extern "sysv64-unwind" fn h_OP_NEW_CLASS(L: *mut lua_State, mut pc: *cons
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NEW_CLASS;
     let op = x;
@@ -13461,6 +16511,40 @@ unsafe extern "sysv64-unwind" fn h_OP_CONSTRUCT(L: *mut lua_State, mut pc: *cons
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_CONSTRUCT;
     let op = x;
@@ -13580,6 +16664,40 @@ unsafe extern "sysv64-unwind" fn h_OP_FIN_CONSTRUCT(L: *mut lua_State, mut pc: *
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FIN_CONSTRUCT;
     let op = x;
@@ -13710,6 +16828,40 @@ unsafe extern "sysv64-unwind" fn h_OP_GET_PRIVATE_FIELD(L: *mut lua_State, mut p
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_PRIVATE_FIELD;
     let op = x;
@@ -13829,6 +16981,40 @@ unsafe extern "sysv64-unwind" fn h_OP_SET_PRIVATE_FIELD(L: *mut lua_State, mut p
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SET_PRIVATE_FIELD;
     let op = x;
@@ -13948,6 +17134,40 @@ unsafe extern "sysv64-unwind" fn h_DEFAULT(L: *mut lua_State, mut pc: *const Ins
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = op_of(*pc);
     let op = x;
@@ -14163,6 +17383,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NOP(L: *mut lua_State, mut pc:
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NOP;
     let op = x;
@@ -14277,6 +17531,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_NIL(L: *mut lua_State, mu
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_LOAD_NIL;
     let op = x;
@@ -14392,6 +17680,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_B(L: *mut lua_State, mut 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_LOAD_B;
     let op = x;
@@ -14508,6 +17830,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_N(L: *mut lua_State, mut 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_LOAD_N;
     let op = x;
@@ -14623,6 +17979,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_K(L: *mut lua_State, mut 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_LOAD_K;
     let op = x;
@@ -14738,6 +18128,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MOVE(L: *mut lua_State, mut pc
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_MOVE;
     let op = x;
@@ -14853,6 +18277,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_GLOBAL(L: *mut lua_State, 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_GLOBAL;
     let op = x;
@@ -14982,6 +18440,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_GLOBAL(L: *mut lua_State, 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SET_GLOBAL;
     let op = x;
@@ -15112,6 +18604,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_UPVAL(L: *mut lua_State, m
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_UPVAL;
     let op = x;
@@ -15229,6 +18755,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_UPVAL(L: *mut lua_State, m
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SET_UPVAL;
     let op = x;
@@ -15347,6 +18907,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CLOSE_UPVALS(L: *mut lua_State
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_CLOSE_UPVALS;
     let op = x;
@@ -15465,6 +19059,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_IMPORT(L: *mut lua_State, 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_IMPORT;
     let op = x;
@@ -15589,6 +19217,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_TABLE_KS(L: *mut lua_State
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_TABLE_KS;
     let op = x;
@@ -15780,6 +19442,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_TABLE_KS(L: *mut lua_State
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SET_TABLE_KS;
     let op = x;
@@ -15932,6 +19628,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_TABLE(L: *mut lua_State, m
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_TABLE;
     let op = x;
@@ -16059,6 +19789,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_TABLE(L: *mut lua_State, m
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SET_TABLE;
     let op = x;
@@ -16191,6 +19955,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_TABLE_N(L: *mut lua_State,
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_TABLE_N;
     let op = x;
@@ -16318,6 +20116,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_TABLE_N(L: *mut lua_State,
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SET_TABLE_N;
     let op = x;
@@ -16446,6 +20278,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_CLOSURE(L: *mut lua_State,
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NEW_CLOSURE;
     let op = x;
@@ -16576,6 +20442,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NAMECALL(L: *mut lua_State, mu
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NAMECALL;
     let op = x;
@@ -16776,6 +20676,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP(L: *mut lua_State, mut pc
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP;
     let op = x;
@@ -16890,6 +20824,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF(L: *mut lua_State, mut
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_IF;
     let op = x;
@@ -17007,6 +20975,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT(L: *mut lua_State,
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_IF_NOT;
     let op = x;
@@ -17124,6 +21126,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_EQ(L: *mut lua_State, 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_IF_EQ;
     let op = x;
@@ -17288,6 +21324,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT_EQ(L: *mut lua_Sta
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_IF_NOT_EQ;
     let op = x;
@@ -17452,6 +21522,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_LE(L: *mut lua_State, 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_IF_LE;
     let op = x;
@@ -17590,6 +21694,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT_LE(L: *mut lua_Sta
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_IF_NOT_LE;
     let op = x;
@@ -17728,6 +21866,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_LT(L: *mut lua_State, 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_IF_LT;
     let op = x;
@@ -17866,6 +22038,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT_LT(L: *mut lua_Sta
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_IF_NOT_LT;
     let op = x;
@@ -18004,6 +22210,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_ADD(L: *mut lua_State, mut pc:
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_ADD;
     let op = x;
@@ -18132,6 +22372,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SUB(L: *mut lua_State, mut pc:
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SUB;
     let op = x;
@@ -18260,6 +22534,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MUL(L: *mut lua_State, mut pc:
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_MUL;
     let op = x;
@@ -18375,6 +22683,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DIV(L: *mut lua_State, mut pc:
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_DIV;
     let op = x;
@@ -18490,6 +22832,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_I_DIV(L: *mut lua_State, mut p
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_I_DIV;
     let op = x;
@@ -18605,6 +22981,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MOD(L: *mut lua_State, mut pc:
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_MOD;
     let op = x;
@@ -18727,6 +23137,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_POW(L: *mut lua_State, mut pc:
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_POW;
     let op = x;
@@ -18849,6 +23293,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_ADD_K(L: *mut lua_State, mut p
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_ADD_K;
     let op = x;
@@ -18971,6 +23449,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SUB_K(L: *mut lua_State, mut p
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SUB_K;
     let op = x;
@@ -19093,6 +23605,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MUL_K(L: *mut lua_State, mut p
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_MUL_K;
     let op = x;
@@ -19208,6 +23754,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DIV_K(L: *mut lua_State, mut p
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_DIV_K;
     let op = x;
@@ -19323,6 +23903,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_I_DIV_K(L: *mut lua_State, mut
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_I_DIV_K;
     let op = x;
@@ -19438,6 +24052,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MOD_K(L: *mut lua_State, mut p
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_MOD_K;
     let op = x;
@@ -19560,6 +24208,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_POW_K(L: *mut lua_State, mut p
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_POW_K;
     let op = x;
@@ -19693,6 +24375,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_AND(L: *mut lua_State, mut pc:
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_AND;
     let op = x;
@@ -19809,6 +24525,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_OR(L: *mut lua_State, mut pc: 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_OR;
     let op = x;
@@ -19925,6 +24675,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_AND_K(L: *mut lua_State, mut p
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_AND_K;
     let op = x;
@@ -20041,6 +24825,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_OR_K(L: *mut lua_State, mut pc
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_OR_K;
     let op = x;
@@ -20157,6 +24975,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CONCAT(L: *mut lua_State, mut 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_CONCAT;
     let op = x;
@@ -20276,6 +25128,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NOT(L: *mut lua_State, mut pc:
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NOT;
     let op = x;
@@ -20392,6 +25278,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MINUS(L: *mut lua_State, mut p
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_MINUS;
     let op = x;
@@ -20525,6 +25445,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LENGTH(L: *mut lua_State, mut 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_LENGTH;
     let op = x;
@@ -20653,6 +25607,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_TABLE(L: *mut lua_State, m
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NEW_TABLE;
     let op = x;
@@ -20772,6 +25760,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DUP_TABLE(L: *mut lua_State, m
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_DUP_TABLE;
     let op = x;
@@ -20889,6 +25911,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_LIST(L: *mut lua_State, mu
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SET_LIST;
     let op = x;
@@ -21025,6 +26081,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_N_PREP(L: *mut lua_State, 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FOR_N_PREP;
     let op = x;
@@ -21152,6 +26242,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_N_LOOP(L: *mut lua_State, 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FOR_N_LOOP;
     let op = x;
@@ -21168,12 +26292,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_N_LOOP(L: *mut lua_State, 
                 // instruction fetch to the floating point compare
                 if if step > 0.0 { idx <= limit } else { limit <= idx } {
                     pc = pc.offset(id(insn));
-                    if SS && crate::jit::state::trace_enabled() {
-                        let p = (*(*L).ci).p;
-                        if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
-                            pc = (*p).code.add(resume as usize);
-                        }
-                    }
+                    trace_backedge!();
                 } else {
                     std::hint::cold_path();
                 }
@@ -21286,6 +26405,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_PREP(L: *mut lua_State, 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FOR_G_PREP;
     let op = x;
@@ -21441,6 +26594,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_LOOP(L: *mut lua_State, 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FOR_G_LOOP;
     let op = x;
@@ -21500,11 +26687,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_LOOP(L: *mut lua_State, 
                     }
                     if !found {
                         pc = pc.add(1);
-                    } else if SS && crate::jit::state::trace_enabled() {
-                        let p = (*(*L).ci).p;
-                        if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
-                            pc = (*p).code.add(resume as usize);
-                        }
+                    } else {
+                        trace_backedge!();
                     }
                 } else {
                     (*(*(*L).ci).p).execcount += 1;
@@ -21630,6 +26814,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_PREP_INEXT(L: *mut lua_S
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FOR_G_PREP_INEXT;
     let op = x;
@@ -21754,6 +26972,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_PREP_NEXT(L: *mut lua_St
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FOR_G_PREP_NEXT;
     let op = x;
@@ -21879,6 +27131,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NATIVE_CALL(L: *mut lua_State,
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NATIVE_CALL;
     let op = x;
@@ -21994,6 +27280,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_VARARGS(L: *mut lua_State,
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_VARARGS;
     let op = x;
@@ -22130,6 +27450,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DUP_CLOSURE(L: *mut lua_State,
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_DUP_CLOSURE;
     let op = x;
@@ -22277,6 +27631,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_PREP_VARARGS(L: *mut lua_State
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_PREP_VARARGS;
     let op = x;
@@ -22404,6 +27792,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_BACK(L: *mut lua_State, m
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_BACK;
     let op = x;
@@ -22412,12 +27834,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_BACK(L: *mut lua_State, m
                 check_gc!();
                 (*(*(*L).ci).p).execcount += 1;
                 pc = pc.add(1).offset(id(insn));
-                if SS && crate::jit::state::trace_enabled() {
-                    let p = (*(*L).ci).p;
-                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
-                        pc = (*p).code.add(resume as usize);
-                    }
-                }
+                trace_backedge!();
     }
     return pc;
 }
@@ -22527,6 +27944,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_KX(L: *mut lua_State, mut
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_LOAD_KX;
     let op = x;
@@ -22643,6 +28094,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X(L: *mut lua_State, mut 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_X;
     let op = x;
@@ -22759,6 +28244,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL(L: *mut lua_State, m
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FAST_CALL;
     let op = x;
@@ -22890,6 +28409,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_COVERAGE(L: *mut lua_State, mu
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_COVERAGE;
     let op = x;
@@ -23009,6 +28562,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SUB_RK(L: *mut lua_State, mut 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SUB_RK;
     let op = x;
@@ -23131,6 +28718,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DIV_RK(L: *mut lua_State, mut 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_DIV_RK;
     let op = x;
@@ -23257,6 +28878,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL1(L: *mut lua_State, 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FAST_CALL1;
     let op = x;
@@ -23387,6 +29042,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL2(L: *mut lua_State, 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FAST_CALL2;
     let op = x;
@@ -23519,6 +29208,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL2_K(L: *mut lua_State
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FAST_CALL2_K;
     let op = x;
@@ -23651,6 +29374,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL3(L: *mut lua_State, 
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FAST_CALL3;
     let op = x;
@@ -23787,6 +29544,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_NIL(L: *mut lua_St
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_X_EQ_K_NIL;
     let op = x;
@@ -23904,6 +29695,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_B(L: *mut lua_Stat
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_X_EQ_K_B;
     let op = x;
@@ -24022,6 +29847,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_N(L: *mut lua_Stat
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_X_EQ_K_N;
     let op = x;
@@ -24141,6 +30000,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_S(L: *mut lua_Stat
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_JUMP_X_EQ_K_S;
     let op = x;
@@ -24260,6 +30153,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CMP_PROTO(L: *mut lua_State, m
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_CMP_PROTO;
     let op = x;
@@ -24379,6 +30306,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_CLASS_MEMBER(L: *mut lua_S
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NEW_CLASS_MEMBER;
     let op = x;
@@ -24502,6 +30463,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_CLASS(L: *mut lua_State, m
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_NEW_CLASS;
     let op = x;
@@ -24631,6 +30626,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CONSTRUCT(L: *mut lua_State, m
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_CONSTRUCT;
     let op = x;
@@ -24750,6 +30779,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FIN_CONSTRUCT(L: *mut lua_Stat
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_FIN_CONSTRUCT;
     let op = x;
@@ -24880,6 +30943,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_PRIVATE_FIELD(L: *mut lua_
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_GET_PRIVATE_FIELD;
     let op = x;
@@ -24999,6 +31096,40 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_PRIVATE_FIELD(L: *mut lua_
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return std::ptr::null();
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     let insn = *pc;
     let x: u8 = OP_SET_PRIVATE_FIELD;
     let op = x;

@@ -79,6 +79,12 @@ pub struct Recorder {
     pending_c: Option<(usize, usize, u32)>,
     /// the trace stores to upvalues (their loads aren't loop-invariant)
     ustores: bool,
+    /// metamethods being recorded (innermost last): (frame depth, the
+    /// result's trace slot, the snapshot resuming at the instruction)
+    mm: Vec<(usize, usize, SnapId)>,
+    /// tables created inside metamethods (the only ones they may change:
+    /// an exit there re-runs the metamethod)
+    fresh: Vec<Ref>,
 }
 
 /// `Op::Builtin::nres` for a call taking every result (the trace checks
@@ -152,6 +158,8 @@ impl Recorder {
             inserts: false,
             pending_c: None,
             ustores: false,
+            mm: Vec::new(),
+            fresh: Vec::new(),
         }
     }
 
@@ -528,6 +536,12 @@ impl Recorder {
         } else if o(O::Move) {
             let v = self.read(bb, base)?;
             self.b.set_slot(a, v);
+        } else if (o(O::Add) || o(O::Sub) || o(O::Mul) || o(O::Div)) && ((*base.add(bb)).tt == LUA_TTABLE || (*base.add(c)).tt == LUA_TTABLE) {
+            self.record_arith_mm(op, a, bb, Some(c), None, base)?;
+        } else if (o(O::AddK) || o(O::SubK) || o(O::MulK) || o(O::DivK)) && (*base.add(bb)).tt == LUA_TTABLE {
+            self.record_arith_mm(op, a, bb, None, Some(c), base)?;
+        } else if o(O::Minus) && (*base.add(bb)).tt == LUA_TTABLE {
+            self.record_arith_mm(op, a, bb, Some(bb), None, base)?;
         } else if o(O::Add) || o(O::Sub) || o(O::Mul) || o(O::Div) || o(O::Mod) || o(O::Pow) || o(O::IDiv) {
             let x = self.read_num(bb, base)?;
             let y = self.read_num(c, base)?;
@@ -873,6 +887,7 @@ impl Recorder {
             };
             Self::observe_array(base, bb, i, true)?;
             let t = self.read(bb, base)?;
+            self.mm_store_ok(Some(t))?;
             let snap = self.b.snapshot();
             self.b.emit(Op::GuardPlainTable { t, store: true, snap }, IrType::Nil);
             let idx = if o(O::SetTableN) { self.b.ki32(c as i32) } else { self.index_of(c, base)?.0 };
@@ -943,6 +958,7 @@ impl Recorder {
                 (((*cl).env), self.b.emit(Op::ClEnv { cl: clr }, IrType::Ptr))
             };
             let v = self.read(a, base)?;
+            self.mm_store_ok(Some(t))?;
             let (p, _) = match self.field_ref(h, t, kidx, true) {
                 Ok(x) => x,
                 // a new key: generic store
@@ -975,6 +991,9 @@ impl Recorder {
         } else if o(O::NewTable) {
             let nhash = if bb == 0 { 0 } else { 1u32 << (bb - 1) };
             let v = self.b.emit(Op::NewTable { narray: aux, nhash }, IrType::Table);
+            if !self.mm.is_empty() {
+                self.fresh.push(v);
+            }
             self.b.set_slot(a, v);
         } else if o(O::DupTable) {
             let kv = (*proto).k.add(d_of(insn) as usize);
@@ -983,6 +1002,9 @@ impl Recorder {
             }
             let tpl = self.b.kptr((*kv).value.gc as usize, IrType::Table);
             let v = self.b.emit(Op::DupTable { tpl }, IrType::Table);
+            if !self.mm.is_empty() {
+                self.fresh.push(v);
+            }
             self.b.set_slot(a, v);
         } else if o(O::SetList) {
             // R(A)[aux + i] = R(B + i): one store each
@@ -1006,6 +1028,8 @@ impl Recorder {
                 _ => self.b.kbool(false),
             };
             self.b.set_slot(a, v);
+        } else if (o(O::Concat) || o(O::SetUpval)) && !self.mm.is_empty() {
+            return Err(unsupported_type("side effect inside a metamethod"));
         } else if o(O::Concat) {
             for s in bb..=c {
                 let tt = (*base.add(s)).tt;
@@ -1258,6 +1282,7 @@ impl Recorder {
             return Err(unsupported_type("store into a table with a metatable"));
         }
         let t = self.read(tslot, base)?;
+        self.mm_store_ok(Some(t))?;
         let snap = self.b.snapshot();
         self.b.emit(Op::GuardPlainTable { t, store: true, snap }, IrType::Nil);
         let buf = Box::leak(vec![0u64; 4].into_boxed_slice()).as_mut_ptr() as usize;
@@ -1272,9 +1297,13 @@ impl Recorder {
         use luau_common::bytecode::BuiltinFunction as B;
         let op = op_of(insn);
         let bfid = a_of(insn) as u8;
-        let banned = [B::Rawset, B::TableUnpack, B::SelectVararg, B::Setmetatable, B::TableClear, B::Vector];
+        let banned = [B::Rawset, B::TableUnpack, B::SelectVararg, B::TableClear, B::Vector];
         if banned.iter().any(|&b| b as u8 == bfid) {
             return Err(AbortReason::UnsupportedOpcode(builtin_name(bfid)));
+        }
+        let writes = [B::TableInsert, B::BufferWriteU8, B::BufferWriteU16, B::BufferWriteU32, B::BufferWriteF32, B::BufferWriteF64, B::BufferWriteInteger];
+        if !self.mm.is_empty() && writes.iter().any(|&b| b as u8 == bfid) {
+            return Err(unsupported_type("side effect inside a metamethod"));
         }
         if bfid == B::TableInsert as u8 {
             self.inserts = true;
@@ -1324,6 +1353,9 @@ impl Recorder {
             if self.b.trace.ty(*a) == IrType::Vector {
                 return Err(unsupported_type("vector builtin argument"));
             }
+        }
+        if bfid == B::Setmetatable as u8 {
+            self.mm_store_ok(Some(args[0]))?;
         }
         self.guard_safeenv(clr);
         let buf = Box::leak(vec![0u64; 8].into_boxed_slice()).as_mut_ptr() as usize;
@@ -1409,6 +1441,112 @@ impl Recorder {
         top.checked_sub(self.b.off + a + 1).ok_or(AbortReason::Internal("stack top below the call".into()))
     }
 
+    /// Arithmetic on a table with a metamethod (a Lua function), recorded
+    /// as a call to it: its frame sits where `callTMluau` puts it (at the
+    /// stack top), its one result goes to R(a). Exits inside resume at the
+    /// arithmetic instruction (the interpreter re-runs the metamethod).
+    unsafe fn record_arith_mm(&mut self, op: u8, a: usize, bb: usize, c: Option<usize>, kc: Option<usize>, base: StkId) -> R<()> {
+        use crate::ltm::*;
+        let o = |x: O| op == x as u8;
+        let event = if o(O::Add) || o(O::AddK) {
+            TM_ADD
+        } else if o(O::Sub) || o(O::SubK) {
+            TM_SUB
+        } else if o(O::Mul) || o(O::MulK) {
+            TM_MUL
+        } else if o(O::Div) || o(O::DivK) {
+            TM_DIV
+        } else {
+            TM_UNM
+        };
+        let rb = base.add(bb);
+        let rc: *const TValue = match (c, kc) {
+            (Some(c), _) => base.add(c),
+            (None, Some(k)) => (*self.cur_proto()).k.add(k),
+            _ => unreachable!(),
+        };
+        // the first operand's metamethod, else the second's
+        let (owner, owner_is_b) = {
+            let tb = luaT_gettmbyobj(self.l, rb, event);
+            if !tb.is_null() && (*tb).tt != LUA_TNIL {
+                (rb as *const TValue, true)
+            } else if (*rb).tt == LUA_TNUMBER {
+                (rc, false)
+            } else {
+                return Err(unsupported_type("arithmetic on a table without the metamethod"));
+            }
+        };
+        if (*owner).tt != LUA_TTABLE {
+            return Err(unsupported_type("metamethod of a non-table"));
+        }
+        let fv = luaT_gettmbyobj(self.l, owner, event);
+        if fv.is_null() || (*fv).tt != LUA_TFUNCTION || (*clvalue(fv)).isC != 0 {
+            return Err(unsupported_type("metamethod is not a Lua function"));
+        }
+        let cl = clvalue(fv);
+        let p = Closure::proto(cl);
+        if (*p).is_vararg != 0 || self.funcs.len() >= MAX_INLINE_DEPTH {
+            return Err(unsupported_type("metamethod call"));
+        }
+        // operands (tag guards pin the types: the metamethod choice)
+        let x = self.read(bb, base)?;
+        let y = match (c, kc) {
+            (Some(c), _) => self.read(c, base)?,
+            (None, Some(k)) => self.konst(k)?,
+            _ => unreachable!(),
+        };
+        let own = if owner_is_b { x } else { y };
+        // the metamethod: from the owner's metatable at run time, guarded
+        // by prototype
+        let resume = self.b.snapshot();
+        let mt = self.b.emit(Op::TMeta { t: own, snap: resume }, IrType::Table);
+        let mth = (*hvalue(owner)).metatable;
+        let name = (*(*self.l).global).tmname[event as usize];
+        let kname = self.b.kptr(name as usize, IrType::String);
+        let (fp, _) = self.field_ref_str(mth, mt, name, kname, false)?;
+        let f = self.b.emit(Op::XLoad { p: fp, snap: resume }, IrType::Function);
+        let kp = self.b.kptr(p as usize, IrType::Ptr);
+        self.b.emit(Op::GuardProto { f, p: kp, snap: resume }, IrType::Nil);
+        if !self.protos.contains(&(p as usize)) {
+            self.protos.push(p as usize);
+        }
+        // the frame: function at the stack top, then the two operands
+        let top = ((*self.l).top as usize - self.root_base as usize) / std::mem::size_of::<TValue>();
+        let fb = top + 1;
+        if fb + 2 + (*cl).stacksize as usize + LUA_MINSTACK as usize > STACK_WINDOW {
+            return Err(AbortReason::UnsupportedControlFlow);
+        }
+        let saved = self.b.off;
+        self.b.off = 0;
+        self.b.set_slot(top, f);
+        self.b.set_slot(fb, x);
+        self.b.set_slot(fb + 1, y);
+        self.b.off = saved;
+        let result = self.b.off + a;
+        self.b.push_frame(SnapFrame { base: fb as u16, func: cl as usize, ret_pc: 0, nresults: 1, nargs: 2 });
+        self.funcs.push((p, cl, Some(f)));
+        for i in 2..(*p).numparams as usize {
+            let nil = self.b.knil();
+            self.b.set_slot(i, nil);
+        }
+        self.stack_need = self.stack_need.max(fb + 2 + (*cl).stacksize as usize + LUA_MINSTACK as usize);
+        self.mm.push((self.funcs.len() - 1, result, resume));
+        self.b.forced = Some(resume);
+        Ok(())
+    }
+
+    /// Inside a metamethod only tables created there may change (an exit
+    /// re-runs it from the start).
+    fn mm_store_ok(&self, t: Option<Ref>) -> R<()> {
+        if self.mm.is_empty() {
+            return Ok(());
+        }
+        match t {
+            Some(t) if self.fresh.contains(&t) => Ok(()),
+            _ => Err(unsupported_type("side effect inside a metamethod")),
+        }
+    }
+
     /// CALL of a C function that is a builtin with a fast implementation
     /// (`string.sub` through a method call, `math.sin` through a local, ...).
     unsafe fn record_c_call(&mut self, pc: u32, insn: u32, base: StkId, cl: *mut Closure) -> R<()> {
@@ -1453,6 +1591,7 @@ impl Recorder {
     /// CALL of a leaf C function (see `leaf_c`): the trace calls it directly.
     unsafe fn record_leaf_c_call(&mut self, pc: u32, insn: u32, base: StkId, fp: usize) -> R<()> {
         let (a, bb, c) = (a_of(insn), b_of(insn), c_of(insn));
+        self.mm_store_ok(None)?;
         let Some(table_arg) = leaf_c(self.l, fp) else {
             return Err(AbortReason::UnsupportedOpcode("Call (C function)"));
         };
@@ -1510,6 +1649,22 @@ impl Recorder {
         let mut vals = Vec::with_capacity(nres);
         for i in 0..nres {
             vals.push(if i < nret { self.read(a + i, base)? } else { self.b.knil() });
+        }
+        if let Some(&(depth, result, _)) = self.mm.last() {
+            if depth == self.funcs.len() - 1 {
+                // a metamethod returning: its result goes to the
+                // instruction's target, as callTMres does
+                let v = if nret > 0 { self.read(a, base)? } else { self.b.knil() };
+                self.b.pop_frame().unwrap();
+                self.funcs.pop();
+                self.mm.pop();
+                self.b.forced = self.mm.last().map(|m| m.2);
+                let saved = self.b.off;
+                self.b.off = 0;
+                self.b.set_slot(result, v);
+                self.b.off = saved;
+                return Ok(());
+            }
         }
         let f = self.b.pop_frame().unwrap();
         self.funcs.pop();

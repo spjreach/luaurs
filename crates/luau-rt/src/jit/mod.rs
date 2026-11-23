@@ -37,8 +37,24 @@ use crate::lobject::{lua_State, Proto, StkId};
 use std::cell::{Cell, RefCell};
 
 thread_local! {
+    /// L->singlestep before recording forced it on (so calls from C -
+    /// metamethods - run in the single-step interpreter the recorder sees)
+    static SAVED_SS: Cell<Option<(usize, bool)>> = const { Cell::new(None) };
     static RECORDER: RefCell<Option<(recorder::Recorder, StkId)>> = const { RefCell::new(None) };
     static RECORDING: Cell<bool> = const { Cell::new(false) };
+}
+
+unsafe fn begin_recording(L: *mut lua_State) {
+    SAVED_SS.with(|s| s.set(Some((L as usize, (*L).singlestep))));
+    (*L).singlestep = true;
+    RECORDING.with(|r| r.set(true));
+}
+
+unsafe fn end_recording() {
+    RECORDING.with(|r| r.set(false));
+    if let Some((l, ss)) = SAVED_SS.with(|s| s.take()) {
+        (*(l as *mut lua_State)).singlestep = ss;
+    }
 }
 
 /// True while a trace is being recorded on this thread (checked by the
@@ -152,7 +168,12 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
             // interrupted at the back edge, or GC work is due (traces that
             // allocate exit for it): resume at the header
             if crate::lgc::luaC_needsGC(L) {
+                // the collector may shrink (move) the stack: the caller
+                // reloads its frame (RESUME_FRAME)
+                let ci = (*L).ci;
+                (*ci).savedpc = (*(*ci).p).code.add(header as usize);
                 crate::lgc::luaC_step(L, true);
+                return Some(RESUME_FRAME);
             }
             return resume_at(header);
         }
@@ -188,7 +209,7 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
             let mut count_storm = in_loop && !traceable && !loop_end_exit;
             if traceable {
                 t.exit_counts[k as usize] += 1;
-                if t.exit_counts[k as usize] >= HOTEXIT && !recording {
+                if t.exit_counts[k as usize] >= HOTEXIT && !recording && std::env::var_os("LUAU_TRACE_NOSIDE").is_none() {
                     t.exit_counts[k as usize] = 0;
                     t.exit_tries[k as usize] += 1;
                     side = Some((tag, k, pc));
@@ -226,7 +247,7 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
             let mut rec = recorder::Recorder::new_side(sid, p, crate::lobject::clvalue((*(*L).ci).func), pc, base, max_len, header, end, (ptag, k), sframes);
             rec.set_state(L);
             RECORDER.with(|r| *r.borrow_mut() = Some((rec, base)));
-            RECORDING.with(|r| r.set(true));
+            begin_recording(L);
         }
         // Resume where the guard's snapshot says, even when the trace is
         // dropped (resuming at `header` would replay the iteration).
@@ -257,7 +278,7 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
         let mut rec = recorder::Recorder::new(id, p, crate::lobject::clvalue((*(*L).ci).func), header, base, max_len);
         rec.set_state(L);
         RECORDER.with(|r| *r.borrow_mut() = Some((rec, base)));
-        RECORDING.with(|r| r.set(true));
+        begin_recording(L);
     }
     None
 }
@@ -285,7 +306,7 @@ pub unsafe fn record_step(L: *mut lua_State, p: *mut Proto, pc: u32, base: StkId
         (rec.id(), rec.header(), rec_proto(rec), rec.is_side(), rec.side_parent())
     });
     RECORDER.with(|r| *r.borrow_mut() = None);
-    RECORDING.with(|r| r.set(false));
+    end_recording();
     match result {
         recorder::Step::Closed(t) => {
             let _ = L;
@@ -404,7 +425,16 @@ fn rec_proto(r: &recorder::Recorder) -> *mut Proto {
 // interpreter has to take over (recording, a trace exit in the middle of the
 // body), it runs only until the frame reaches a pc native code can enter.
 
+/// The threaded interpreter calls `threaded_backedge` at back edges (set
+/// once tracing is on).
+pub static TRACE_HOOKS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 thread_local! {
+    /// back edges until the threaded interpreter looks at the tracing JIT
+    static TICK: Cell<u32> = const { Cell::new(16) };
+    /// the innermost single-step run stops as soon as the recording ends
+    /// (not only where native code can take over)
+    static STOP_ANY: Cell<bool> = const { Cell::new(false) };
     /// CallInfo depth the innermost single-step run stops at (-1: none)
     static STOP_DEPTH: Cell<isize> = const { Cell::new(-1) };
     /// the single-step run stopped (instead of leaving the VM)
@@ -474,7 +504,7 @@ pub unsafe fn should_stop(L: *mut lua_State, p: *mut Proto, pc: *const crate::lo
         // the frame returned: its caller continues in the interpreter
         true
     } else {
-        cur == d && !is_recording() && native_entry(p, pc)
+        cur == d && !is_recording() && (STOP_ANY.with(|s| s.get()) || native_entry(p, pc))
     };
     if stop {
         STOPPED.with(|s| s.set(true));
@@ -515,6 +545,66 @@ unsafe fn run_until_native(L: *mut lua_State, pc: *const crate::lobject::Instruc
     } else {
         // returned to C, yielded, or broke
         0
+    }
+}
+
+/// A taken back edge to `header` in the threaded interpreter (tracing on;
+/// sampled). Returns 0: go on; 1: continue at L->ci's savedpc (frames
+/// changed, or a recording just ran); 2: the VM was left; 3 + pc: continue
+/// at pc in this function.
+pub unsafe fn threaded_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: StkId) -> u32 {
+    let t = TICK.with(|t| t.get());
+    if t > 1 {
+        TICK.with(|c| c.set(t - 1));
+        return 0;
+    }
+    static EVERY: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    TICK.with(|c| c.set(*EVERY.get_or_init(|| std::env::var("LUAU_TRACE_TICK").ok().and_then(|v| v.parse().ok()).unwrap_or(16))));
+    if is_recording() {
+        return 0;
+    }
+    // Only functions without native code: one with native code is in the
+    // threaded interpreter just for a while (after a bail) and is traced
+    // from its native loops; mixing trace exits with native re-entry
+    // mid-function there was found to corrupt state.
+    #[cfg(all(target_arch = "x86_64", windows))]
+    if !(*p).execdata.is_null() {
+        return 0;
+    }
+    let depth = ci_depth(L);
+    let r = on_backedge(L, p, header, base);
+    if is_recording() {
+        // a recording started (of the loop, or of a side trace from where
+        // its trace exited): the single-step interpreter runs until it ends
+        match r {
+            // (frames pushed: L->ci's savedpc is set)
+            Some(RESUME_FRAME) => {}
+            Some(pc) => (*(*L).ci).savedpc = (*p).code.add(pc as usize),
+            None => (*(*L).ci).savedpc = (*p).code.add(header as usize),
+        }
+    }
+    match r {
+        _ if is_recording() => {
+            let _g = StopAnyGuard(STOP_ANY.with(|s| s.replace(true)));
+            let _d = StopGuard(STOP_DEPTH.with(|d| d.replace(depth)));
+            STOPPED.with(|s| s.set(false));
+            crate::lvmexecute::execute_single_step(L);
+            if STOPPED.with(|s| s.replace(false)) {
+                1
+            } else {
+                2
+            }
+        }
+        Some(RESUME_FRAME) => 1,
+        Some(pc) => 3 + pc,
+        None => 0,
+    }
+}
+
+struct StopAnyGuard(bool);
+impl Drop for StopAnyGuard {
+    fn drop(&mut self) {
+        STOP_ANY.with(|s| s.set(self.0));
     }
 }
 
@@ -583,7 +673,7 @@ pub unsafe extern "sysv64-unwind" fn native_loop_hook(
             let short = cell.cycles / (cell.entries as u64) < MIN_TRACE_CYCLES;
             cell.entries = 0;
             cell.cycles = 0;
-            if short {
+            if short && std::env::var_os("LUAU_TRACE_NOCYCLES").is_none() {
                 // stay native (look again in a while)
                 cell.ctr = 1 << 16;
             }

@@ -32,6 +32,9 @@ pub struct IrBuilder {
     pub frames: Vec<SnapFrame>,
     /// see `Snapshot::top`
     top: Option<u16>,
+    /// inside a metamethod (called from C: its frame can't be recreated):
+    /// every exit resumes at the arithmetic instruction that called it
+    pub forced: Option<SnapId>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -57,6 +60,7 @@ impl IrBuilder {
             off: 0,
             frames: Vec::new(),
             top: None,
+            forced: None,
         }
     }
 
@@ -186,6 +190,9 @@ impl IrBuilder {
     /// A snapshot of the current state (resuming at `self.pc`); consecutive
     /// guards with no slot writes in between share one.
     pub fn snapshot(&mut self) -> SnapId {
+        if let Some(f) = self.forced {
+            return f;
+        }
         if let Some((id, pc, w)) = self.last_snap {
             if pc == self.pc && w == self.writes {
                 return id;

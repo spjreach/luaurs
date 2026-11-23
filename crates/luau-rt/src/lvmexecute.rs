@@ -165,7 +165,15 @@ pub unsafe fn luau_execute(L: *mut lua_State) {
     // code, loops run natively and call `jit::native_loop_hook` when hot
     // (which runs the single-step interpreter just while recording);
     // without it, everything runs single-step so back edges are seen.
-    if (*L).singlestep || (crate::jit::state::trace_enabled() && ENTER_STUB.load(std::sync::atomic::Ordering::Relaxed) == 0) {
+    let tracing = crate::jit::state::trace_enabled();
+    if tracing && !crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) && std::env::var_os("LUAU_TRACE_NOTHREADED").is_none() {
+        crate::jit::TRACE_HOOKS.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    // (LUAU_TRACE_THREADED: the threaded interpreter with tracing hooks even
+    // without native code, to test that path)
+    static FORCE_THREADED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let force_threaded = *FORCE_THREADED.get_or_init(|| std::env::var_os("LUAU_TRACE_THREADED").is_some());
+    if (*L).singlestep || (tracing && !force_threaded && ENTER_STUB.load(std::sync::atomic::Ordering::Relaxed) == 0) {
         execute::<true>(L)
     } else {
         execute_threaded(L)
@@ -352,6 +360,40 @@ unsafe fn execute<const SS: bool>(L: *mut lua_State) {
         }};
     }
 
+    // a taken back edge (pc at the loop header): the tracing JIT may run
+    // the loop's trace or record it. The single-step interpreter does so
+    // every time; the threaded one, when tracing is on, every 16th time
+    // (crate::jit::threaded_backedge)
+    macro_rules! trace_backedge {
+        () => {{
+            if SS {
+                if crate::jit::state::trace_enabled() {
+                    let p = (*(*L).ci).p;
+                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                        if resume == crate::jit::RESUME_FRAME {
+                            { reload_frame!() }
+                        } else {
+                            pc = (*p).code.add(resume as usize);
+                        }
+                    }
+                }
+            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+                let p = (*(*L).ci).p;
+                match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
+                    0 => {}
+                    1 => {
+                        { reload_frame!() }
+                    }
+                    2 => {
+                        return;
+                    }
+                    r => {
+                        pc = (*p).code.add((r - 3) as usize);
+                    }
+                }
+            }
+        }};
+    }
     reload_frame!();
     let mut ovr: u32 = NO_OVR;
 
@@ -1295,16 +1337,7 @@ unsafe fn execute<const SS: bool>(L: *mut lua_State) {
                 // instruction fetch to the floating point compare
                 if if step > 0.0 { idx <= limit } else { limit <= idx } {
                     pc = pc.offset(id(insn));
-                    if SS && crate::jit::state::trace_enabled() {
-                        let p = (*(*L).ci).p;
-                        if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
-                            if resume == crate::jit::RESUME_FRAME {
-                                reload_frame!();
-                            } else {
-                                pc = (*p).code.add(resume as usize);
-                            }
-                        }
-                    }
+                    trace_backedge!();
                 } else {
                     std::hint::cold_path();
                 }
@@ -1409,15 +1442,8 @@ unsafe fn execute<const SS: bool>(L: *mut lua_State) {
                     }
                     if !found {
                         pc = pc.add(1);
-                    } else if SS && crate::jit::state::trace_enabled() {
-                        let p = (*(*L).ci).p;
-                        if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
-                            if resume == crate::jit::RESUME_FRAME {
-                                reload_frame!();
-                            } else {
-                                pc = (*p).code.add(resume as usize);
-                            }
-                        }
+                    } else {
+                        trace_backedge!();
                     }
                 } else {
                     (*(*(*L).ci).p).execcount += 1;
@@ -1548,16 +1574,7 @@ unsafe fn execute<const SS: bool>(L: *mut lua_State) {
                 check_gc!();
                 (*(*(*L).ci).p).execcount += 1;
                 pc = pc.add(1).offset(id(insn));
-                if SS && crate::jit::state::trace_enabled() {
-                    let p = (*(*L).ci).p;
-                    if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
-                        if resume == crate::jit::RESUME_FRAME {
-                            reload_frame!();
-                        } else {
-                            pc = (*p).code.add(resume as usize);
-                        }
-                    }
-                }
+                trace_backedge!();
             }
             x @ OP_LOAD_KX => {
                 let aux = *pc.add(1);

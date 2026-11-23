@@ -306,7 +306,8 @@ slow!();
 // @fast OP_FOR_G_LOOP
 // pairs/ipairs/generalized iteration over a table (array and hash part);
 // interrupts, GC steps and iterator functions take the full handler
-if (*(*L).global).cb.interrupt.is_some() || luaC_needsGC(L) {
+// (with tracing on, the full handler: it has the tracing JIT's hook)
+if (*(*L).global).cb.interrupt.is_some() || luaC_needsGC(L) || crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
     slow!();
 }
 let ra = base.add(ia(insn) as usize);
@@ -530,7 +531,8 @@ if ttistable(rb) {
 slow!();
 
 // @fast OP_FOR_N_LOOP
-if (*(*L).global).cb.interrupt.is_some() || luaC_needsGC(L) {
+// (with tracing on, the full handler: it has the tracing JIT's hook)
+if (*(*L).global).cb.interrupt.is_some() || luaC_needsGC(L) || crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
     slow!();
 }
 let ra = base.add(ia(insn) as usize);
@@ -549,7 +551,8 @@ std::hint::cold_path();
 next!(1);
 
 // @fast OP_JUMP_BACK
-if (*(*L).global).cb.interrupt.is_some() || luaC_needsGC(L) {
+// (with tracing on, the full handler: it has the tracing JIT's hook)
+if (*(*L).global).cb.interrupt.is_some() || luaC_needsGC(L) || crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
     slow!();
 }
 (*(*(*L).ci).p).execcount += 1;
