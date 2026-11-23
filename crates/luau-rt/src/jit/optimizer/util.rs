@@ -74,6 +74,7 @@ pub fn map_op(op: &Op, map: &[Ref]) -> Op {
         Op::Not(a) => Op::Not(r(*a)),
         Op::VArith { op, a, b, floor } => Op::VArith { op: *op, a: r(*a), b: r(*b), floor: *floor },
         Op::VNeg(a) => Op::VNeg(r(*a)),
+        Op::VargLoad { idx, snap } => Op::VargLoad { idx: r(*idx), snap: *snap },
         Op::VGet { v, lane } => Op::VGet { v: r(*v), lane: *lane },
         Op::VMake { x, y, z } => Op::VMake { x: r(*x), y: r(*y), z: r(*z) },
         Op::GuardVecEq { a, b, want, snap } => Op::GuardVecEq { a: r(*a), b: r(*b), want: *want, snap: *snap },

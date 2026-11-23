@@ -267,6 +267,16 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         a.cmp_rr(R::Rax, R::Rcx);
         a.jcc(Cond::NE, stubs[0]);
     }
+    if let (Some(n), false) = (t.varargs, side) {
+        // the frame has as many varargs as when recorded: base - func =
+        // 1 + numparams + n slots
+        a.load(R::Rax, R::R12, OFF_CI);
+        a.load(R::Rax, R::Rax, OFF_CI_FUNC);
+        a.mov_rr(R::Rcx, R::R13);
+        a.sub_rr(R::Rcx, R::Rax);
+        a.cmp_ri(R::Rcx, (1 + (*t.proto).numparams as i32 + n as i32) * TV);
+        a.jcc(Cond::NE, stubs[0]);
+    }
     if t.stack_need > 0 {
         a.load(R::Rax, R::R12, OFF_STACK_LAST);
         a.sub_rr(R::Rax, R::R13);
@@ -538,6 +548,23 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                 if let Home::F(d) = dst {
                     a.movapd(d, X(0));
                 }
+            }
+            Op::VargLoad { idx, snap } => {
+                let n = t.varargs.ok_or("vararg load without a vararg count")? as i32;
+                let s = stub(*snap);
+                let tag = inst.ty.tag().ok_or("vararg of a non-Lua type")?;
+                let (p, disp) = match t.inst(*idx).op {
+                    Op::KI32(k) => (R::R13, (k - n) * TV),
+                    _ => {
+                        a.mov_rr32(R::Rcx, g(*idx)?);
+                        a.shl_ri(R::Rcx, 4);
+                        a.add_rr(R::Rcx, R::R13);
+                        (R::Rcx, -n * TV)
+                    }
+                };
+                a.cmp32_mi(p, disp + OFF_TT, tag);
+                a.jcc(Cond::NE, s);
+                load_value(&mut a, dst, inst.ty, p, disp)?;
             }
             Op::VArith { op, a: x, b: y, floor } => {
                 // operands to xmm0 / xmm1 (a number: rounded, broadcast)
@@ -1277,13 +1304,13 @@ mod helpers {
         for f in (*frames).iter() {
             let caller = (*L).ci;
             (*caller).savedpc = (*(*caller).p).code.add(f.ret_pc as usize);
-            let func = base.add(f.base as usize - 1);
+            let func = base.add(f.func_slot());
             let cl = clvalue(func);
             let ci = crate::ldo::incr_ci(L);
             (*ci).func = func;
             (*ci).p = Closure::proto(cl);
-            (*ci).base = func.add(1);
-            (*ci).top = (*ci).base.add(f.nargs as usize + (*cl).stacksize as usize);
+            (*ci).base = base.add(f.base as usize);
+            (*ci).top = (*ci).base.add(f.top_off((*cl).stacksize as usize));
             (*ci).savedpc = std::ptr::null();
             (*ci).flags = 0;
             (*ci).nresults = f.nresults;

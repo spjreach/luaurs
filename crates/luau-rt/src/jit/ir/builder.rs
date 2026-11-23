@@ -151,6 +151,16 @@ impl IrBuilder {
         self.writes += 1;
     }
 
+    /// PREPVARARGS in the innermost frame: its base moves up by `shift`.
+    pub fn shift_frame(&mut self, shift: u16) {
+        let f = self.frames.last_mut().expect("an inlined frame");
+        f.base += shift;
+        f.shift = shift;
+        f.vararg = true;
+        self.off = f.base as usize;
+        self.writes += 1;
+    }
+
     /// Sets (or clears) the stack top that snapshots carry.
     pub fn set_top(&mut self, top: Option<usize>) {
         self.top = top.map(|t| t as u16);
@@ -161,7 +171,7 @@ impl IrBuilder {
     /// slot up) are dead.
     pub fn pop_frame(&mut self) -> Option<SnapFrame> {
         let f = self.frames.pop()?;
-        let from = f.base as usize - 1;
+        let from = f.func_slot();
         for s in from..self.slots.len() {
             self.slots[s] = None;
             self.dirty[s] = false;

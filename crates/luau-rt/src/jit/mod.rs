@@ -92,14 +92,14 @@ unsafe fn push_frames(L: *mut lua_State, base: StkId, sn: &snapshots::Snapshot) 
     for f in &sn.frames {
         let caller = (*L).ci;
         (*caller).savedpc = (*(*caller).p).code.add(f.ret_pc as usize);
-        let func = base.add(f.base as usize - 1);
+        let func = base.add(f.func_slot());
         // (the trace wrote the function slot if it set it)
         let cl = crate::lobject::clvalue(func);
         let ci = crate::ldo::incr_ci(L);
         (*ci).func = func;
         (*ci).p = Closure::proto(cl);
-        (*ci).base = func.add(1);
-        (*ci).top = (*ci).base.add(f.nargs as usize + (*cl).stacksize as usize);
+        (*ci).base = base.add(f.base as usize);
+        (*ci).top = (*ci).base.add(f.top_off((*cl).stacksize as usize));
         (*ci).savedpc = std::ptr::null();
         (*ci).flags = 0;
         (*ci).nresults = f.nresults;

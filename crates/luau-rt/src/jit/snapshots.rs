@@ -31,6 +31,24 @@ pub struct SnapFrame {
     pub nresults: i32,
     /// arguments passed (the frame's top is base + nargs + stacksize)
     pub nargs: u16,
+    /// a vararg function's frame after PREPVARARGS: its base is this many
+    /// slots above the arguments (the function is at `base - 1 - shift`,
+    /// the frame's top is base + stacksize)
+    pub shift: u16,
+    /// a vararg function's frame that went through PREPVARARGS
+    pub vararg: bool,
+}
+
+impl SnapFrame {
+    /// The slot of the called function (results go there).
+    pub fn func_slot(&self) -> usize {
+        self.base as usize - 1 - self.shift as usize
+    }
+
+    /// The frame's top, relative to its base.
+    pub fn top_off(&self, stacksize: usize) -> usize {
+        if self.vararg { stacksize } else { self.nargs as usize + stacksize }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]

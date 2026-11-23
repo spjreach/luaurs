@@ -195,6 +195,11 @@ pub enum Op {
     /// isn't of this instruction's type
     Builtin { bfid: u8, args: [Ref; 3], nargs: u8, nres: u8, buf: usize, snap: SnapId },
 
+    /// vararg `idx` (an I32, 0-based; the caller checked it is below the
+    /// count) of the trace's own frame, which has `Trace::varargs` of them
+    /// below its base; exits through `snap` unless it has this type
+    VargLoad { idx: Ref, snap: SnapId },
+
     // ---- functions --------------------------------------------------------
     /// the running closure of the trace's own frame (`L->ci->func`)
     FrameFunc,
@@ -250,6 +255,7 @@ impl Inst {
             Neg(a) | Math1(_, a) | I32ToNum(a) | ASize(a) | VNeg(a) => vec![*a],
             VArith { a, b, .. } | GuardVecEq { a, b, .. } => vec![*a, *b],
             VGet { v, .. } => vec![*v],
+            VargLoad { idx, .. } => vec![*idx],
             VMake { x, y, z } => vec![*x, *y, *z],
             NumToI32 { a, .. } => vec![*a],
             ARef { t, idx } => vec![*t, *idx],
@@ -288,7 +294,7 @@ impl Inst {
         use Op::*;
         match &self.op {
             SLoad { guarded: true, snap, .. } => Some(*snap),
-            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } | GuardVecEq { snap, .. } => {
+            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } | GuardVecEq { snap, .. } | VargLoad { snap, .. } => {
                 Some(*snap)
             }
             _ => None,

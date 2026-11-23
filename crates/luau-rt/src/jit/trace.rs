@@ -58,6 +58,9 @@ pub struct Trace {
     /// the closure the trace was recorded for, when it depends on it
     /// (upvalues, environment): checked at entry. 0: any closure of `proto`
     pub closure: usize,
+    /// the trace reads its own frame's varargs: there are this many
+    /// (checked at entry)
+    pub varargs: Option<u16>,
     /// stack slots (from the frame base) the trace may touch, inlined
     /// frames included: checked against the stack's size at entry
     pub stack_need: u32,
@@ -100,7 +103,7 @@ pub const FAST_EXIT: u32 = 0x8000_0000;
 
 impl Trace {
     pub fn new(id: TraceId, proto: *mut Proto, start_pc: u32) -> Trace {
-        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new(), inserts: false, storm_cycles: 0, exit_pcs: Box::new([]) }
+        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, varargs: None, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new(), inserts: false, storm_cycles: 0, exit_pcs: Box::new([]) }
     }
 
     pub fn inst(&self, r: Ref) -> &Inst {

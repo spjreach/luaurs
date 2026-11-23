@@ -80,12 +80,20 @@ pub struct Recorder {
     /// the trace stores to upvalues (their loads aren't loop-invariant)
     ustores: bool,
     /// metamethods being recorded (innermost last): (frame depth, the
-    /// result's trace slot, the snapshot resuming at the instruction)
+    /// result's trace slot - CMP_RESULT for a comparison, whose result's
+    /// truthiness is guarded instead - , the snapshot resuming at the
+    /// instruction)
     mm: Vec<(usize, usize, SnapId)>,
     /// tables created inside metamethods (the only ones they may change:
     /// an exit there re-runs the metamethod)
     fresh: Vec<Ref>,
+    /// the trace's own frame's vararg count, when the trace reads them
+    /// (checked at entry)
+    varargs: Option<u16>,
 }
+
+/// `Recorder::mm` result slot of a comparison metamethod.
+const CMP_RESULT: usize = usize::MAX;
 
 /// `Op::Builtin::nres` for a call taking every result (the trace checks
 /// there is exactly one).
@@ -160,6 +168,7 @@ impl Recorder {
             ustores: false,
             mm: Vec::new(),
             fresh: Vec::new(),
+            varargs: None,
         }
     }
 
@@ -192,10 +201,10 @@ impl Recorder {
         let off = r.b.off;
         r.b.off = 0;
         for f in &frames {
-            let fv = base.add(f.base as usize - 1);
+            let fv = base.add(f.func_slot());
             let fcl = clvalue(fv);
             let fp = Closure::proto(fcl);
-            let fr = r.b.slot(f.base as usize - 1, IrType::Function);
+            let fr = r.b.slot(f.func_slot(), IrType::Function);
             r.funcs.push((fp, fcl, Some(fr)));
             if !r.protos.contains(&(fp as usize)) {
                 r.protos.push(fp as usize);
@@ -641,6 +650,21 @@ impl Recorder {
                 // different types are never equal: the tag guards pin it
                 self.read(a, base)?;
                 self.read(rb, base)?;
+            } else if is_eq && ta == LUA_TTABLE {
+                if !self.record_cmp_mm(2, a, rb, base)? {
+                    // no __eq applies: identity
+                    let same = (*base.add(a)).value.gc == (*base.add(rb)).value.gc;
+                    let x = self.read(a, base)?;
+                    let y = self.read(rb, base)?;
+                    let snap = self.b.snapshot();
+                    let op = if same { Op::GuardSame { a: x, k: y, snap } } else { Op::GuardDiff { a: x, k: y, snap } };
+                    self.b.emit(op, IrType::Nil);
+                }
+            } else if !is_eq && ta == LUA_TTABLE && tb == LUA_TTABLE {
+                let lt = o(O::JumpIfLt) || o(O::JumpIfNotLt);
+                if !self.record_cmp_mm(if lt { 0 } else { 1 }, a, rb, base)? {
+                    return Err(unsupported_type("comparison of tables without metamethods"));
+                }
             } else if is_eq && ta == LUA_TVECTOR {
                 let eq = crate::lobject::luaO_rawequalObj(base.add(a), base.add(rb));
                 let x = self.read(a, base)?;
@@ -661,12 +685,7 @@ impl Recorder {
                         let eq = (*base.add(a)).value.b == (*base.add(rb)).value.b;
                         self.b.emit(Op::Guard { cmp: if eq { Cmp::Eq } else { Cmp::Ne }, a: x, b: y, snap }, IrType::Nil);
                     }
-                    LUA_TSTRING | LUA_TFUNCTION | LUA_TTABLE | LUA_TLIGHTUSERDATA | LUA_TBUFFER => {
-                        if ta == LUA_TTABLE && va != vb {
-                            for t in [x, y] {
-                                self.b.emit(Op::GuardPlainTable { t, store: false, snap }, IrType::Nil);
-                            }
-                        }
+                    LUA_TSTRING | LUA_TFUNCTION | LUA_TLIGHTUSERDATA | LUA_TBUFFER => {
                         if ta == LUA_TLIGHTUSERDATA {
                             return Err(unsupported_type("light userdata comparison"));
                         }
@@ -1235,6 +1254,101 @@ impl Recorder {
                 let snap = self.b.snapshot();
                 self.b.emit(Op::UStore { cl: clr, idx: bb as u8, v, buf, snap }, IrType::Nil);
             }
+        } else if o(O::PrepVarargs) {
+            // (an inlined vararg callee's first instruction: its frame
+            // moves up past the arguments, the fixed ones copied up)
+            if self.funcs.len() == 1 {
+                return Err(AbortReason::Internal("PREPVARARGS in the trace's frame".into()));
+            }
+            let f = self.b.frames.last().unwrap().clone();
+            let np = a;
+            let shift = (f.nargs as usize).max(np);
+            let mut fixed = Vec::with_capacity(np);
+            for i in 0..np {
+                fixed.push(self.read(i, base)?);
+            }
+            for i in 0..np {
+                let nil = self.b.knil();
+                self.b.set_slot(i, nil);
+            }
+            self.b.shift_frame(shift as u16);
+            for (i, v) in fixed.into_iter().enumerate() {
+                self.b.set_slot(i, v);
+            }
+        } else if o(O::GetVarargs) {
+            let (n, at) = self.varargs_of(base)?;
+            let vbase = if at.is_some() { self.root_base.add(at.unwrap()).add(n) } else { base };
+            let want = bb as i32 - 1;
+            let count = if want < 0 { n } else { want as usize };
+            for j in 0..count {
+                let v = if j < n { self.vararg(j, n, at, vbase)? } else { self.b.knil() };
+                self.b.set_slot(a + j, v);
+            }
+            if want < 0 {
+                self.set_top(Some(self.b.off + a + n));
+            }
+        } else if o(O::FastCall1) && a as u8 == luau_common::bytecode::BuiltinFunction::SelectVararg as u8 {
+            // select(i, ...) / select("#", ...): from the frame's varargs
+            let call = *code.add(pc as usize + 1 + c);
+            let (ra, nres) = (a_of(call), c_of(call) as i32 - 1);
+            let (cl, clr) = self.cur_closure();
+            let arg = base.add(bb);
+            let (n0, _) = self.varargs_of(base)?;
+            let takes = nres == 1
+                && (((*arg).tt == LUA_TSTRING && *getstr(tsvalue(arg)) == b'#')
+                    || ((*arg).tt == LUA_TNUMBER && (1..=n0 as i32).contains(&crate::lvmexecute::d2i_trunc((*arg).value.n))));
+            if (*(*cl).env).safeenv == 0 || !takes {
+                // the builtin declines: the CALL after it runs (recorded
+                // next); the guards keep the operand types that decided it
+                if (*(*cl).env).safeenv != 0 {
+                    self.read(bb, base)?;
+                }
+                return Ok(());
+            }
+            let (n, at) = self.varargs_of(base)?;
+            let vbase = if at.is_some() { self.root_base.add(at.unwrap()).add(n) } else { base };
+            let arg = base.add(bb);
+            let x = self.read(bb, base)?;
+            let snap = self.b.snapshot();
+            let v = if (*arg).tt == LUA_TSTRING && *getstr(tsvalue(arg)) == b'#' {
+                if !matches!(self.b.trace.inst(x).op, Op::KPtr(_)) {
+                    let k = self.gc_const((*arg).value.gc as usize, IrType::String);
+                    self.b.emit(Op::GuardSame { a: x, k, snap }, IrType::Nil);
+                }
+                self.b.knum(n as f64)
+            } else if (*arg).tt == LUA_TNUMBER {
+                let i = crate::lvmexecute::d2i_trunc((*arg).value.n);
+                if !(1..=n as i32).contains(&i) {
+                    return Err(unsupported_type("select of a vararg out of range"));
+                }
+                match at {
+                    Some(_) => {
+                        // (an inlined frame's varargs are trace slots)
+                        let k = self.b.knum(i as f64);
+                        self.b.emit(Op::Guard { cmp: Cmp::Eq, a: x, b: k, snap }, IrType::Nil);
+                        self.vararg(i as usize - 1, n, at, vbase)?
+                    }
+                    None => {
+                        let i1 = self.b.emit(Op::NumToI32 { a: x, snap }, IrType::I32);
+                        let m1 = self.b.ki32(-1);
+                        let idx = self.b.emit(Op::AddI32(i1, m1), IrType::I32);
+                        let zero = self.b.ki32(0);
+                        let kn = self.b.ki32(n as i32);
+                        self.b.emit(Op::Guard { cmp: Cmp::Le, a: zero, b: idx, snap }, IrType::Nil);
+                        self.b.emit(Op::Guard { cmp: Cmp::Lt, a: idx, b: kn, snap }, IrType::Nil);
+                        let tv = vbase.sub(n).add(i as usize - 1);
+                        let ty = IrType::of_tag((*tv).tt).ok_or(unsupported_type("vararg type"))?;
+                        if ty == IrType::LightUserdata {
+                            return Err(unsupported_type("light userdata"));
+                        }
+                        self.b.emit(Op::VargLoad { idx, snap }, ty)
+                    }
+                }
+            } else {
+                return Err(unsupported_type("select with this argument"));
+            };
+            self.guard_safeenv(clr);
+            self.b.set_slot(ra, v);
         } else if o(O::NewClosure) || o(O::DupClosure) {
             self.record_closure(pc, insn, base)?;
         } else if o(O::Namecall) {
@@ -1572,9 +1686,6 @@ impl Recorder {
             return self.record_c_call(pc, insn, base, cl);
         }
         let p = Closure::proto(cl);
-        if (*p).is_vararg != 0 {
-            return Err(unsupported_type("call of a vararg function"));
-        }
         if self.funcs.len() >= MAX_INLINE_DEPTH {
             return Err(AbortReason::UnsupportedControlFlow);
         }
@@ -1593,15 +1704,66 @@ impl Recorder {
             return Err(AbortReason::UnsupportedControlFlow);
         }
         let ret_pc = pc + if op_of(insn) == O::CallFb as u8 { 2 } else { 1 };
-        self.b.push_frame(SnapFrame { base: fb as u16, func: cl as usize, ret_pc, nresults: nres, nargs: nargs as u16 });
+        self.b.push_frame(SnapFrame { base: fb as u16, func: cl as usize, ret_pc, nresults: nres, nargs: nargs as u16, shift: 0, vararg: false });
         self.funcs.push((p, cl, Some(f)));
         // missing parameters are nil
         for i in nargs..(*p).numparams as usize {
             let nil = self.b.knil();
             self.b.set_slot(i, nil);
         }
-        self.stack_need = self.stack_need.max(fb + nargs + (*cl).stacksize as usize + LUA_MINSTACK as usize);
+        // (a vararg callee's frame moves up past its arguments: room)
+        self.stack_need = self.stack_need.max(fb + nargs.max((*p).numparams as usize) + nargs + (*cl).stacksize as usize + LUA_MINSTACK as usize);
         Ok(())
+    }
+
+    /// The varargs of the current frame: (count, where: Some(first trace
+    /// slot) for an inlined frame, None for the trace's own frame - below
+    /// its base, the count checked at trace entry).
+    unsafe fn varargs_of(&mut self, base: StkId) -> R<(usize, Option<usize>)> {
+        let p = self.cur_proto();
+        if (*p).is_vararg == 0 {
+            return Err(AbortReason::Internal("varargs of a fixed-argument function".into()));
+        }
+        let np = (*p).numparams as usize;
+        if self.funcs.len() == 1 {
+            let func = (*(*self.l).ci).func;
+            let n = base.offset_from(func) as usize - 1 - np;
+            if self.side.is_none() {
+                self.varargs = Some(n as u16);
+            } else if self.varargs != Some(n as u16) && self.varargs.is_some() {
+                return Err(AbortReason::Internal("vararg count changed".into()));
+            }
+            return Ok((n, None));
+        }
+        let f = self.b.frames.last().unwrap();
+        if !f.vararg {
+            return Err(AbortReason::Internal("varargs before PREPVARARGS".into()));
+        }
+        let n = (f.shift as usize).saturating_sub(np);
+        Ok((n, Some(f.func_slot() + 1 + np)))
+    }
+
+    /// Vararg `j` (0-based, < count) of the current frame.
+    unsafe fn vararg(&mut self, j: usize, n: usize, at: Option<usize>, base: StkId) -> R<Ref> {
+        let tv = base.sub(n).add(j);
+        let ty = IrType::of_tag((*tv).tt).ok_or(unsupported_type("vararg type"))?;
+        if ty == IrType::LightUserdata {
+            return Err(unsupported_type("light userdata"));
+        }
+        Ok(match at {
+            Some(s) => {
+                let saved = self.b.off;
+                self.b.off = 0;
+                let v = self.read(s + j, self.root_base);
+                self.b.off = saved;
+                v?
+            }
+            None => {
+                let idx = self.b.ki32(j as i32);
+                let snap = self.b.snapshot();
+                self.b.emit(Op::VargLoad { idx, snap }, ty)
+            }
+        })
     }
 
     fn set_top(&mut self, top: Option<usize>) {
@@ -1689,6 +1851,15 @@ impl Recorder {
         if !self.protos.contains(&(p as usize)) {
             self.protos.push(p as usize);
         }
+        let result = self.b.off + a;
+        self.enter_mm(cl, f, x, y, result, resume)
+    }
+
+    /// Enters metamethod `cl` (the IR value `f`, guarded) called with `x`,
+    /// `y` as `callTMres` does: its frame at the stack top; `result`: see
+    /// `mm`; exits inside resume through `resume`.
+    unsafe fn enter_mm(&mut self, cl: *mut Closure, f: Ref, x: Ref, y: Ref, result: usize, resume: SnapId) -> R<()> {
+        let p = Closure::proto(cl);
         // the frame: function at the stack top, then the two operands
         let top = ((*self.l).top as usize - self.root_base as usize) / std::mem::size_of::<TValue>();
         let fb = top + 1;
@@ -1701,8 +1872,7 @@ impl Recorder {
         self.b.set_slot(fb, x);
         self.b.set_slot(fb + 1, y);
         self.b.off = saved;
-        let result = self.b.off + a;
-        self.b.push_frame(SnapFrame { base: fb as u16, func: cl as usize, ret_pc: 0, nresults: 1, nargs: 2 });
+        self.b.push_frame(SnapFrame { base: fb as u16, func: cl as usize, ret_pc: 0, nresults: 1, nargs: 2, shift: 0, vararg: false });
         self.funcs.push((p, cl, Some(f)));
         for i in 2..(*p).numparams as usize {
             let nil = self.b.knil();
@@ -1711,6 +1881,108 @@ impl Recorder {
         self.stack_need = self.stack_need.max(fb + 2 + (*cl).stacksize as usize + LUA_MINSTACK as usize);
         self.mm.push((self.funcs.len() - 1, result, resume));
         self.b.forced = Some(resume);
+        Ok(())
+    }
+
+    /// A comparison of the tables in slots `ra`, `rb` (`kind` 0: `<`, 1:
+    /// `<=`, 2: `==`) through a Lua metamethod, as `luaV_lessthan` /
+    /// `luaV_lessequal` / `luaV_equalval` pick it: recorded as a call (the
+    /// jump then follows the result's truthiness, guarded). False when no
+    /// metamethod applies (`==` only: identity, with the guards keeping it
+    /// that way emitted here).
+    unsafe fn record_cmp_mm(&mut self, kind: u8, ra: usize, rb: usize, base: StkId) -> R<bool> {
+        use crate::ltm::*;
+        let (lv, rv) = (base.add(ra) as *const TValue, base.add(rb) as *const TValue);
+        let (ml, mr) = ((*hvalue(lv)).metatable, (*hvalue(rv)).metatable);
+        let g = (*self.l).global;
+        let tmname = move |e: TMS| (*g).tmname[e as usize];
+        let has = |mt: *mut LuaTable, e: TMS| -> *const TValue {
+            if mt.is_null() {
+                return std::ptr::null();
+            }
+            let v = crate::ltable::luaH_getstr(mt, tmname(e));
+            if v == luaO_nilobject() || (*v).tt == LUA_TNIL { std::ptr::null() } else { v }
+        };
+        let x = self.read(ra, base)?;
+        let y = self.read(rb, base)?;
+        let resume = self.b.snapshot();
+        // (event, operands swapped: `a <= b` as `not (b < a)`)
+        let (event, swap) = match kind {
+            2 => {
+                let tm1 = has(ml, TM_EQ);
+                if tm1.is_null() {
+                    // the left operand has no __eq: nothing applies
+                    self.guard_no_tm(x, ml, TM_EQ, resume)?;
+                    return Ok(false);
+                }
+                let tm2 = if ml == mr { tm1 } else { has(mr, TM_EQ) };
+                if tm2.is_null() || !luaO_rawequalObj(tm1, tm2) {
+                    return Err(unsupported_type("tables with different __eq"));
+                }
+                (TM_EQ, false)
+            }
+            0 => (TM_LT, false),
+            _ => {
+                let le = has(ml, TM_LE);
+                if !le.is_null() {
+                    (TM_LE, false)
+                } else {
+                    // no __le on the left: `not (b < a)`
+                    self.guard_no_tm(x, ml, TM_LE, resume)?;
+                    (TM_LT, true)
+                }
+            }
+        };
+        let (h1, h2, o1, o2) = if swap { (rv, lv, y, x) } else { (lv, rv, x, y) };
+        let (m1, m2) = ((*hvalue(h1)).metatable, (*hvalue(h2)).metatable);
+        let tm1 = has(m1, event);
+        let tm2 = has(m2, event);
+        if tm1.is_null() || tm2.is_null() || !luaO_rawequalObj(tm1, tm2) {
+            return Err(unsupported_type("comparison of tables the interpreter rejects"));
+        }
+        if (*tm1).tt != LUA_TFUNCTION || (*clvalue(tm1)).isC != 0 {
+            return Err(unsupported_type("metamethod is not a Lua function"));
+        }
+        let cl = clvalue(tm1);
+        if (*Closure::proto(cl)).is_vararg != 0 || self.funcs.len() >= MAX_INLINE_DEPTH {
+            return Err(unsupported_type("metamethod call"));
+        }
+        // the metamethod, from the first operand's metatable (guarded by
+        // prototype); the second's must be the same
+        let name = tmname(event);
+        let kname = self.b.kptr(name as usize, IrType::String);
+        let mt1 = self.b.emit(Op::TMeta { t: o1, snap: resume }, IrType::Table);
+        let (fp, _) = self.field_ref_str(m1, mt1, name, kname, false)?;
+        let f = self.b.emit(Op::XLoad { p: fp, snap: resume }, IrType::Function);
+        let p = Closure::proto(cl);
+        let kp = self.b.kptr(p as usize, IrType::Ptr);
+        self.b.emit(Op::GuardProto { f, p: kp, snap: resume }, IrType::Nil);
+        let mt2 = self.b.emit(Op::TMeta { t: o2, snap: resume }, IrType::Table);
+        if m1 == m2 {
+            self.b.emit(Op::GuardSame { a: mt2, k: mt1, snap: resume }, IrType::Nil);
+        } else {
+            let (fp2, _) = self.field_ref_str(m2, mt2, name, kname, false)?;
+            let f2 = self.b.emit(Op::XLoad { p: fp2, snap: resume }, IrType::Function);
+            self.b.emit(Op::GuardSame { a: f2, k: f, snap: resume }, IrType::Nil);
+        }
+        if !self.protos.contains(&(p as usize)) {
+            self.protos.push(p as usize);
+        }
+        self.enter_mm(cl, f, o1, o2, CMP_RESULT, resume)?;
+        Ok(true)
+    }
+
+    /// Exits through `snap` unless table `t` (whose metatable is `mt` now)
+    /// has no metamethod `event`.
+    unsafe fn guard_no_tm(&mut self, t: Ref, mt: *mut LuaTable, event: crate::ltm::TMS, snap: SnapId) -> R<()> {
+        if mt.is_null() {
+            self.b.emit(Op::GuardPlainTable { t, store: false, snap }, IrType::Nil);
+        } else {
+            let name = (*(*self.l).global).tmname[event as usize];
+            let k = self.b.kptr(name as usize, IrType::String);
+            let m = self.b.emit(Op::TMeta { t, snap }, IrType::Table);
+            self.b.emit(Op::HMiss { t: m, k, snap }, IrType::Nil);
+        }
         Ok(())
     }
 
@@ -1783,6 +2055,9 @@ impl Recorder {
         let Some(fp) = Closure::c(cl).f.map(|f| f as usize) else {
             return Err(AbortReason::UnsupportedOpcode("Call (C function)"));
         };
+        if get_by_name((*self.l).gt, b"select").is_some_and(|v| (*v).tt == LUA_TFUNCTION && (*clvalue(v)).isC != 0 && Closure::c(clvalue(v)).f.map(|f| f as usize) == Some(fp)) {
+            return self.record_select(insn, base, fp);
+        }
         let Some(bfid) = builtin_of(self.l, fp) else {
             return self.record_leaf_c_call(pc, insn, base, fp);
         };
@@ -1810,6 +2085,62 @@ impl Recorder {
             self.pending = Some((Some(v), self.b.off + a, next, nres < 0));
         } else {
             self.pending = Some((None, 0, next, false));
+        }
+        Ok(())
+    }
+
+    /// CALL of `select` (`luaB_select`): its results are some of its
+    /// arguments (or their count), known to the trace without a call.
+    unsafe fn record_select(&mut self, insn: u32, base: StkId, fp: usize) -> R<()> {
+        let (a, bb, c) = (a_of(insn), b_of(insn), c_of(insn));
+        let nargs = self.call_args(a, bb)?;
+        if nargs == 0 {
+            return Err(unsupported_type("select without arguments"));
+        }
+        let f = self.read(a, base)?;
+        let snap = self.b.snapshot();
+        self.b.emit(Op::GuardCFunc { f, fp, snap }, IrType::Nil);
+        let sel = base.add(a + 1);
+        let x = self.read(a + 1, base)?;
+        let n = nargs as i64;
+        let results: Vec<Ref> = if (*sel).tt == LUA_TSTRING && *getstr(tsvalue(sel)) == b'#' {
+            if !matches!(self.b.trace.inst(x).op, Op::KPtr(_)) {
+                let k = self.gc_const((*sel).value.gc as usize, IrType::String);
+                self.b.emit(Op::GuardSame { a: x, k, snap }, IrType::Nil);
+            }
+            vec![self.b.knum((n - 1) as f64)]
+        } else if (*sel).tt == LUA_TNUMBER && (*sel).value.n == (*sel).value.n.trunc() {
+            let mut i = (*sel).value.n as i64;
+            let k = self.b.knum((*sel).value.n);
+            self.b.emit(Op::Guard { cmp: Cmp::Eq, a: x, b: k, snap }, IrType::Nil);
+            if i < 0 {
+                i += n;
+            } else if i > n {
+                i = n;
+            }
+            if i < 1 {
+                return Err(unsupported_type("select index out of range"));
+            }
+            let mut v = Vec::new();
+            for j in i as usize..nargs {
+                v.push(self.read(a + 1 + j, base)?);
+            }
+            v
+        } else {
+            return Err(unsupported_type("select with this argument"));
+        };
+        let want = c as i32 - 1;
+        let count = if want < 0 { results.len() } else { want as usize };
+        for j in 0..count {
+            let v = results.get(j).copied().unwrap_or_else(|| self.b.knil());
+            self.b.set_slot(a + j, v);
+        }
+        // (slots above the results were the call's: dead now)
+        for s in a + count..a + 1 + nargs {
+            self.b.forget_slot(s);
+        }
+        if want < 0 {
+            self.set_top(Some(self.b.off + a + count));
         }
         Ok(())
     }
@@ -1882,15 +2213,23 @@ impl Recorder {
         for i in 0..nres {
             vals.push(if i < nret { self.read(a + i, base)? } else { self.b.knil() });
         }
-        if let Some(&(depth, result, _)) = self.mm.last() {
+        if let Some(&(depth, result, resume)) = self.mm.last() {
             if depth == self.funcs.len() - 1 {
                 // a metamethod returning: its result goes to the
                 // instruction's target, as callTMres does
                 let v = if nret > 0 { self.read(a, base)? } else { self.b.knil() };
+                let truthy = nret > 0 && !((*base.add(a)).tt == LUA_TNIL || ((*base.add(a)).tt == LUA_TBOOLEAN && (*base.add(a)).value.b == 0));
                 self.b.pop_frame().unwrap();
                 self.funcs.pop();
                 self.mm.pop();
                 self.b.forced = self.mm.last().map(|m| m.2);
+                if result == CMP_RESULT {
+                    // a comparison: the jump follows the result's truthiness
+                    if matches!(self.b.trace.ty(v), IrType::Nil | IrType::Boolean) {
+                        self.b.emit(Op::GuardTruthy { a: v, want: truthy, snap: resume }, IrType::Nil);
+                    }
+                    return Ok(());
+                }
                 let saved = self.b.off;
                 self.b.off = 0;
                 self.b.set_slot(result, v);
@@ -1901,7 +2240,7 @@ impl Recorder {
         let f = self.b.pop_frame().unwrap();
         self.funcs.pop();
         // results start at the caller's function slot
-        let dst = f.base as usize - 1 - self.b.off;
+        let dst = f.func_slot() - self.b.off;
         for (i, v) in vals.into_iter().enumerate() {
             self.b.set_slot(dst + i, v);
         }
@@ -1964,6 +2303,7 @@ impl Recorder {
         out.end_pc = self.loop_end;
         out.loop_ref = None;
         out.side_of = Some(parent);
+        out.varargs = self.varargs;
         out.inserts = self.inserts;
         out.protos = self.protos.clone();
         out.stack_need = self.stack_need as u32;
@@ -2021,6 +2361,7 @@ impl Recorder {
             .collect();
 
         let mut out = Trace::new(rec.id, rec.proto, rec.start_pc);
+        out.varargs = self.varargs;
         out.end_pc = self.loop_end;
         out.protos = self.protos.clone();
         out.stack_need = self.stack_need as u32;
@@ -2433,6 +2774,7 @@ fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *b = rm(*b);
         }
         VGet { v, .. } => *v = rm(*v),
+        VargLoad { idx, .. } => *idx = rm(*idx),
         VMake { x, y, z } => {
             *x = rm(*x);
             *y = rm(*y);
@@ -2466,6 +2808,7 @@ fn set_snapshot(op: &mut Op, s: SnapId) {
         | SReload { snap, .. }
         | Concat { snap, .. }
         | GuardVecEq { snap, .. }
+        | VargLoad { snap, .. }
         | UStore { snap, .. } => *snap = s,
         _ => {}
     }
