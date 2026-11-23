@@ -164,6 +164,43 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
         let t0 = cycles();
         let ex = f(base, L);
         LAST_RUN.with(|c| c.set(cycles().wrapping_sub(t0)));
+        return handle_exit(L, p, header, base, id, ex, moved);
+    }
+    let start = state::with(|s| {
+        if !s.enabled || s.traces.contains_key(&(p as usize, header)) || s.traces.len() >= s.max_traces {
+            return None;
+        }
+        if s.hot.tick(p, header, s.hotloop) {
+            Some((s.new_id(), s.max_trace_len))
+        } else {
+            None
+        }
+    });
+    if let Some((id, max_len)) = start {
+        debug::log(debug::Event::TraceStart { id: id.0, pc: header });
+        let mut rec = recorder::Recorder::new(id, p, crate::lobject::clvalue((*(*L).ci).func), header, base, max_len);
+        rec.set_state(L);
+        RECORDER.with(|r| *r.borrow_mut() = Some((rec, base)));
+        begin_recording(L);
+    }
+    None
+}
+
+/// What happens after the trace of the loop at `header` in `p` returned
+/// `ex` (run with `base`; `moved`: the stack was grown before, so the
+/// caller must reload its frame): side exit counting, side trace
+/// recording, storms, frames of inlined calls. Returns what `on_backedge`
+/// does.
+unsafe fn handle_exit(L: *mut lua_State, p: *mut Proto, header: u32, base: StkId, id: trace::TraceId, ex: u32, moved: bool) -> Option<u32> {
+        let resume_at = move |pc: u32| -> Option<u32> {
+            if moved {
+                let ci = (*L).ci;
+                (*ci).savedpc = (*(*ci).p).code.add(pc as usize);
+                Some(RESUME_FRAME)
+            } else {
+                Some(pc)
+            }
+        };
         if ex & 0x8000_0000 != 0 {
             // interrupted at the back edge, or GC work is due (traces that
             // allocate exit for it): resume at the header
@@ -262,25 +299,6 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
             (*L).top = base.add(t as usize);
         }
         return resume_at(resume);
-    }
-    let start = state::with(|s| {
-        if !s.enabled || s.traces.contains_key(&(p as usize, header)) || s.traces.len() >= s.max_traces {
-            return None;
-        }
-        if s.hot.tick(p, header, s.hotloop) {
-            Some((s.new_id(), s.max_trace_len))
-        } else {
-            None
-        }
-    });
-    if let Some((id, max_len)) = start {
-        debug::log(debug::Event::TraceStart { id: id.0, pc: header });
-        let mut rec = recorder::Recorder::new(id, p, crate::lobject::clvalue((*(*L).ci).func), header, base, max_len);
-        rec.set_state(L);
-        RECORDER.with(|r| *r.borrow_mut() = Some((rec, base)));
-        begin_recording(L);
-    }
-    None
 }
 
 /// Called before the single-step interpreter executes instruction `pc` of
@@ -392,6 +410,17 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
     debug::log(debug::Event::TraceCompiled { id: id.0, pc: header, insts: t.len() });
     state::with(|s| match side_of {
         None => {
+            t.exit_pcs = t
+                .snapshots
+                .iter()
+                .enumerate()
+                .map(|(k, sn)| {
+                    let leaves = sn.pc < header || sn.pc > t.end_pc;
+                    let loop_end = sn.pc == header && k != 0;
+                    let simple = sn.frames.is_empty() && sn.top.is_none() && (leaves || loop_end);
+                    sn.pc | if simple { trace::FAST_EXIT } else { 0 }
+                })
+                .collect();
             s.remove_root(root_key);
             s.by_tag.insert(tag, state::TraceKey::Root(root_key.0, root_key.1));
             s.traces.insert(root_key, t);
@@ -448,7 +477,7 @@ const SHORT_TRIP: u32 = 32;
 /// A new hot counter for one compiled loop instruction (lives as long as
 /// the code).
 pub fn new_loop_counter() -> *mut u32 {
-    Box::leak(Box::new(LoopCell { ctr: 1, entries: 0, cycles: 0 })) as *mut LoopCell as *mut u32
+    Box::leak(Box::new(LoopCell { ctr: 1, entries: 0, cycles: 0, entry: 0, exits: std::ptr::null(), nexits: 0, tag: 0, need: 0, gen: 0 })) as *mut LoopCell as *mut u32
 }
 
 /// Per compiled loop instruction: the counter native code decrements
@@ -458,6 +487,13 @@ struct LoopCell {
     ctr: u32,
     entries: u32,
     cycles: u64,
+    /// cached root trace of the loop (valid while `gen` is current)
+    entry: usize,
+    exits: *const u32,
+    nexits: u32,
+    tag: u16,
+    need: u32,
+    gen: u64,
 }
 
 /// Cycles a trace must run per entry, on average, to be entered from
@@ -648,9 +684,53 @@ pub unsafe extern "sysv64-unwind" fn native_loop_hook(
         }
     }
     let depth = ci_depth(L);
+    let cell = &mut *(ctr as *mut LoopCell);
+    // the cached trace: run it, and handle the common exits right here
+    if cell.entry != 0 && cell.gen == state::generation() && !is_recording() && (*L).stack_last.offset_from(base) >= cell.need as isize {
+        let f: compiler::TraceFn = std::mem::transmute(cell.entry);
+        let t0 = cycles();
+        let ex = f(base, L);
+        let ran = cycles().wrapping_sub(t0);
+        let k = ex & 0xffff;
+        if ex & 0x8000_0000 == 0 && ((ex >> 16) & 0x7fff) as u16 == cell.tag && k < cell.nexits {
+            let e = *cell.exits.add(k as usize);
+            if e & trace::FAST_EXIT != 0 {
+                debug::log(debug::Event::SideExit { id: 0, snap: ex });
+                *ctr = 1;
+                note_run(cell, ran);
+                let npc = code.add((e & !trace::FAST_EXIT) as usize);
+                return if native_entry(p, npc) { npc as usize } else { run_until_native(L, npc, depth) };
+            }
+        }
+        // anything else: the full treatment
+        LAST_RUN.with(|c| c.set(ran));
+        let id = state::with(|s| s.traces.get(&(p as usize, header)).map(|t| t.id)).unwrap_or(trace::TraceId(0));
+        let resume = handle_exit(L, p, header, base, id, ex, false).unwrap_or(header);
+        *ctr = 1;
+        note_run(cell, ran);
+        return if resume == RESUME_FRAME {
+            run_until_native(L, (*(*L).ci).savedpc, depth)
+        } else {
+            let npc = code.add(resume as usize);
+            if is_recording() || !native_entry(p, npc) { run_until_native(L, npc, depth) } else { npc as usize }
+        };
+    }
     LAST_RUN.with(|c| c.set(u64::MAX));
     let resume = on_backedge(L, p, header, base).unwrap_or(header);
     let ran = LAST_RUN.with(|c| c.get());
+    // cache the loop's trace for the next entries
+    state::with(|s| {
+        if let Some(t) = s.traces.get(&(p as usize, header)) {
+            if let Some(n) = t.native {
+                cell.entry = n.entry;
+                cell.exits = t.exit_pcs.as_ptr();
+                cell.nexits = t.exit_pcs.len() as u32;
+                cell.tag = t.tag;
+                cell.need = t.stack_need;
+                cell.gen = state::generation();
+            }
+        }
+    });
     let r = if resume == RESUME_FRAME {
         // inside inlined calls: interpret until back in this frame
         run_until_native(L, (*(*L).ci).savedpc, depth)
@@ -665,19 +745,24 @@ pub unsafe extern "sysv64-unwind" fn native_loop_hook(
     });
     *ctr = if again { 1 } else { u32::MAX };
     if ran != u64::MAX {
-        // a trace ran: is it worth entering from here?
-        let cell = &mut *(ctr as *mut LoopCell);
-        cell.entries += 1;
-        cell.cycles += ran;
-        if cell.entries >= 64 {
-            let short = cell.cycles / (cell.entries as u64) < MIN_TRACE_CYCLES;
-            cell.entries = 0;
-            cell.cycles = 0;
-            if short && std::env::var_os("LUAU_TRACE_NOCYCLES").is_none() {
-                // stay native (look again in a while)
-                cell.ctr = 1 << 16;
-            }
-        }
+        note_run(&mut *(ctr as *mut LoopCell), ran);
     }
     r
+}
+
+/// A trace run from native code took `ran` cycles: is it worth entering
+/// from here? (a short loop is left native for a while)
+fn note_run(cell: &mut LoopCell, ran: u64) {
+    cell.entries += 1;
+    cell.cycles += ran;
+    if cell.entries >= 64 {
+        let short = cell.cycles / (cell.entries as u64) < MIN_TRACE_CYCLES;
+        cell.entries = 0;
+        cell.cycles = 0;
+        static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if short && !*OFF.get_or_init(|| std::env::var_os("LUAU_TRACE_NOCYCLES").is_some()) {
+            // stay native (look again in a while)
+            cell.ctr = 1 << 16;
+        }
+    }
 }

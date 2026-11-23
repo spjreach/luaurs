@@ -86,6 +86,7 @@ impl JitState {
     /// reachable through the root).
     pub fn remove_root(&mut self, key: (usize, u32)) {
         if let Some(t) = self.traces.remove(&key) {
+            bump_generation();
             self.by_tag.remove(&t.tag);
             for st in t.sides {
                 self.sides.remove(&st);
@@ -109,6 +110,20 @@ static ENABLED_OVERRIDE: AtomicI8 = AtomicI8::new(-1);
 
 thread_local! {
     static STATE: RefCell<JitState> = RefCell::new(JitState::new());
+}
+
+thread_local! {
+    static GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+}
+
+/// Changes whenever a compiled trace is dropped (caches of trace entry
+/// points compare it).
+pub fn generation() -> u64 {
+    GENERATION.with(|g| g.get())
+}
+
+fn bump_generation() {
+    GENERATION.with(|g| g.set(g.get() + 1));
 }
 
 /// Runs `f` with this thread's JIT state.
@@ -152,6 +167,7 @@ pub fn set_enabled(enabled: bool) {
 pub fn flush() {
     with(|state| {
         state.traces.clear();
+        bump_generation();
         state.sides.clear();
         state.by_tag.clear();
         state.hot = HotCounters::default();

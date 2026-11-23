@@ -89,11 +89,18 @@ pub struct Trace {
     pub inserts: bool,
     /// cycles trace runs took before exits counted in `side_exits`
     pub storm_cycles: u64,
+    /// per snapshot: resume pc | FAST_EXIT when an exit through it needs no
+    /// bookkeeping (leaves the loop, or ends it at the header: no frames,
+    /// no stack top) - native code's cached entry handles those itself
+    pub exit_pcs: Box<[u32]>,
 }
+
+/// `Trace::exit_pcs` flag.
+pub const FAST_EXIT: u32 = 0x8000_0000;
 
 impl Trace {
     pub fn new(id: TraceId, proto: *mut Proto, start_pc: u32) -> Trace {
-        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new(), inserts: false, storm_cycles: 0 }
+        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new(), inserts: false, storm_cycles: 0, exit_pcs: Box::new([]) }
     }
 
     pub fn inst(&self, r: Ref) -> &Inst {
