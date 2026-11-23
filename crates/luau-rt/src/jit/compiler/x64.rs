@@ -50,14 +50,28 @@ const OFF_CL_UPREFS: i32 = (CLOSURE_HEADER + offset_of!(LClosure, uprefs)) as i3
 
 /// r13 = base, r12 = L (as in the method JIT); rax, rcx, rdx and xmm0/1 are
 /// scratch.
-const GPRS: [R; 10] = [R::Rbx, R::Rbp, R::R14, R::R15, R::Rsi, R::Rdi, R::R8, R::R9, R::R10, R::R11];
-const XMMS: [u8; 14] = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+const GPRS: [R; 8] = [R::Rbx, R::Rbp, R::R14, R::R15, R::Rsi, R::Rdi, R::R8, R::R9];
+const XMMS: [u8; 12] = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+/// registers spilled operands are reloaded into (and spilled results are
+/// computed in) for one instruction
+const TEMP_G: [R; 2] = [R::R10, R::R11];
+const TEMP_X: [X; 2] = [X(14), X(15)];
+/// spill slots (8 bytes each) every trace's native frame has, below the
+/// saved registers; side traces run in their root's frame, so it's fixed
+const SPILL_SLOTS: usize = 64;
+const SPILL_BYTES: i32 = SPILL_SLOTS as i32 * 8;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Home {
     None,
     G(R),
     F(X),
+    /// spill slot [rsp + 8 * n] (an xmm or general value, by its type)
+    S(u8),
+}
+
+fn spill_off(n: u8) -> i32 {
+    n as i32 * 8
 }
 
 fn needs_reg(ty: IrType) -> Option<bool> {
@@ -128,17 +142,33 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
 
     // ---- allocation -----------------------------------------------------
     let mut home = vec![Home::None; n];
-    let mut free_g: Vec<R> = GPRS.iter().rev().copied().collect();
-    let mut free_x: Vec<X> = XMMS.iter().rev().map(|&x| X(x)).collect();
+    // (LUAU_TRACE_REGS=n: only n registers of each kind, to test spilling)
+    static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let limit = *LIMIT.get_or_init(|| std::env::var("LUAU_TRACE_REGS").ok().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX));
+    let mut free_g: Vec<R> = GPRS.iter().take(limit).rev().copied().collect();
+    let mut free_x: Vec<X> = XMMS.iter().take(limit).rev().map(|&x| X(x)).collect();
+    // spill slots: occupied now, and the last instruction a past occupant
+    // used it at (a value spilled after the fact holds its slot from its
+    // definition on, so only a slot unused since then will do)
+    let mut slot_busy = [false; SPILL_SLOTS];
+    let mut slot_until: [Option<usize>; SPILL_SLOTS] = [None; SPILL_SLOTS];
+    // values holding a register now (to pick one to spill)
+    let mut active: Vec<usize> = Vec::new();
     let mut dying: Vec<Vec<usize>> = vec![Vec::new(); n + 1];
+    let end_of = |v: usize, last: &[usize], used: &[bool]| if used[v] { last[v] } else { v };
     for (i, inst) in t.insts.iter().enumerate() {
         // values whose last use was the previous instruction are free now
         for &v in &dying[i] {
             match home[v] {
                 Home::G(r) => free_g.push(r),
                 Home::F(x) => free_x.push(x),
+                Home::S(s) => {
+                    slot_busy[s as usize] = false;
+                    slot_until[s as usize] = Some(i);
+                }
                 Home::None => {}
             }
+            active.retain(|&w| w != v);
         }
         if matches!(inst.op, Op::Nop | Op::Loop) {
             continue;
@@ -154,21 +184,53 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
             continue;
         }
         let Some(fp) = needs_reg(inst.ty) else { continue };
-        home[i] = if fp {
-            Home::F(free_x.pop().ok_or("out of xmm registers")?)
-        } else {
-            Home::G(free_g.pop().ok_or("out of general registers")?)
+        let end = end_of(i, &last, &used);
+        let reg = if fp { free_x.pop().map(Home::F) } else { free_g.pop().map(Home::G) };
+        home[i] = match reg {
+            Some(h) => {
+                active.push(i);
+                h
+            }
+            None => {
+                // out of registers: the value (this one or one holding a
+                // register of the same kind) needed furthest ahead lives in
+                // a spill slot for its whole life
+                let same = |w: &usize| matches!((home[*w], fp), (Home::F(_), true) | (Home::G(_), false));
+                let victim = active.iter().copied().filter(same).max_by_key(|&w| end_of(w, &last, &used));
+                let mut take_slot = |from: usize| -> Result<Home, String> {
+                    let k = (0..SPILL_SLOTS).find(|&k| !slot_busy[k] && slot_until[k].is_none_or(|u| u < from)).ok_or("out of spill slots")?;
+                    slot_busy[k] = true;
+                    Ok(Home::S(k as u8))
+                };
+                match victim {
+                    Some(w) if end_of(w, &last, &used) > end => {
+                        let h = home[w];
+                        home[w] = take_slot(w)?;
+                        active.retain(|&x| x != w);
+                        active.push(i);
+                        h
+                    }
+                    _ => take_slot(i)?,
+                }
+            }
         };
-        let end = if used[i] { last[i] } else { i };
         if end != END {
             dying[(end + 1).min(n)].push(i);
         }
     }
 
+    if std::env::var_os("LUAU_TRACE_HOMES").is_some() {
+        eprintln!("-- homes ({} insts)", n);
+        for (i, h) in home.iter().enumerate() {
+            if used[i] || *h != Home::None {
+                eprintln!("{:04} {:?} used={} last={}", i, h, used[i], if last[i] == END { "END".to_string() } else { last[i].to_string() });
+            }
+        }
+    }
     // values in registers still needed after instruction i (saved around a
     // call out of the trace)
     let live_across = |i: usize| -> Vec<Home> {
-        (0..i).filter(|&j| home[j] != Home::None && used[j] && (last[j] == END || last[j] > i)).map(|j| home[j]).collect()
+        (0..i).filter(|&j| matches!(home[j], Home::G(_) | Home::F(_)) && used[j] && (last[j] == END || last[j] > i)).map(|j| home[j]).collect()
     };
     // a trace that allocates checks for GC work at its back edge (and exits
     // for the collector to run: nothing collects while a trace runs)
@@ -189,6 +251,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         }
         a.mov_rr(R::R13, R::Rdi);
         a.mov_rr(R::R12, R::Rsi);
+        a.sub_ri(R::Rsp, SPILL_BYTES);
     }
     let reentry = a.pos() as usize;
     // entry checks (exit through the entry snapshot: nothing written yet):
@@ -210,17 +273,55 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         a.jcc(Cond::L, stubs[0]);
     }
 
-    let g = |r: Ref| match home[r.index()] {
-        Home::G(r) => Ok(r),
-        h => Err(format!("value {} is not in a general register ({:?})", r.0, h)),
-    };
-    let f = |r: Ref| match home[r.index()] {
-        Home::F(x) => Ok(x),
-        h => Err(format!("value {} is not in an xmm register ({:?})", r.0, h)),
-    };
-
     for (i, inst) in t.insts.iter().enumerate() {
-        let dst = home[i];
+        // spilled operands go to the temp registers for this instruction
+        // (stores and builtin arguments take values from anywhere)
+        let mut over: Vec<(usize, Home)> = Vec::new();
+        let (mut tg, mut tx) = (0usize, 0usize);
+        if !matches!(inst.op, Op::Phi { .. } | Op::Loop | Op::Builtin { .. }) {
+            let mut ops = inst.operands();
+            if let Op::XStore { v, .. } = inst.op {
+                ops.retain(|&o| o != v);
+            }
+            for o in ops {
+                if over.iter().any(|&(v, _)| v == o.index()) {
+                    continue;
+                }
+                if let Home::S(s) = home[o.index()] {
+                    if needs_reg(t.ty(o)) == Some(true) {
+                        let x = *TEMP_X.get(tx).ok_or("too many spilled operands")?;
+                        tx += 1;
+                        a.movsd_load(x, R::Rsp, spill_off(s));
+                        over.push((o.index(), Home::F(x)));
+                    } else {
+                        let r = *TEMP_G.get(tg).ok_or("too many spilled operands")?;
+                        tg += 1;
+                        a.load(r, R::Rsp, spill_off(s));
+                        over.push((o.index(), Home::G(r)));
+                    }
+                }
+            }
+        }
+        // a spilled result is computed in a temp, then stored
+        let (dst, spill_to) = match home[i] {
+            Home::S(s) if !matches!(inst.op, Op::Phi { .. }) => {
+                if needs_reg(inst.ty) == Some(true) {
+                    (Home::F(TEMP_X[tx.min(1)]), Some(s))
+                } else {
+                    (Home::G(TEMP_G[tg.min(1)]), Some(s))
+                }
+            }
+            h => (h, None),
+        };
+        let hm = |r: Ref| over.iter().find(|&&(v, _)| v == r.index()).map(|&(_, h)| h).unwrap_or(home[r.index()]);
+        let g = |r: Ref| match hm(r) {
+            Home::G(r) => Ok(r),
+            h => Err(format!("value {} is not in a general register ({:?})", r.0, h)),
+        };
+        let f = |r: Ref| match hm(r) {
+            Home::F(x) => Ok(x),
+            h => Err(format!("value {} is not in an xmm register ({:?})", r.0, h)),
+        };
         let stub = |s: crate::jit::ir::instruction::SnapId| stubs[s.0 as usize];
         match &inst.op {
             Op::Nop => {}
@@ -689,6 +790,13 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
             }
             Op::Phi { .. } => {}
         }
+        if let Some(s) = spill_to {
+            match dst {
+                Home::F(x) => a.movsd_store(R::Rsp, spill_off(s), x),
+                Home::G(r) => a.store(R::Rsp, spill_off(s), r),
+                _ => {}
+            }
+        }
     }
     if let Some(root) = link_to {
         // end of a side trace: the state goes to the stack (its last
@@ -757,6 +865,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         a.jmp(exit);
     }
     a.bind(exit);
+    a.add_ri(R::Rsp, SPILL_BYTES);
     for &r in used_g.iter().rev() {
         a.pop(r);
     }
@@ -800,6 +909,11 @@ fn store_value(a: &mut Asm, home: &[Home], t: &Trace, v: Ref, base: R, disp: i32
     match (home[v.index()], &t.inst(v).op) {
         (Home::F(x), _) => a.movsd_store(base, disp, x),
         (Home::G(r), _) => a.store(base, disp, r),
+        (Home::S(s), _) => {
+            // (exit stubs and stores: rsp is the trace frame's here)
+            a.load(R::Rcx, R::Rsp, spill_off(s));
+            a.store(base, disp, R::Rcx);
+        }
         (Home::None, Op::KNil) => {}
         (Home::None, Op::KBool(b)) => {
             a.mov_ri(R::Rax, *b as u64);
@@ -856,6 +970,16 @@ fn mov_home(a: &mut Asm, d: Home, s: Home) -> Result<(), String> {
     match (d, s) {
         (Home::F(d), Home::F(s)) => a.movapd(d, s),
         (Home::G(d), Home::G(s)) => a.mov_rr(d, s),
+        (Home::F(d), Home::G(s)) => a.movq_xr(d, s),
+        (Home::G(d), Home::F(s)) => a.movq_rx(d, s),
+        (Home::G(d), Home::S(s)) => a.load(d, R::Rsp, spill_off(s)),
+        (Home::F(d), Home::S(s)) => a.movsd_load(d, R::Rsp, spill_off(s)),
+        (Home::S(d), Home::G(s)) => a.store(R::Rsp, spill_off(d), s),
+        (Home::S(d), Home::F(s)) => a.movsd_store(R::Rsp, spill_off(d), s),
+        (Home::S(d), Home::S(s)) => {
+            a.load(R::Rax, R::Rsp, spill_off(s));
+            a.store(R::Rsp, spill_off(d), R::Rax);
+        }
         (d, s) => return Err(format!("move between {:?} and {:?}", d, s)),
     }
     Ok(())
@@ -897,16 +1021,41 @@ fn call_out(a: &mut Asm, live: &[Home], f: usize, args: &[Arg]) {
         a.movsd_store(R::Rsp, 8 * (gs.len() + k) as i32, x);
     }
     const ARGS: [R; 6] = [R::Rdi, R::Rsi, R::Rdx, R::Rcx, R::R8, R::R9];
+    // register arguments move all at once (a source can be another
+    // argument's register: cycles go through rax); then arguments from the
+    // save area, L and constants, which nothing else reads
+    let mut moves: Vec<(R, R)> = Vec::new();
+    for (k, arg) in args.iter().enumerate() {
+        if let Arg::G(r) = *arg {
+            if !gs.contains(&r) && r != ARGS[k] {
+                moves.push((ARGS[k], r));
+            }
+        }
+    }
+    while !moves.is_empty() {
+        if let Some(j) = (0..moves.len()).find(|&j| !moves.iter().any(|&(_, s)| s == moves[j].0)) {
+            let (d, s) = moves.remove(j);
+            a.mov_rr(d, s);
+        } else {
+            let (_, s) = moves[0];
+            a.mov_rr(R::Rax, s);
+            for m in moves.iter_mut() {
+                if m.1 == s {
+                    m.1 = R::Rax;
+                }
+            }
+        }
+    }
     for (k, arg) in args.iter().enumerate() {
         let d = ARGS[k];
         match *arg {
             Arg::L => a.mov_rr(d, R::R12),
             Arg::Imm(v) => a.mov_ri64(d, v),
-            Arg::G(r) => match gs.iter().position(|&s| s == r) {
-                // (it may already be overwritten by an earlier argument)
-                Some(slot) => a.load(d, R::Rsp, 8 * slot as i32),
-                None => a.mov_rr(d, r),
-            },
+            Arg::G(r) => {
+                if let Some(slot) = gs.iter().position(|&s| s == r) {
+                    a.load(d, R::Rsp, 8 * slot as i32);
+                }
+            }
         }
     }
     a.call_abs(f);

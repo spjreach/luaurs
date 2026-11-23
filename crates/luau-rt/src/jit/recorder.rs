@@ -70,11 +70,17 @@ pub struct Recorder {
     /// the stack top (trace slot) after a call returning a variable number
     /// of values, until the instruction taking them
     top: Option<usize>,
+    /// iterations of inner loops recorded so far
+    unrolled: usize,
 }
 
 /// `Op::Builtin::nres` for a call taking every result (the trace checks
 /// there is exactly one).
 pub const MULTRET1: u8 = 0xff;
+
+/// Iterations of inner loops one trace may unroll (longer inner loops get
+/// traces of their own; the outer loop then stays native).
+const UNROLL_LIMIT: usize = 64;
 
 /// Deepest call inlining.
 const MAX_INLINE_DEPTH: usize = 6;
@@ -135,6 +141,7 @@ impl Recorder {
             pending: None,
             l: std::ptr::null_mut(),
             top: None,
+            unrolled: 0,
         }
     }
 
@@ -606,6 +613,54 @@ impl Recorder {
                 // the comparison result
                 self.read(a, base)?;
             }
+        } else if o(O::ForNPrep) {
+            // an inner loop: unrolled into the trace (its iterations are
+            // recorded one after the other, see UNROLL_LIMIT)
+            let (lim_v, step_v, idx_v) = ((*base.add(a)).value.n, (*base.add(a + 1)).value.n, (*base.add(a + 2)).value.n);
+            let limit = self.read_num(a, base)?;
+            let step = self.read_num(a + 1, base)?;
+            let idx = self.read_num(a + 2, base)?;
+            if step_v == 0.0 || step_v.is_nan() {
+                return Err(unsupported_type("for loop step"));
+            }
+            let zero = self.b.knum(0.0);
+            let snap = self.b.snapshot();
+            if step_v > 0.0 {
+                self.b.emit(Op::Guard { cmp: Cmp::Lt, a: zero, b: step, snap }, IrType::Nil);
+            } else {
+                self.b.emit(Op::Guard { cmp: Cmp::Lt, a: step, b: zero, snap }, IrType::Nil);
+            }
+            // whether the loop runs at all, as it did now
+            let enters = if step_v > 0.0 { idx_v <= lim_v } else { lim_v <= idx_v };
+            let (x, y) = if step_v > 0.0 { (idx, limit) } else { (limit, idx) };
+            self.b.emit(Op::Guard { cmp: if enters { Cmp::Le } else { Cmp::Nle }, a: x, b: y, snap }, IrType::Nil);
+        } else if o(O::ForNLoop) && (pc as i64 + 1 + d_of(insn) as i64) as u32 != self.header() {
+            // the back edge of an unrolled inner loop: its direction is a
+            // guard (a different trip count exits, for a side trace)
+            self.unrolled += 1;
+            if self.unrolled > UNROLL_LIMIT {
+                return Err(unsupported_type("inner loop too long to unroll"));
+            }
+            let target = (pc as i64 + 1 + d_of(insn) as i64) as u32;
+            let (lim_v, step_v, idx_v) = ((*base.add(a)).value.n, (*base.add(a + 1)).value.n, (*base.add(a + 2)).value.n);
+            let limit = self.read_num(a, base)?;
+            let step = self.read_num(a + 1, base)?;
+            let idx = self.read_num(a + 2, base)?;
+            let next = idx_v + step_v;
+            let continues = if step_v > 0.0 { next <= lim_v } else { lim_v <= next };
+            let i1 = self.b.emit(Op::Add(idx, step), IrType::Number);
+            self.b.set_slot(a + 2, i1);
+            // a failed guard resumes where the other direction goes
+            self.b.pc = if continues { pc + 1 } else { target };
+            let snap = self.b.snapshot();
+            let (x, y) = if step_v > 0.0 { (i1, limit) } else { (limit, i1) };
+            self.b.emit(Op::Guard { cmp: if continues { Cmp::Le } else { Cmp::Nle }, a: x, b: y, snap }, IrType::Nil);
+        } else if o(O::JumpBack) && (pc as i64 + 1 + d_of(insn) as i64) as u32 != self.header() {
+            // an unrolled inner while/repeat loop's back edge
+            self.unrolled += 1;
+            if self.unrolled > UNROLL_LIMIT {
+                return Err(unsupported_type("inner loop too long to unroll"));
+            }
         } else if o(O::ForNLoop) {
             let target = (pc as i64 + 1 + d_of(insn) as i64) as u32;
             if target != self.header() {
@@ -618,7 +673,7 @@ impl Recorder {
             let next = idx_v + step_v;
             let continues = if step_v > 0.0 { next <= lim_v } else { lim_v <= next };
             if !continues {
-                return Err(AbortReason::UnsupportedControlFlow);
+                return Err(AbortReason::LeftLoop);
             }
             // the step's sign is fixed for the whole loop (FORNPREP's
             // registers aren't written by the body): guard it once
