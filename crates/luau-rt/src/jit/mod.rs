@@ -265,8 +265,12 @@ pub unsafe fn record_step(L: *mut lua_State, p: *mut Proto, pc: u32, base: StkId
         recorder::Step::Abort(reason) => {
             debug::log(debug::Event::TraceAbort { id: id.0, pc, reason: &reason });
             state::with(|s| {
-                if !side && reason != trace::AbortReason::LeftLoop {
-                    s.hot.penalize(proto, header);
+                if !side {
+                    if reason == trace::AbortReason::LeftLoop {
+                        s.hot.left_loop(proto, header);
+                    } else {
+                        s.hot.penalize(proto, header);
+                    }
                 }
                 s.note_abort((id, pc, reason));
             });

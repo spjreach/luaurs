@@ -61,6 +61,10 @@ pub struct Recorder {
     /// side trace: the loop header it ends at (its root's), and the parent
     /// exit it continues
     side: Option<(u32, (u16, u32))>,
+    /// a builtin call just recorded: (its instruction if it has a result,
+    /// the result's trace slot, the pc the interpreter must be at next). Its
+    /// type is the one the interpreter produced.
+    pending: Option<(Option<Ref>, usize, u32)>,
 }
 
 /// Deepest call inlining.
@@ -119,6 +123,7 @@ impl Recorder {
             gc_refs: Vec::new(),
             protos: Vec::new(),
             side: None,
+            pending: None,
         }
     }
 
@@ -207,6 +212,19 @@ impl Recorder {
     /// Records the instruction at `pc` (about to execute, with the frame's
     /// stack at `base`).
     pub unsafe fn step(&mut self, pc: u32, base: StkId) -> Step {
+        if let Some((r, slot, next)) = self.pending.take() {
+            if pc != next {
+                // the builtin declined: the interpreter called the function
+                return Step::Abort(AbortReason::UnsupportedType("builtin fell back"));
+            }
+            if let Some(r) = r {
+                let tv = self.root_base.add(slot);
+                match IrType::of_tag((*tv).tt) {
+                    Some(ty) if ty != IrType::Vector => self.b.trace.insts[r.index()].ty = ty,
+                    _ => return Step::Abort(AbortReason::UnsupportedType("builtin result type")),
+                }
+            }
+        }
         let inlined = self.funcs.len() > 1;
         if let Some((header, _)) = self.side {
             if pc == header && !inlined {
@@ -442,16 +460,55 @@ impl Recorder {
             let rb = aux as usize;
             let ta = (*base.add(a)).tt;
             let tb = (*base.add(rb)).tt;
-            if ta == LUA_TSTRING && tb == LUA_TSTRING {
-                // interned strings: equality is pointer equality. Only the
-                // "equal" direction is expressible (GuardSame)
-                if op != O::JumpIfEq as u8 || (*base.add(a)).value.gc != (*base.add(rb)).value.gc {
-                    return Err(unsupported_type("string comparison"));
-                }
+            let is_eq = o(O::JumpIfEq) || o(O::JumpIfNotEq);
+            if is_eq && ta != tb {
+                // different types are never equal: the tag guards pin it
+                self.read(a, base)?;
+                self.read(rb, base)?;
+            } else if is_eq && ta != LUA_TNUMBER && ta != LUA_TVECTOR && ta != LUA_TUSERDATA {
+                // same non-number type: identity (strings are interned);
+                // tables compare with __eq only when both have metatables
+                // and differ
+                let (va, vb) = ((*base.add(a)).value.gc, (*base.add(rb)).value.gc);
                 let x = self.read(a, base)?;
                 let y = self.read(rb, base)?;
                 let snap = self.b.snapshot();
-                self.b.emit(Op::GuardSame { a: x, k: y, snap }, IrType::Nil);
+                match ta {
+                    LUA_TNIL => {}
+                    LUA_TBOOLEAN => {
+                        let eq = (*base.add(a)).value.b == (*base.add(rb)).value.b;
+                        self.b.emit(Op::Guard { cmp: if eq { Cmp::Eq } else { Cmp::Ne }, a: x, b: y, snap }, IrType::Nil);
+                    }
+                    LUA_TSTRING | LUA_TFUNCTION | LUA_TTABLE | LUA_TLIGHTUSERDATA | LUA_TBUFFER => {
+                        if ta == LUA_TTABLE && va != vb {
+                            for t in [x, y] {
+                                self.b.emit(Op::GuardPlainTable { t, store: false, snap }, IrType::Nil);
+                            }
+                        }
+                        if ta == LUA_TLIGHTUSERDATA {
+                            return Err(unsupported_type("light userdata comparison"));
+                        }
+                        let op = if va == vb { Op::GuardSame { a: x, k: y, snap } } else { Op::GuardDiff { a: x, k: y, snap } };
+                        self.b.emit(op, IrType::Nil);
+                    }
+                    _ => return Err(unsupported_type("comparison of this type")),
+                }
+            } else if !is_eq && ta == LUA_TSTRING && tb == LUA_TSTRING {
+                let c = crate::lvmutils::luaV_strcmp(tsvalue(base.add(a)), tsvalue(base.add(rb)));
+                let x = self.read(a, base)?;
+                let y = self.read(rb, base)?;
+                let r = self.b.emit(Op::StrCmp { a: x, b: y }, IrType::I32);
+                let zero = self.b.ki32(0);
+                let lt = o(O::JumpIfLt) || o(O::JumpIfNotLt);
+                let holds = if lt { c < 0 } else { c <= 0 };
+                let cmp = match (lt, holds) {
+                    (true, true) => Cmp::Lt,
+                    (true, false) => Cmp::Nlt,
+                    (false, true) => Cmp::Le,
+                    (false, false) => Cmp::Nle,
+                };
+                let snap = self.b.snapshot();
+                self.b.emit(Op::Guard { cmp, a: r, b: zero, snap }, IrType::Nil);
             } else if ta != LUA_TNUMBER || tb != LUA_TNUMBER {
                 return Err(unsupported_type("comparison of non-numbers"));
             } else {
@@ -512,8 +569,10 @@ impl Recorder {
                         let snap = self.b.snapshot();
                         self.b.emit(Op::GuardSame { a: x, k, snap }, IrType::Nil);
                     } else {
-                        // "not this string" can't be expressed yet
-                        return Err(unsupported_type("negated string comparison"));
+                        let x = self.read(a, base)?;
+                        let k = self.konst((aux & 0xffffff) as usize)?;
+                        let snap = self.b.snapshot();
+                        self.b.emit(Op::GuardDiff { a: x, k, snap }, IrType::Nil);
                     }
                 } else {
                     // nil: the SLoad tag guard pins it
@@ -748,7 +807,7 @@ impl Recorder {
             let bfid = a as u8;
             let (cl, clr) = self.cur_closure();
             if (*(*cl).env).safeenv == 0 || nres != 1 || !math1_supported(bfid) || (*base.add(bb)).tt != LUA_TNUMBER {
-                return Err(AbortReason::UnsupportedOpcode("FastCall1"));
+                return self.record_builtin(pc, insn, aux, base);
             }
             self.guard_safeenv(clr);
             let x = self.read_num(bb, base)?;
@@ -758,6 +817,10 @@ impl Recorder {
             self.record_call(pc, insn, base)?;
         } else if o(O::Return) {
             self.record_return(insn, base)?;
+        } else if o(O::FastCall1) || o(O::FastCall2) || o(O::FastCall2K) || o(O::FastCall3) {
+            self.record_builtin(pc, insn, aux, base)?;
+        } else if o(O::FastCall) {
+            self.record_builtin(pc, insn, aux, base)?;
         } else {
             let name = O::try_from(op).map(|x| opname(x)).unwrap_or("?");
             return Err(AbortReason::UnsupportedOpcode(name));
@@ -790,6 +853,78 @@ impl Recorder {
         let snap = self.b.snapshot();
         let p = self.b.emit(Op::HRef { t, k, idx: idx as u32, lsize: (*h).lsizenode, store, snap }, IrType::Ptr);
         Ok((p, res))
+    }
+
+    /// FASTCALL1/2/2K/3 of any builtin that doesn't change tables or
+    /// metatables: the trace calls Luau's own fast implementation.
+    unsafe fn record_builtin(&mut self, pc: u32, insn: u32, aux: u32, base: StkId) -> R<()> {
+        use luau_common::bytecode::BuiltinFunction as B;
+        let op = op_of(insn);
+        let bfid = a_of(insn) as u8;
+        let banned = [B::Rawset, B::TableInsert, B::TableUnpack, B::SelectVararg, B::Setmetatable, B::TableClear, B::Vector];
+        if banned.iter().any(|&b| b as u8 == bfid) {
+            return Err(AbortReason::UnsupportedOpcode(builtin_name(bfid)));
+        }
+        let code = (*self.cur_proto()).code;
+        // where the replaced CALL is (skip counts from after the FASTCALL)
+        let (len, skip) = if op == O::FastCall1 as u8 || op == O::FastCall as u8 { (1, c_of(insn)) } else { (2, c_of(insn) - 1) };
+        let call_at = pc as usize + len + skip;
+        let call = *code.add(call_at);
+        let (ra, nres) = (a_of(call), c_of(call) as i32 - 1);
+        if !(0..=1).contains(&nres) {
+            return Err(unsupported_type("builtin with variable results"));
+        }
+        let (cl, clr) = self.cur_closure();
+        if (*(*cl).env).safeenv == 0 {
+            return Err(unsupported_type("builtin in an unsafe environment"));
+        }
+        let mut args = [Ref(0); 3];
+        let mut nargs = 0;
+        if op == O::FastCall as u8 {
+            // the CALL's own arguments, already in place
+            let n = b_of(call);
+            if n == 0 || n - 1 > 3 {
+                return Err(unsupported_type("builtin with variable or many arguments"));
+            }
+            nargs = n - 1;
+            for k in 0..nargs {
+                args[k] = self.read(ra + 1 + k, base)?;
+            }
+        } else {
+            args[0] = self.read(b_of(insn), base)?;
+        }
+        if op == O::FastCall as u8 {
+        } else if op == O::FastCall1 as u8 {
+            nargs = 1;
+        } else if op == O::FastCall2 as u8 {
+            args[1] = self.read(aux as usize, base)?;
+            nargs = 2;
+        } else if op == O::FastCall2K as u8 {
+            args[1] = self.konst(aux as usize)?;
+            nargs = 2;
+        } else {
+            args[1] = self.read((aux & 0xff) as usize, base)?;
+            args[2] = self.read(((aux >> 8) & 0xff) as usize, base)?;
+            nargs = 3;
+        }
+        for a in &args[..nargs] {
+            if self.b.trace.ty(*a) == IrType::Vector {
+                return Err(unsupported_type("vector builtin argument"));
+            }
+        }
+        self.guard_safeenv(clr);
+        let buf = Box::leak(vec![0u64; 8].into_boxed_slice()).as_mut_ptr() as usize;
+        let snap = self.b.snapshot();
+        // (the result's type is filled in at the next step, from the stack)
+        let v = self.b.emit(Op::Builtin { bfid, args, nargs: nargs as u8, nres: nres as u8, buf, snap }, IrType::Nil);
+        let next = call_at as u32 + 1;
+        if nres == 1 {
+            self.b.set_slot(ra, v);
+            self.pending = Some((Some(v), self.b.off + ra, next));
+        } else {
+            self.pending = Some((None, 0, next));
+        }
+        Ok(())
     }
 
     /// Exits unless the environment of closure `cl` is still safe (its
@@ -943,6 +1078,7 @@ impl Recorder {
                 | Op::Guard { .. }
                 | Op::GuardTruthy { .. }
                 | Op::GuardSame { .. }
+                | Op::GuardDiff { .. }
                 | Op::NumToI32 { .. }
                 | Op::ASize(_)
         )
@@ -1293,9 +1429,13 @@ fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *b = rm(*b);
         }
         GuardTruthy { a, .. } => *a = rm(*a),
-        GuardSame { a, k, .. } => {
+        GuardSame { a, k, .. } | GuardDiff { a, k, .. } => {
             *a = rm(*a);
             *k = rm(*k);
+        }
+        StrCmp { a, b } => {
+            *a = rm(*a);
+            *b = rm(*b);
         }
         Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) | Mod(a, b) | Pow(a, b) | IDiv(a, b) | AddI32(a, b) => {
             *a = rm(*a);
@@ -1326,6 +1466,11 @@ fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
         TLen { t } => *t = rm(*t),
         SLen { s } => *s = rm(*s),
         DupTable { tpl } => *tpl = rm(*tpl),
+        Builtin { args, nargs, .. } => {
+            for x in args.iter_mut().take(*nargs as usize) {
+                *x = rm(*x);
+            }
+        }
         GuardProto { f, p, .. } => {
             *f = rm(*f);
             *p = rm(*p);
@@ -1346,6 +1491,7 @@ fn set_snapshot(op: &mut Op, s: SnapId) {
         | Guard { snap, .. }
         | GuardTruthy { snap, .. }
         | GuardSame { snap, .. }
+        | GuardDiff { snap, .. }
         | NumToI32 { snap, .. }
         | XLoad { snap, .. }
         | GuardPlainTable { snap, .. }
@@ -1353,9 +1499,25 @@ fn set_snapshot(op: &mut Op, s: SnapId) {
         | ULoad { snap, .. }
         | GuardProto { snap, .. }
         | HRef { snap, .. }
-        | GuardUvSlot { snap, .. } => *snap = s,
+        | GuardUvSlot { snap, .. }
+        | Builtin { snap, .. } => *snap = s,
         _ => {}
     }
+}
+
+/// Builtin names for abort diagnostics ("builtin:MathMax"; built once).
+fn builtin_name(bfid: u8) -> &'static str {
+    use luau_common::bytecode::BuiltinFunction as B;
+    static NAMES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    let names = NAMES.get_or_init(|| {
+        (0..=255u8)
+            .map(|b| match B::try_from(b) {
+                Ok(f) => &*Box::leak(format!("builtin:{:?}", f).into_boxed_str()),
+                Err(_) => "builtin:?",
+            })
+            .collect()
+    });
+    names[bfid as usize]
 }
 
 /// Opcode names for abort diagnostics (built once).

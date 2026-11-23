@@ -38,6 +38,8 @@ pub fn map_op(op: &Op, map: &[Ref]) -> Op {
         Op::Guard { cmp, a, b, snap } => Op::Guard { cmp: *cmp, a: r(*a), b: r(*b), snap: *snap },
         Op::GuardTruthy { a, want, snap } => Op::GuardTruthy { a: r(*a), want: *want, snap: *snap },
         Op::GuardSame { a, k, snap } => Op::GuardSame { a: r(*a), k: r(*k), snap: *snap },
+        Op::GuardDiff { a, k, snap } => Op::GuardDiff { a: r(*a), k: r(*k), snap: *snap },
+        Op::StrCmp { a, b } => Op::StrCmp { a: r(*a), b: r(*b) },
         Op::Add(a, b) => Op::Add(r(*a), r(*b)),
         Op::Sub(a, b) => Op::Sub(r(*a), r(*b)),
         Op::Mul(a, b) => Op::Mul(r(*a), r(*b)),
@@ -61,6 +63,13 @@ pub fn map_op(op: &Op, map: &[Ref]) -> Op {
         Op::SLen { s } => Op::SLen { s: r(*s) },
         Op::NewTable { narray, nhash } => Op::NewTable { narray: *narray, nhash: *nhash },
         Op::DupTable { tpl } => Op::DupTable { tpl: r(*tpl) },
+        Op::Builtin { bfid, args, nargs, nres, buf, snap } => {
+            let mut a = *args;
+            for x in a.iter_mut().take(*nargs as usize) {
+                *x = r(*x);
+            }
+            Op::Builtin { bfid: *bfid, args: a, nargs: *nargs, nres: *nres, buf: *buf, snap: *snap }
+        }
         Op::HSlot { t, idx } => Op::HSlot { t: r(*t), idx: *idx },
         Op::HRef { t, k, idx, lsize, store, snap } => Op::HRef { t: r(*t), k: r(*k), idx: *idx, lsize: *lsize, store: *store, snap: *snap },
         Op::ULoad { cl, idx, by_ref, stack, snap } => Op::ULoad { cl: r(*cl), idx: *idx, by_ref: *by_ref, stack: *stack, snap: *snap },

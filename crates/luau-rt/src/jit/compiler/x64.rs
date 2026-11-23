@@ -143,8 +143,8 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         }
         let defines = !matches!(
             inst.op,
-            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. }
-        );
+            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. }
+        ) && !matches!(inst.op, Op::Builtin { nres: 0, .. });
         if !defines {
             continue;
         }
@@ -170,7 +170,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
     };
     // a trace that allocates checks for GC work at its back edge (and exits
     // for the collector to run: nothing collects while a trace runs)
-    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. }));
+    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::Builtin { .. }));
 
     // ---- emission -------------------------------------------------------
     let mut a = Asm::new();
@@ -305,6 +305,9 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                             a.bind(ok);
                         }
                     }
+                } else if (tx == IrType::Boolean && ty == IrType::Boolean) && matches!(cmp, Cmp::Eq | Cmp::Ne) {
+                    a.cmp32_rr(g(*x)?, g(*y)?);
+                    a.jcc(if matches!(cmp, Cmp::Eq) { Cond::NE } else { Cond::E }, s);
                 } else if tx == IrType::I32 && ty == IrType::I32 {
                     a.cmp32_rr(g(*x)?, g(*y)?);
                     // exit when the condition fails (signed compare)
@@ -348,6 +351,24 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                 } else {
                     a.cmp_rr(g(*v)?, g(*k)?);
                     a.jcc(Cond::NE, stub(*snap));
+                }
+            }
+            Op::GuardDiff { a: v, k, snap } => {
+                let (vt, kt) = (t.ty(*v), t.ty(*k));
+                if vt == IrType::Nil && kt == IrType::Nil {
+                    a.jmp(stub(*snap));
+                } else if vt == IrType::Nil || kt == IrType::Nil {
+                    // never the same
+                } else {
+                    a.cmp_rr(g(*v)?, g(*k)?);
+                    a.jcc(Cond::E, stub(*snap));
+                }
+            }
+            Op::StrCmp { a: x, b: y } => {
+                let live = live_across(i);
+                call_out(&mut a, &live, helpers::strcmp as usize, &[Arg::G(g(*x)?), Arg::G(g(*y)?)]);
+                if let Home::G(d) = dst {
+                    a.mov_rr32(d, R::Rax);
                 }
             }
             Op::GuardPlainTable { t: tb, store, snap } => {
@@ -482,6 +503,30 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                 call_out(&mut a, &live, helpers::dup_table as usize, &[Arg::L, Arg::G(g(*tpl)?)]);
                 if let Home::G(d) = dst {
                     a.mov_rr(d, R::Rax);
+                }
+            }
+            Op::Builtin { bfid, args, nargs, nres, buf, snap } => {
+                let s = stub(*snap);
+                a.mov_ri64(R::Rdx, *buf as u64);
+                for k in 0..*nargs as usize {
+                    store_value(&mut a, &home, t, args[k], R::Rdx, (1 + k as i32) * TV)?;
+                }
+                let live = live_across(i);
+                call_out(
+                    &mut a,
+                    &live,
+                    helpers::fastcall as usize,
+                    &[Arg::L, Arg::Imm(*bfid as u64), Arg::Imm(*nargs as u64), Arg::Imm(*nres as u64), Arg::Imm(*buf as u64)],
+                );
+                // declined: the interpreter does it the slow way
+                a.test_rr(R::Rax, R::Rax);
+                a.jcc(Cond::L, s);
+                if *nres == 1 {
+                    let tag = inst.ty.tag().ok_or("builtin result of a non-Lua type")?;
+                    a.mov_ri64(R::Rcx, *buf as u64);
+                    a.cmp32_mi(R::Rcx, OFF_TT, tag);
+                    a.jcc(Cond::NE, s);
+                    load_value(&mut a, dst, inst.ty, R::Rcx, 0)?;
                 }
             }
             Op::HSlot { t: tb, idx } => {
@@ -855,12 +900,23 @@ mod helpers {
         }
     }
 
+    pub unsafe extern "sysv64" fn strcmp(a: *const TString, b: *const TString) -> i64 {
+        crate::lvmutils::luaV_strcmp(a, b) as i64
+    }
+
     pub unsafe extern "sysv64" fn len(t: *mut LuaTable) -> i64 {
         crate::ltable::luaH_getn(t) as i64
     }
 
     pub unsafe extern "sysv64" fn new_table(L: *mut lua_State, narray: i64, nhash: i64) -> *mut LuaTable {
         crate::ltable::luaH_new(L, narray as i32, nhash as i32)
+    }
+
+    /// A fast builtin through `buf` (TValues: result, arguments): >= 0 when
+    /// it handled the call.
+    pub unsafe extern "sysv64" fn fastcall(L: *mut lua_State, bfid: i64, nargs: i64, nres: i64, buf: *mut TValue) -> i64 {
+        let f = crate::lbuiltins::luauF_table[bfid as usize];
+        f(L, buf, buf.add(1), nres as i32, buf.add(2), nargs as i32) as i64
     }
 
     pub unsafe extern "sysv64" fn dup_table(L: *mut lua_State, tpl: *mut LuaTable) -> *mut LuaTable {

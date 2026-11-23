@@ -18,6 +18,9 @@ pub const MAX_PENALTY: u8 = 6;
 struct Counter {
     count: u32,
     penalty: u8,
+    /// recordings that left the loop (every fourth one counts as a failure:
+    /// a loop that usually runs one or two iterations keeps doing that)
+    left: u8,
 }
 
 #[derive(Default)]
@@ -46,6 +49,16 @@ impl HotCounters {
     pub fn penalize(&mut self, p: *mut Proto, header: u32) {
         let c = self.counters.entry((p as usize, header)).or_default();
         c.penalty = c.penalty.saturating_add(1);
+        c.count = 0;
+    }
+
+    /// A recording left the loop during its iteration.
+    pub fn left_loop(&mut self, p: *mut Proto, header: u32) {
+        let c = self.counters.entry((p as usize, header)).or_default();
+        c.left = c.left.wrapping_add(1);
+        if c.left % 4 == 0 {
+            c.penalty = c.penalty.saturating_add(1);
+        }
         c.count = 0;
     }
 

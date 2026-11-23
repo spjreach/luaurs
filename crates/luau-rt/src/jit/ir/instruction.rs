@@ -69,6 +69,10 @@ pub enum Op {
     GuardTruthy { a: Ref, want: bool, snap: SnapId },
     /// exits unless `a` (a GC object) is the object `k`
     GuardSame { a: Ref, k: Ref, snap: SnapId },
+    /// exits if `a` is the object `k`
+    GuardDiff { a: Ref, k: Ref, snap: SnapId },
+    /// `luaV_strcmp(a, b)` of two strings (an I32: <0, 0, >0)
+    StrCmp { a: Ref, b: Ref },
 
     // ---- numbers (f64) --------------------------------------------------
     Add(Ref, Ref),
@@ -128,6 +132,12 @@ pub enum Op {
     NewTable { narray: u32, nhash: u32 },
     /// a copy of template table `tpl` (`DUPTABLE`; a Table constant)
     DupTable { tpl: Ref },
+    /// Luau's fast builtin `bfid` (`luauF_table`) on `args[..nargs]`, through
+    /// the scratch TValues at `buf` (result, then arguments). Exits through
+    /// `snap` (resuming at the FASTCALL, which the interpreter then does the
+    /// slow way) when the builtin declines, or when its result (`nres` = 1)
+    /// isn't of this instruction's type
+    Builtin { bfid: u8, args: [Ref; 3], nargs: u8, nres: u8, buf: usize, snap: SnapId },
 
     // ---- functions --------------------------------------------------------
     /// the running closure of the trace's own frame (`L->ci->func`)
@@ -176,7 +186,8 @@ impl Inst {
             KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop => vec![],
             Guard { a, b, .. } => vec![*a, *b],
             GuardTruthy { a, .. } => vec![*a],
-            GuardSame { a, k, .. } => vec![*a, *k],
+            GuardSame { a, k, .. } | GuardDiff { a, k, .. } => vec![*a, *k],
+            StrCmp { a, b } => vec![*a, *b],
             Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) | Mod(a, b) | Pow(a, b) | IDiv(a, b) | AddI32(a, b) => {
                 vec![*a, *b]
             }
@@ -191,6 +202,7 @@ impl Inst {
             TLen { t } => vec![*t],
             SLen { s } => vec![*s],
             DupTable { tpl } => vec![*tpl],
+            Builtin { args, nargs, .. } => args[..*nargs as usize].to_vec(),
             HRef { t, k, .. } => vec![*t, *k],
             HSlot { t, .. } => vec![*t],
             ULoad { cl, .. } | ClEnv { cl } | GuardUvSlot { cl, .. } => vec![*cl],
@@ -205,7 +217,7 @@ impl Inst {
         use Op::*;
         match &self.op {
             SLoad { guarded: true, snap, .. } => Some(*snap),
-            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } => {
+            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } => {
                 Some(*snap)
             }
             _ => None,
