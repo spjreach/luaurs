@@ -288,7 +288,9 @@ unsafe fn handle_exit(L: *mut lua_State, p: *mut Proto, header: u32, base: StkId
             // on from there)
             let (sid, max_len) = state::with(|s| (s.new_id(), s.max_trace_len));
             debug::log(debug::Event::TraceStart { id: sid.0, pc });
-            let mut rec = recorder::Recorder::new_side(sid, p, crate::lobject::clvalue((*(*L).ci).func), pc, base, max_len, header, end, (ptag, k), sframes);
+            // (the stack top a call left for the next instruction)
+            let side_top = top.map(|t| if t == recorder::KEEP_TOP { ((*L).top.offset_from(base) as usize, true) } else { (t as usize, false) });
+            let mut rec = recorder::Recorder::new_side(sid, p, crate::lobject::clvalue((*(*L).ci).func), pc, base, max_len, header, end, (ptag, k), sframes, side_top);
             rec.set_state(L);
             RECORDER.with(|r| *r.borrow_mut() = Some((rec, base)));
             begin_recording(L);

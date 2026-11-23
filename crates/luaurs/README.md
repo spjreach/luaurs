@@ -127,11 +127,11 @@ much slower; on loop-heavy code it can make it a lot faster. On the classic shoo
 | mandel | **137.3** | 207.2 | 34.0 |
 
 So it beats C++ Luau everywhere here, and LuaJIT is the next target. Traces handle calls
-(inlined), upvalues, closures, table fields, arrays and appends, `pairs`/`ipairs`, string and math
-builtins, plain C library functions like `string.format` or `math.random`, arithmetic metamethods,
-and loops inside loops. What still makes it give up on a loop (leaving it to the regular JIT):
-C functions that call back into Lua (`table.sort` with a comparator, `pcall`), comparison
-metamethods, vectors, vararg functions, and closures that capture a loop variable by reference.
+(inlined, vararg functions included), upvalues, closures (also capturing locals by reference),
+table fields, arrays and appends, `pairs`/`ipairs`, vectors, string and math builtins, any C
+function - including ones that call back into Lua like `pcall`, `table.sort` with a comparator or
+`string.gsub` with a function, and yields through them inside coroutines - arithmetic and
+comparison metamethods, and loops inside loops.
 
 So it beats C++ Luau everywhere here, and LuaJIT is the next target. What it can't trace yet
 (it simply leaves those loops to the regular JIT): creating tables inside the loop, metamethods,

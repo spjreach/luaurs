@@ -95,6 +95,18 @@ pub struct Recorder {
     /// of its caller - deeper instructions are the callee's, not recorded
     /// - , the result count it defines)
     callback: Option<(usize, i32, u32, isize, Ref)>,
+    /// a FASTCALL just recorded: (its Builtin instruction, the result slot
+    /// (frame-relative) and the value it had) - undone when the builtin
+    /// declines while recording (the fallback CALL is recorded instead)
+    builtin_undo: Option<(Ref, Option<(usize, Option<Ref>)>)>,
+    /// that FASTCALL's call: (builtin id, the CALL's frame slot, its
+    /// arguments) - for a builtin returning several values, recorded as
+    /// the call of its function instead
+    builtin_call: Option<(u8, usize, [Ref; 3], usize)>,
+    /// a FASTCALL recorded as the call of its function once it's known
+    /// the builtin ran (else its fallback code is recorded): (builtin, the
+    /// CALL's slot, arguments, results wanted, the pc after the CALL)
+    deferred_call: Option<((u8, usize, [Ref; 3], usize), i32, u32)>,
 }
 
 /// `Snapshot::top` of an exit that keeps the L->top the trace left (after
@@ -179,6 +191,9 @@ impl Recorder {
             fresh: Vec::new(),
             varargs: None,
             callback: None,
+            builtin_undo: None,
+            builtin_call: None,
+            deferred_call: None,
         }
     }
 
@@ -196,6 +211,7 @@ impl Recorder {
         loop_end: u32,
         parent: (u16, u32),
         frames: Vec<SnapFrame>,
+        top: Option<(usize, bool)>,
     ) -> Recorder {
         let mut r = Recorder::new(id, proto, cl, start_pc, base, max_len);
         r.loop_end = loop_end;
@@ -206,8 +222,16 @@ impl Recorder {
             r.b.off = last.base as usize;
         }
         r.b.frames = frames.clone();
+        // (after a call with a variable number of results, L->top is where
+        // that call left it: checked, and kept by exits at the start)
+        let keep = top.is_some_and(|t| t.1);
+        r.set_top(if keep { Some(KEEP_TOP as usize) } else { top.map(|t| t.0) });
         // snapshot 0: the start, nothing done (the entry checks exit here)
-        r.b.snapshot();
+        let s0 = r.b.snapshot();
+        if let (Some((t, true)), _) = (top, s0) {
+            r.b.emit(Op::GuardTop { top: t as u16, snap: s0 }, IrType::Nil);
+            r.set_top(Some(t));
+        }
         let off = r.b.off;
         r.b.off = 0;
         for f in &frames {
@@ -303,27 +327,60 @@ impl Recorder {
     /// Records the instruction at `pc` (about to execute, with the frame's
     /// stack at `base`).
     pub unsafe fn step(&mut self, pc: u32, base: StkId) -> Step {
-        if let Some((r, slot, next, multret)) = self.pending.take() {
-            if pc != next {
-                // the builtin declined: the interpreter called the function
-                return Step::Abort(AbortReason::UnsupportedType("builtin fell back"));
-            }
-            if multret {
-                // a variable number of results: one, as the trace checks
-                let n = (*self.l).top.offset_from(self.root_base.add(slot));
-                if n != 1 {
-                    return Step::Abort(AbortReason::UnsupportedType("builtin returned several results"));
-                }
-                self.set_top(Some(slot + 1));
-            }
-            if let Some(r) = r {
-                let tv = self.root_base.add(slot);
-                match IrType::of_tag((*tv).tt) {
-                    Some(ty) => self.b.trace.insts[r.index()].ty = ty,
-                    _ => return Step::Abort(AbortReason::UnsupportedType("builtin result type")),
+        if let Some((c, nres, next)) = self.deferred_call.take() {
+            if pc == next {
+                if let Err(e) = self.builtin_as_call(None, c, nres, pc, base) {
+                    return Step::Abort(e);
                 }
             }
         }
+        let undo = self.builtin_undo.take();
+        let bcall = self.builtin_call.take();
+        if let Some((r, slot, next, multret)) = self.pending.take() {
+            if pc != next {
+                // the builtin declined: the interpreter runs the fallback
+                // (a call of the same function), which is recorded instead
+                let Some((inst, set)) = undo else {
+                    return Step::Abort(AbortReason::UnsupportedType("builtin fell back"));
+                };
+                self.b.trace.insts[inst.index()].op = Op::Nop;
+                if let Some((ra, prev)) = set {
+                    match prev {
+                        Some(p) => self.b.set_slot(ra, p),
+                        None => self.b.forget_slot(ra),
+                    }
+                }
+            } else {
+                if multret {
+                // a variable number of results: one, as the trace checks
+                let n = (*self.l).top.offset_from(self.root_base.add(slot));
+                if n != 1 {
+                    // several: the call of the builtin's function instead
+                    // (the same results)
+                    return match (undo, bcall) {
+                        (Some((inst, _)), Some(c)) => match self.builtin_as_call(Some(inst), c, -1, pc, base) {
+                            Ok(()) => self.step_rest(pc, base),
+                            Err(e) => Step::Abort(e),
+                        },
+                        _ => Step::Abort(AbortReason::UnsupportedType("builtin returned several results")),
+                    };
+                }
+                self.set_top(Some(slot + 1));
+                }
+                if let Some(r) = r {
+                    let tv = self.root_base.add(slot);
+                    match IrType::of_tag((*tv).tt) {
+                        Some(ty) => self.b.trace.insts[r.index()].ty = ty,
+                        _ => return Step::Abort(AbortReason::UnsupportedType("builtin result type")),
+                    }
+                }
+            }
+        }
+        self.step_rest(pc, base)
+    }
+
+    /// `step` after a just-recorded builtin was dealt with.
+    unsafe fn step_rest(&mut self, pc: u32, base: StkId) -> Step {
         if let Some((a, nres, next, _, cnt)) = self.callback.take() {
             if pc != next {
                 return Step::Abort(AbortReason::Internal("C call didn't return normally".into()));
@@ -1647,8 +1704,10 @@ impl Recorder {
         use luau_common::bytecode::BuiltinFunction as B;
         let op = op_of(insn);
         let bfid = a_of(insn) as u8;
-        let banned = [B::Rawset, B::TableUnpack, B::SelectVararg, B::TableClear];
-        if banned.iter().any(|&b| b as u8 == bfid) {
+        // (these have no Builtin instruction: recorded as calls of their
+        // functions)
+        let as_call = [B::Rawset, B::TableUnpack, B::TableClear].iter().any(|&b| b as u8 == bfid);
+        if bfid == B::SelectVararg as u8 {
             return Err(AbortReason::UnsupportedOpcode(builtin_name(bfid)));
         }
         let writes = [B::TableInsert, B::BufferWriteU8, B::BufferWriteU16, B::BufferWriteU32, B::BufferWriteF32, B::BufferWriteF64, B::BufferWriteInteger];
@@ -1664,9 +1723,6 @@ impl Recorder {
         let call_at = pc as usize + len + skip;
         let call = *code.add(call_at);
         let (ra, nres) = (a_of(call), c_of(call) as i32 - 1);
-        if nres > 1 {
-            return Err(unsupported_type("builtin with several results"));
-        }
         let (cl, clr) = self.cur_closure();
         if (*(*cl).env).safeenv == 0 {
             return Err(unsupported_type("builtin in an unsafe environment"));
@@ -1708,6 +1764,15 @@ impl Recorder {
             self.pending = Some((None, 0, call_at as u32 + 1, false));
             return Ok(());
         }
+        if nres > 1 || as_call {
+            // several results: the call of the builtin's function (the
+            // fallback code calls it the same way)
+            builtin_closure(self.l, bfid).ok_or(unsupported_type("builtin without a function"))?;
+            self.mm_store_ok(None)?;
+            self.guard_safeenv(clr);
+            self.deferred_call = Some(((bfid, ra, args, nargs), nres, call_at as u32 + 1));
+            return Ok(());
+        }
         if bfid == B::Setmetatable as u8 {
             self.mm_store_ok(Some(args[0]))?;
         }
@@ -1718,10 +1783,14 @@ impl Recorder {
         let v = self.b.emit(Op::Builtin { bfid, args, nargs: nargs as u8, nres: if nres < 0 { MULTRET1 } else { nres as u8 }, buf, snap }, IrType::Nil);
         let next = call_at as u32 + 1;
         if nres != 0 {
+            let prev = self.b.peek(ra);
             self.b.set_slot(ra, v);
             self.pending = Some((Some(v), self.b.off + ra, next, nres < 0));
+            self.builtin_undo = Some((v, Some((ra, prev))));
+            self.builtin_call = Some((bfid, ra, args, nargs));
         } else {
             self.pending = Some((None, 0, next, false));
+            self.builtin_undo = Some((v, None));
         }
         Ok(())
     }
@@ -2126,7 +2195,12 @@ impl Recorder {
         };
         let nargs = self.call_args(a, bb)?;
         if nargs > 3 || c > 2 {
-            return Err(unsupported_type("builtin call with many arguments/results"));
+            // (the builtin returns one value: anything else, the call)
+            let f = self.read(a, base)?;
+            let snap = self.b.snapshot();
+            self.b.emit(Op::GuardCFunc { f, fp, snap }, IrType::Nil);
+            let ret_pc = pc + if op_of(insn) == O::CallFb as u8 { 2 } else { 1 };
+            return self.record_callback(a, nargs, c as i32 - 1, ret_pc, base);
         }
         let nres = c as i32 - 1;
         let f = self.read(a, base)?;
@@ -2146,6 +2220,9 @@ impl Recorder {
         if nres != 0 {
             self.b.set_slot(a, v);
             self.pending = Some((Some(v), self.b.off + a, next, nres < 0));
+            // (several results: recorded as the plain call instead)
+            self.builtin_undo = Some((v, None));
+            self.builtin_call = Some((bfid, a, args, nargs));
         } else {
             self.pending = Some((None, 0, next, false));
         }
@@ -2223,7 +2300,13 @@ impl Recorder {
             return self.record_callback(a, nargs, c as i32 - 1, ret_pc, base);
         };
         if c == 0 || c > 4 {
-            return Err(unsupported_type("C call with variable or many results"));
+            // a variable number of results (or many): the general call
+            let nargs = self.call_args(a, bb)?;
+            let f = self.read(a, base)?;
+            let snap = self.b.snapshot();
+            self.b.emit(Op::GuardCFunc { f, fp, snap }, IrType::Nil);
+            let ret_pc = pc + if op_of(insn) == O::CallFb as u8 { 2 } else { 1 };
+            return self.record_callback(a, nargs, c as i32 - 1, ret_pc, base);
         }
         let nargs = self.call_args(a, bb)?;
         let nres = c - 1;
@@ -2252,6 +2335,31 @@ impl Recorder {
         Ok(())
     }
 
+    /// A FASTCALL that returned several values (the interpreter is past its
+    /// CALL, `pc`): its Builtin instruction `inst` becomes the CALL of the
+    /// builtin's function (found by name, as the fallback code loads it).
+    unsafe fn builtin_as_call(&mut self, inst: Option<Ref>, (bfid, ra, args, nargs): (u8, usize, [Ref; 3], usize), nres: i32, pc: u32, base: StkId) -> R<()> {
+        let cl = builtin_closure(self.l, bfid).ok_or(unsupported_type("builtin without a function"))?;
+        if let Some(inst) = inst {
+            self.b.trace.insts[inst.index()].op = Op::Nop;
+        }
+        let f = self.gc_const(cl as usize, IrType::Function);
+        self.b.set_slot(ra, f);
+        for k in 0..nargs {
+            self.b.set_slot(ra + 1 + k, args[k]);
+        }
+        let snap = self.b.snapshot();
+        let (savedpc, frames) = self.call_context(pc);
+        let cnt = self.b.emit(Op::CallC { slot: (self.b.off + ra) as u16, nargs: nargs as u8, nres: nres as i16, savedpc, frames, off: self.b.off as u16, snap }, IrType::I32);
+        self.inserts = true;
+        self.ustores = true;
+        for s in ra..ra + 1 + nargs {
+            self.b.forget_slot(s);
+        }
+        self.b.pc = pc;
+        self.after_callback(ra, nres, cnt, base)
+    }
+
     /// A call of a C function that may run Lua code (its function is in
     /// frame slot `a`, guarded, `nargs` arguments above it, `nres` results
     /// wanted, -1: all). Everything the trace knows about memory and slots
@@ -2265,6 +2373,13 @@ impl Recorder {
             // (their values go to the stack with the snapshot)
             self.read(a + 1 + k, base)?;
         }
+        self.emit_callc(a, nargs, nres, ret_pc)
+    }
+
+    /// `record_callback` once the function and arguments are in their
+    /// slots.
+    unsafe fn emit_callc(&mut self, a: usize, nargs: usize, nres: i32, ret_pc: u32) -> R<()> {
+        self.mm_store_ok(None)?;
         let snap = self.b.snapshot();
         let (savedpc, frames) = self.call_context(ret_pc);
         let cnt = self.b.emit(Op::CallC { slot: (self.b.off + a) as u16, nargs: nargs as u8, nres: nres as i16, savedpc, frames, off: self.b.off as u16, snap }, IrType::I32);
@@ -2924,7 +3039,7 @@ fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *pre = rm(*pre);
             *back = rm(*back);
         }
-        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop | FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } => {}
+        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop | FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } | GuardTop { .. } => {}
         UStore { cl, v, .. } => {
             *cl = rm(*cl);
             *v = rm(*v);
@@ -2972,6 +3087,7 @@ fn set_snapshot(op: &mut Op, s: SnapId) {
         | VargLoad { snap, .. }
         | CloseUpvals { snap, .. }
         | CallC { snap, .. }
+        | GuardTop { snap, .. }
         | UStore { snap, .. } => *snap = s,
         _ => {}
     }
@@ -3027,6 +3143,33 @@ unsafe fn builtin_of(l: *mut lua_State, fp: usize) -> Option<u8> {
         }
         m.as_ref().unwrap().get(&fp).copied()
     })
+}
+
+/// The library C function builtin `bfid` stands for (`string.byte` for
+/// StringByte, ...), looked up in the globals.
+unsafe fn builtin_closure(l: *mut lua_State, bfid: u8) -> Option<*mut Closure> {
+    use luau_common::bytecode::BuiltinFunction as B;
+    let b = B::try_from(bfid).ok()?;
+    let name = format!("{:?}", b);
+    let (lib, fname) = if b == B::Vector {
+        (Some("vector".to_string()), "create".to_string())
+    } else {
+        ["Math", "Bit32", "String", "Buffer", "Vector", "Table"]
+            .iter()
+            .find(|p| name.starts_with(*p) && name.len() > p.len())
+            .map(|p| (Some(p.to_lowercase()), name[p.len()..].to_lowercase()))
+            .unwrap_or((None, name.to_lowercase()))
+    };
+    let globals = (*l).gt;
+    let table = match lib {
+        Some(lib) => match get_by_name(globals, lib.as_bytes()) {
+            Some(v) if (*v).tt == LUA_TTABLE => hvalue(v),
+            _ => return None,
+        },
+        None => globals,
+    };
+    let v = get_by_name(table, fname.as_bytes())?;
+    ((*v).tt == LUA_TFUNCTION && (*clvalue(v)).isC != 0).then(|| clvalue(v))
 }
 
 /// Whether C function `fp` is a standard library leaf function (it only

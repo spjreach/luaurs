@@ -76,6 +76,7 @@ pub fn map_op(op: &Op, map: &[Ref]) -> Op {
         Op::VNeg(a) => Op::VNeg(r(*a)),
         Op::VargLoad { idx, snap } => Op::VargLoad { idx: r(*idx), snap: *snap },
         Op::CloseUpvals { slot, snap } => Op::CloseUpvals { slot: *slot, snap: *snap },
+        Op::GuardTop { top, snap } => Op::GuardTop { top: *top, snap: *snap },
         Op::CallC { slot, nargs, nres, savedpc, frames, off, snap } => Op::CallC { slot: *slot, nargs: *nargs, nres: *nres, savedpc: *savedpc, frames: *frames, off: *off, snap: *snap },
         Op::VGet { v, lane } => Op::VGet { v: r(*v), lane: *lane },
         Op::VMake { x, y, z } => Op::VMake { x: r(*x), y: r(*y), z: r(*z) },

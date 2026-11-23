@@ -193,6 +193,9 @@ pub enum Op {
     /// (a local captured by reference: stored to its stack slot, which the
     /// new upvalue points at)
     MakeClosure { cl: Ref, site: usize, vals: [Ref; 8], nvals: u8, buf: usize },
+    /// exits through `snap` unless L->top is trace slot `top` (a side trace
+    /// starting where a call left a variable number of results)
+    GuardTop { top: u16, snap: SnapId },
     /// `CLOSEUPVALS`: closes the open upvalues at or above trace slot
     /// `slot`, after storing the slots `snap` lists (only when there are
     /// any: the stack must hold the values they capture)
@@ -275,7 +278,7 @@ impl Inst {
             XLoad { p, .. } => vec![*p],
             XStore { p, v } => vec![*p, *v],
             GuardPlainTable { t, .. } => vec![*t],
-            FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } => vec![],
+            FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } | GuardTop { .. } => vec![],
             UStore { cl, v, .. } => vec![*cl, *v],
             Not(a) | LudToI32(a) | I32ToLud(a) => vec![*a],
             TMeta { t, .. } => vec![*t],
@@ -307,7 +310,7 @@ impl Inst {
         use Op::*;
         match &self.op {
             SLoad { guarded: true, snap, .. } => Some(*snap),
-            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } | GuardVecEq { snap, .. } | VargLoad { snap, .. } | CloseUpvals { snap, .. } | CallC { snap, .. } => {
+            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } | GuardVecEq { snap, .. } | VargLoad { snap, .. } | CloseUpvals { snap, .. } | CallC { snap, .. } | GuardTop { snap, .. } => {
                 Some(*snap)
             }
             _ => None,

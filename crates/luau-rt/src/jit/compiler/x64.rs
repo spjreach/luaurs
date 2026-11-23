@@ -35,6 +35,7 @@ const OFF_BASE: i32 = offset_of!(lua_State, base) as i32;
 const OFF_STACK_LAST: i32 = offset_of!(lua_State, stack_last) as i32;
 const OFF_UV_V: i32 = offset_of!(UpVal, v) as i32;
 const OFF_OPENUPVAL: i32 = offset_of!(lua_State, openupval) as i32;
+const OFF_TOP: i32 = offset_of!(lua_State, top) as i32;
 const OFF_T_LSIZENODE: i32 = offset_of!(LuaTable, lsizenode) as i32;
 const OFF_T_NODE: i32 = offset_of!(LuaTable, node) as i32;
 const NODE_SIZE: i32 = std::mem::size_of::<LuaNode>() as i32;
@@ -178,7 +179,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         }
         let defines = !matches!(
             inst.op,
-            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. } | Op::HMiss { .. } | Op::GuardCFunc { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::GuardVecEq { .. } | Op::CloseUpvals { .. }
+            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. } | Op::HMiss { .. } | Op::GuardCFunc { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::GuardVecEq { .. } | Op::CloseUpvals { .. } | Op::GuardTop { .. }
         ) && !matches!(inst.op, Op::Builtin { nres: 0, .. });
         if !defines {
             continue;
@@ -847,6 +848,12 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                 if let Home::G(d) = dst {
                     a.mov_rr(d, R::Rax);
                 }
+            }
+            Op::GuardTop { top, snap } => {
+                a.load(R::Rax, R::R12, OFF_TOP);
+                a.sub_rr(R::Rax, R::R13);
+                a.cmp_ri(R::Rax, *top as i32 * TV);
+                a.jcc(Cond::NE, stub(*snap));
             }
             Op::CloseUpvals { slot, snap } => {
                 // only when an open upvalue is at or above the slot (the
