@@ -140,3 +140,35 @@ mod tests {
         );
     }
 }
+
+/// `LUAU_TRACE_COUNT`: compiled traces count their entries and loop
+/// iterations; a summary prints when the thread ends.
+pub fn counting() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LUAU_TRACE_COUNT").is_some())
+}
+
+static COUNTERS: [[std::sync::atomic::AtomicU32; 2]; 32768] = [const { [const { std::sync::atomic::AtomicU32::new(0) }, const { std::sync::atomic::AtomicU32::new(0) }] }; 32768];
+
+/// Address of counter `which` (0 entries, 1 iterations) of trace `tag`.
+pub fn counter(tag: u16, which: usize) -> usize {
+    COUNT_REPORT.with(|_| {});
+    &COUNTERS[tag as usize & 0x7fff][which] as *const _ as usize
+}
+
+struct CountReport;
+impl Drop for CountReport {
+    fn drop(&mut self) {
+        let mut v: Vec<(u16, u32, u32)> = (0..32768u16)
+            .map(|t| (t, COUNTERS[t as usize][0].load(std::sync::atomic::Ordering::Relaxed), COUNTERS[t as usize][1].load(std::sync::atomic::Ordering::Relaxed)))
+            .filter(|x| x.1 > 0 || x.2 > 0)
+            .collect();
+        v.sort_by_key(|x| std::cmp::Reverse(x.1 as u64 + x.2 as u64));
+        for (t, e, i) in v.iter().take(20) {
+            eprintln!("[COUNT] tag={} entries={} iterations={}", t, e, i);
+        }
+    }
+}
+thread_local! {
+    static COUNT_REPORT: CountReport = const { CountReport };
+}

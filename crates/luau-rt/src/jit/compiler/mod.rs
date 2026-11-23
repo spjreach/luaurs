@@ -16,6 +16,11 @@ pub struct CompiledTrace {
     /// root trace: where a side trace jumps to run it again (after the
     /// prologue: base and L already in r13 / r12)
     pub reentry: usize,
+    /// root trace: where a side trace may jump to run the loop body again
+    /// without the pre-loop part (0: none; see `x64::compile`)
+    pub body_entry: usize,
+    /// root trace: spill slots side traces must leave alone
+    pub reserved: u32,
 }
 
 pub type TraceFn = unsafe extern "sysv64" fn(*mut crate::lobject::TValue, *mut crate::lobject::lua_State) -> u32;
@@ -42,7 +47,7 @@ pub fn compile(t: &Trace, end: End) -> Result<CompiledTrace, String> {
             let _ = std::fs::write(std::path::Path::new(&dir).join(format!("trace-{}{}.bin", t.id.0, if t.side_of.is_some() { "s" } else { "" })), &code.bytes);
         }
         let entry = crate::codegen::mem::with_code(|m| unsafe { m.place(&code.bytes) }).ok_or("out of executable memory")?;
-        Ok(CompiledTrace { entry, size: code.bytes.len(), reentry: entry + code.reentry })
+        Ok(CompiledTrace { entry, size: code.bytes.len(), reentry: entry + code.reentry, body_entry: code.body_entry.map_or(0, |o| entry + o), reserved: code.reserved })
     }
     #[cfg(not(all(target_arch = "x86_64", windows)))]
     {

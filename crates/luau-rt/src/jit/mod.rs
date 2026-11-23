@@ -416,10 +416,14 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
             t.link_cell = cell;
             compiler::End::Cell(cell)
         }
-        (Some(_), None) => match state::with(|s| s.traces.get(&root_key).and_then(|r| r.native.map(|n| n.reentry))) {
-            Some(r) => compiler::End::Root(r),
-            None => return,
-        },
+        (Some(_), None) => {
+            // (decided after optimizing, below: the body re-entry when
+            // nothing the side trace does breaks the root's pre-loop work)
+            match state::with(|s| s.traces.get(&root_key).and_then(|r| r.native.map(|n| n.reentry))) {
+                Some(r) => compiler::End::Root(r),
+                None => return,
+            }
+        }
         (None, None) => compiler::End::Loop,
     };
     let Some(tag) = state::with(|s| s.new_tag()) else { return };
@@ -438,10 +442,25 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
     };
     prepare(&mut t);
     let _ = debug::dump_ir(&t);
+    let mut link_to = link_to;
+    if side_of.is_some() {
+        // a side trace spills above its root's slots, and may run the root's
+        // body again directly
+        let root = state::with(|s| s.traces.get(&root_key).map(|r| (r.native, r.reads.clone(), r.phi_slots.clone(), r.layout_hoisted, r.mem_hoisted)));
+        if let Some((Some(n), reads, phis, layout, mem)) = root {
+            t.spill_base = n.reserved;
+            if t.link.is_none() && n.body_entry != 0 && std::env::var_os("LUAU_TRACE_NOBODY").is_none() && body_reentry_ok(&t, &reads, &phis, layout, mem) {
+                link_to = compiler::End::Root(n.body_entry);
+            }
+        }
+    } else {
+        root_facts(&mut t);
+    }
     let mut compiled = compiler::compile(&t, link_to);
     if compiled.is_err() {
         if let Some(mut fb) = t.fallback.take() {
             prepare(&mut fb);
+            root_facts(&mut fb);
             if let Ok(c) = compiler::compile(&fb, link_to) {
                 fb.side_of = side_of;
                 t = *fb;
@@ -499,6 +518,68 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
             }
         }
     });
+}
+
+/// What a root trace's body re-entry relies on (see `x64::compile`):
+/// the slots it read before the loop, its PHIs' slots, whether it hoisted
+/// table layout checks / memory reads.
+fn root_facts(t: &mut trace::Trace) {
+    use ir::instruction::Op;
+    let Some(l) = t.loop_ref else { return };
+    let l = l.index();
+    let mut reads = Vec::new();
+    let (mut layout, mut mem) = (false, false);
+    for x in &t.insts[..l] {
+        match x.op {
+            Op::SLoad { slot, .. } => reads.push(slot),
+            Op::HRef { .. } | Op::HSlot { .. } | Op::ASize(_) | Op::ABase(_) | Op::ARef { .. } => layout = true,
+            Op::XLoad { .. } | Op::TMeta { .. } | Op::ULoad { by_ref: true, .. } | Op::GuardFlag { .. } | Op::GuardPlainTable { .. } | Op::HMiss { .. } | Op::TGet { .. } | Op::TLen { .. } => mem = true,
+            _ => {}
+        }
+    }
+    let mut phis = Vec::new();
+    for x in &t.insts[l + 1..] {
+        match x.op {
+            Op::Phi { pre, .. } => {
+                if let Op::SLoad { slot, .. } = t.inst(pre).op {
+                    phis.push(slot);
+                }
+            }
+            Op::Nop => {}
+            _ => break,
+        }
+    }
+    t.reads = reads;
+    t.phi_slots = phis;
+    t.layout_hoisted = layout;
+    t.mem_hoisted = mem;
+}
+
+/// Whether side trace `t` may end in its root's body re-entry: it writes
+/// no slot the root read before the loop (other than its PHIs'), calls no
+/// Lua code, moves no table storage when the root hoisted layout checks,
+/// and writes no memory when the root hoisted reads.
+fn body_reentry_ok(t: &trace::Trace, reads: &[u16], phis: &[u16], layout: bool, mem: bool) -> bool {
+    use ir::instruction::Op;
+    use luau_common::bytecode::BuiltinFunction as B;
+    let Some(last) = t.snapshots.last() else { return false };
+    if last.entries.iter().any(|e| reads.contains(&e.slot) && !phis.contains(&e.slot)) {
+        return false;
+    }
+    for x in &t.insts {
+        if matches!(x.op, Op::CallC { .. }) {
+            return false;
+        }
+        if layout && x.moves_tables() {
+            return false;
+        }
+        let writes = matches!(x.op, Op::XStore { .. } | Op::TSet { .. } | Op::UStore { .. } | Op::CloseUpvals { .. })
+            || matches!(x.op, Op::Builtin { bfid, .. } if bfid == B::Rawset as u8 || bfid == B::TableInsert as u8 || bfid == B::Setmetatable as u8);
+        if mem && writes {
+            return false;
+        }
+    }
+    true
 }
 
 fn rec_proto(r: &recorder::Recorder) -> *mut Proto {

@@ -71,6 +71,16 @@ pub struct Trace {
     pub link_cell: usize,
     /// (proto, header) of the loop whose root trace this is or belongs to
     pub root_key: (usize, u32),
+    /// a side trace's first spill slot (below: its root's, kept for the
+    /// root's body re-entry)
+    pub spill_base: u32,
+    /// a root trace: what its body re-entry assumes still holds (see
+    /// `finish_trace`): slots read before the loop, slots of its PHIs,
+    /// whether it hoisted table layout / memory reads
+    pub reads: Vec<u16>,
+    pub phi_slots: Vec<u16>,
+    pub layout_hoisted: bool,
+    pub mem_hoisted: bool,
     /// stack slots (from the frame base) the trace may touch, inlined
     /// frames included: checked against the stack's size at entry
     pub stack_need: u32,
@@ -146,7 +156,7 @@ pub const FAST_EXIT: u32 = 0x8000_0000;
 
 impl Trace {
     pub fn new(id: TraceId, proto: *mut Proto, start_pc: u32) -> Trace {
-        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, varargs: None, sinks: Vec::new(), link: None, link_cell: 0, root_key: (0, 0), stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new(), inserts: false, storm_cycles: 0, exit_pcs: Box::new([]), exit_seen: std::ptr::null_mut() }
+        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, varargs: None, sinks: Vec::new(), link: None, link_cell: 0, root_key: (0, 0), spill_base: 0, reads: Vec::new(), phi_slots: Vec::new(), layout_hoisted: false, mem_hoisted: false, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new(), inserts: false, storm_cycles: 0, exit_pcs: Box::new([]), exit_seen: std::ptr::null_mut() }
     }
 
     pub fn inst(&self, r: Ref) -> &Inst {

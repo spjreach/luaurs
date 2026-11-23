@@ -91,6 +91,10 @@ pub struct Code {
     pub bytes: Vec<u8>,
     /// offset of the root trace's re-entry point
     pub reentry: usize,
+    /// offset of the root trace's body re-entry (if it has one)
+    pub body_entry: Option<usize>,
+    /// spill slots side traces must not use
+    pub reserved: u32,
 }
 
 /// Compiles `t`. Fails (cleanly) on anything the backend doesn't handle yet.
@@ -173,6 +177,8 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
 
     // ---- allocation -----------------------------------------------------
     let mut home = vec![Home::None; n];
+    // (a side trace runs in its root's frame: the root's slots below)
+    let spill_base = t.spill_base as usize;
     // (LUAU_TRACE_REGS=n: only n registers of each kind, to test spilling)
     static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     let limit = *LIMIT.get_or_init(|| std::env::var("LUAU_TRACE_REGS").ok().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX));
@@ -260,7 +266,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             }
         }
         if loop_at != usize::MAX && i < loop_at && end == END && !body_operand[i] && !inst.is_const() {
-            if let Some(k) = (0..SPILL_SLOTS).find(|&k| !slot_busy[k] && slot_until[k].is_none_or(|u| u < i)) {
+            if let Some(k) = (spill_base..SPILL_SLOTS).find(|&k| !slot_busy[k] && slot_until[k].is_none_or(|u| u < i)) {
                 slot_busy[k] = true;
                 home[i] = Home::S(k as u8);
                 continue;
@@ -279,7 +285,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 let same = |w: &usize| matches!((home[*w], fp), (Home::F(_), true) | (Home::G(_), false));
                 let victim = active.iter().copied().filter(same).max_by_key(|&w| end_of(w, &last, &used));
                 let mut take_slot = |from: usize| -> Result<Home, String> {
-                    let k = (0..SPILL_SLOTS).find(|&k| !slot_busy[k] && slot_until[k].is_none_or(|u| u < from)).ok_or("out of spill slots")?;
+                    let k = (spill_base..SPILL_SLOTS).find(|&k| !slot_busy[k] && slot_until[k].is_none_or(|u| u < from)).ok_or("out of spill slots")?;
                     slot_busy[k] = true;
                     Ok(Home::S(k as u8))
                 };
@@ -300,6 +306,43 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
         }
     }
 
+    // body re-entry (root traces): side traces ending here run the loop
+    // body again without the pre-loop part. The pre-loop values the body
+    // uses are saved at the loop head (spilled ones already are: side
+    // traces spill above the root's slots), the PHIs reload from their
+    // stack slots.
+    let mut saves: Vec<(usize, u8)> = Vec::new();
+    let mut phi_loads: Vec<(usize, u16)> = Vec::new();
+    let mut body_entry_ok = false;
+    let mut reserved = spill_base;
+    for h in &home {
+        if let Home::S(s) = h {
+            reserved = reserved.max(*s as usize + 1);
+        }
+    }
+    if loop_at != usize::MAX && !side {
+        body_entry_ok = true;
+        for v in 0..loop_at {
+            if used[v] && last[v] == END && matches!(home[v], Home::G(_) | Home::F(_)) {
+                if reserved >= SPILL_SLOTS {
+                    body_entry_ok = false;
+                    break;
+                }
+                saves.push((v, reserved as u8));
+                reserved += 1;
+            }
+        }
+        for (j, x) in t.insts.iter().enumerate().skip(loop_at + 1) {
+            match x.op {
+                Op::Phi { pre, .. } => match t.inst(pre).op {
+                    Op::SLoad { slot, .. } if x.ty.tag().is_some() => phi_loads.push((j, slot)),
+                    _ => body_entry_ok = false,
+                },
+                Op::Nop => {}
+                _ => break,
+            }
+        }
+    }
     if std::env::var_os("LUAU_TRACE_HOMES").is_some() {
         eprintln!("-- homes ({} insts)", n);
         for (i, h) in home.iter().enumerate() {
@@ -337,6 +380,12 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
         a.sub_ri(R::Rsp, SPILL_BYTES);
     }
     let reentry = a.pos() as usize;
+    let counting = crate::jit::debug::counting();
+    if counting {
+        // (LUAU_TRACE_COUNT: entries of this trace)
+        a.mov_ri64(R::Rax, crate::jit::debug::counter(t.tag, 0) as u64);
+        a.add32_mi(R::Rax, 0, 1);
+    }
     // entry checks (exit through the entry snapshot: nothing written yet):
     // the recorded closure, and stack room for inlined frames
     if t.closure != 0 {
@@ -1112,6 +1161,16 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 }
             }
             Op::Loop => {
+                // (for the body re-entry)
+                if body_entry_ok {
+                    for &(v, s) in &saves {
+                        match home[v] {
+                            Home::G(r) => a.store(R::Rsp, spill_off(s), r),
+                            Home::F(x) => a.movups_store(R::Rsp, spill_off(s), x),
+                            _ => {}
+                        }
+                    }
+                }
                 // PHIs start with their pre values
                 let moves: Vec<(Home, Home)> = t.insts[i + 1..]
                     .iter()
@@ -1125,6 +1184,10 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 parallel_move(&mut a, &moves)?;
                 a.align(16);
                 a.bind(loop_top);
+                if counting {
+                    a.mov_ri64(R::Rax, crate::jit::debug::counter(t.tag, 1) as u64);
+                    a.add32_mi(R::Rax, 0, 1);
+                }
             }
             Op::Phi { .. } => {}
             Op::Sunk => {}
@@ -1197,6 +1260,41 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
         a.jmp(loop_top);
     }
 
+    let body_entry = if body_entry_ok {
+        let at = a.pos() as usize;
+        for &(v, s) in &saves {
+            match home[v] {
+                Home::G(r) => a.load(r, R::Rsp, spill_off(s)),
+                Home::F(x) => a.movups_load(x, R::Rsp, spill_off(s)),
+                _ => {}
+            }
+        }
+        for &(j, slot) in &phi_loads {
+            let ty = t.insts[j].ty;
+            let disp = slot as i32 * TV;
+            a.cmp32_mi(R::R13, disp + OFF_TT, ty.tag().unwrap());
+            // (another type: the interpreter runs the iteration)
+            a.jcc(Cond::NE, stubs[0]);
+            match home[j] {
+                Home::G(_) | Home::F(_) => load_value(&mut a, home[j], ty, R::R13, disp)?,
+                Home::S(s) => {
+                    let tmp = if needs_reg(ty) == Some(true) { Home::F(TEMP_X[0]) } else { Home::G(TEMP_G[0]) };
+                    load_value(&mut a, tmp, ty, R::R13, disp)?;
+                    match tmp {
+                        Home::F(x) => a.movups_store(R::Rsp, spill_off(s), x),
+                        Home::G(r) => a.store(R::Rsp, spill_off(s), r),
+                        _ => {}
+                    }
+                }
+                Home::None => {}
+            }
+        }
+        a.jmp(loop_top);
+        Some(at)
+    } else {
+        None
+    };
+
     // exit stubs: write the snapshot's slots back, return its index
     // exit codes: (tag << 16) | snapshot; the high bit: interrupted at the
     // loop header
@@ -1249,7 +1347,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     if !a.finish() {
         return Err("assembler: unresolved label".into());
     }
-    Ok(Code { bytes: a.code, reentry })
+    Ok(Code { bytes: a.code, reentry, body_entry, reserved: reserved as u32 })
 }
 
 /// The CPU has AVX (three-operand scalar arithmetic: no copies).
