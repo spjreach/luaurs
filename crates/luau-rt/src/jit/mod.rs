@@ -85,6 +85,10 @@ pub const STORM_CYCLES: u64 = 2000;
 /// calls; their frames were pushed and `L->ci` resumes at its savedpc.
 pub const RESUME_FRAME: u32 = u32::MAX;
 
+/// `on_backedge` result: a C function the trace called yielded; the VM is
+/// left as the interpreter's CALL would leave it.
+pub const LEFT_VM: u32 = u32::MAX - 1;
+
 /// Recreates the CallInfos of the inlined calls live at snapshot `sn` (the
 /// trace already wrote their slots) and points the innermost at `sn.pc`.
 unsafe fn push_frames(L: *mut lua_State, base: StkId, sn: &snapshots::Snapshot) {
@@ -192,6 +196,9 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
 /// recording, storms, frames of inlined calls. Returns what `on_backedge`
 /// does.
 unsafe fn handle_exit(L: *mut lua_State, p: *mut Proto, header: u32, base: StkId, id: trace::TraceId, ex: u32, moved: bool) -> Option<u32> {
+        if ex == trace::EXIT_LEFT_VM {
+            return Some(LEFT_VM);
+        }
         let resume_at = move |pc: u32| -> Option<u32> {
             if moved {
                 let ci = (*L).ci;
@@ -288,15 +295,16 @@ unsafe fn handle_exit(L: *mut lua_State, p: *mut Proto, header: u32, base: StkId
         }
         // Resume where the guard's snapshot says, even when the trace is
         // dropped (resuming at `header` would replay the iteration).
+        let keep = (*L).top;
         if let Some(sn) = frames {
             push_frames(L, base, &sn);
             if let Some(t) = top {
-                (*L).top = base.add(t as usize);
+                (*L).top = if t == recorder::KEEP_TOP { keep } else { base.add(t as usize) };
             }
             return Some(RESUME_FRAME);
         }
         if let Some(t) = top {
-            (*L).top = base.add(t as usize);
+            (*L).top = if t == recorder::KEEP_TOP { keep } else { base.add(t as usize) };
         }
         return resume_at(resume);
 }
@@ -307,6 +315,10 @@ pub unsafe fn record_step(L: *mut lua_State, p: *mut Proto, pc: u32, base: StkId
     let result = RECORDER.with(|r| {
         let mut r = r.borrow_mut();
         let (rec, _) = r.as_mut().expect("recording");
+        if rec.paused_depth().is_some_and(|d| ci_depth(L) > d) {
+            // Lua code a recorded C call runs: not part of the trace
+            return None;
+        }
         if !rec.expects(p, base) {
             // a call, a return, or a stack reallocation: leave it to the
             // interpreter
@@ -466,6 +478,9 @@ thread_local! {
     static STOP_ANY: Cell<bool> = const { Cell::new(false) };
     /// CallInfo depth the innermost single-step run stops at (-1: none)
     static STOP_DEPTH: Cell<isize> = const { Cell::new(-1) };
+    /// the thread (lua_State) that run belongs to: other threads it
+    /// resumes (coroutines) run on without stopping
+    static STOP_L: Cell<usize> = const { Cell::new(0) };
     /// the single-step run stopped (instead of leaving the VM)
     static STOPPED: Cell<bool> = const { Cell::new(false) };
 }
@@ -532,7 +547,7 @@ unsafe fn ci_depth(L: *mut lua_State) -> isize {
 /// run should stop and return to native code.
 pub unsafe fn should_stop(L: *mut lua_State, p: *mut Proto, pc: *const crate::lobject::Instruction) -> bool {
     let d = STOP_DEPTH.with(|d| d.get());
-    if d < 0 {
+    if d < 0 || STOP_L.with(|l| l.get()) != L as usize {
         return false;
     }
     let cur = ci_depth(L);
@@ -557,9 +572,16 @@ unsafe fn native_entry(_p: *mut Proto, _pc: *const crate::lobject::Instruction) 
     false
 }
 
-struct StopGuard(isize);
+struct StopGuard(isize, usize);
+impl StopGuard {
+    /// Stops single-step runs of `L` at CallInfo depth `depth` until dropped.
+    fn set(L: *mut lua_State, depth: isize) -> StopGuard {
+        StopGuard(STOP_DEPTH.with(|d| d.replace(depth)), STOP_L.with(|l| l.replace(L as usize)))
+    }
+}
 impl Drop for StopGuard {
     fn drop(&mut self) {
+        STOP_L.with(|l| l.set(self.1));
         STOP_DEPTH.with(|d| d.set(self.0));
     }
 }
@@ -569,7 +591,7 @@ impl Drop for StopGuard {
 #[cfg(all(target_arch = "x86_64", windows))]
 unsafe fn run_until_native(L: *mut lua_State, pc: *const crate::lobject::Instruction, depth: isize) -> usize {
     (*(*L).ci).savedpc = pc;
-    let _g = StopGuard(STOP_DEPTH.with(|d| d.replace(depth)));
+    let _g = StopGuard::set(L, depth);
     STOPPED.with(|s| s.set(false));
     crate::lvmexecute::execute_single_step(L);
     if STOPPED.with(|s| s.replace(false)) {
@@ -618,7 +640,7 @@ pub unsafe fn threaded_backedge(L: *mut lua_State, p: *mut Proto, header: u32, b
     match r {
         _ if is_recording() => {
             let _g = StopAnyGuard(STOP_ANY.with(|s| s.replace(true)));
-            let _d = StopGuard(STOP_DEPTH.with(|d| d.replace(depth)));
+            let _d = StopGuard::set(L, depth);
             STOPPED.with(|s| s.set(false));
             crate::lvmexecute::execute_single_step(L);
             if STOPPED.with(|s| s.replace(false)) {
@@ -628,6 +650,7 @@ pub unsafe fn threaded_backedge(L: *mut lua_State, p: *mut Proto, header: u32, b
             }
         }
         Some(RESUME_FRAME) => 1,
+        Some(LEFT_VM) => 2,
         Some(pc) => 3 + pc,
         None => 0,
     }
@@ -687,6 +710,9 @@ pub unsafe extern "sysv64-unwind" fn native_loop_hook(
         let t0 = cycles();
         let ex = f(base, L);
         let ran = cycles().wrapping_sub(t0);
+        if ex == trace::EXIT_LEFT_VM {
+            return 0;
+        }
         let k = ex & 0xffff;
         if ex & 0x8000_0000 == 0 && ((ex >> 16) & 0x7fff) as u16 == cell.tag && k < cell.nexits {
             let e = *cell.exits.add(k as usize);
@@ -713,6 +739,9 @@ pub unsafe extern "sysv64-unwind" fn native_loop_hook(
     }
     LAST_RUN.with(|c| c.set(u64::MAX));
     let resume = on_backedge(L, p, header, base).unwrap_or(header);
+    if resume == LEFT_VM {
+        return 0;
+    }
     let ran = LAST_RUN.with(|c| c.get());
     // cache the loop's trace for the next entries
     state::with(|s| {

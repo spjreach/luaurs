@@ -34,6 +34,7 @@ const OFF_CI_FUNC: i32 = offset_of!(CallInfo, func) as i32;
 const OFF_BASE: i32 = offset_of!(lua_State, base) as i32;
 const OFF_STACK_LAST: i32 = offset_of!(lua_State, stack_last) as i32;
 const OFF_UV_V: i32 = offset_of!(UpVal, v) as i32;
+const OFF_OPENUPVAL: i32 = offset_of!(lua_State, openupval) as i32;
 const OFF_T_LSIZENODE: i32 = offset_of!(LuaTable, lsizenode) as i32;
 const OFF_T_NODE: i32 = offset_of!(LuaTable, node) as i32;
 const NODE_SIZE: i32 = std::mem::size_of::<LuaNode>() as i32;
@@ -177,7 +178,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         }
         let defines = !matches!(
             inst.op,
-            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. } | Op::HMiss { .. } | Op::GuardCFunc { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::GuardVecEq { .. }
+            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. } | Op::HMiss { .. } | Op::GuardCFunc { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::GuardVecEq { .. } | Op::CloseUpvals { .. }
         ) && !matches!(inst.op, Op::Builtin { nres: 0, .. });
         if !defines {
             continue;
@@ -236,7 +237,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
     };
     // a trace that allocates checks for GC work at its back edge (and exits
     // for the collector to run: nothing collects while a trace runs)
-    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::Builtin { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::MakeClosure { .. }));
+    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::Builtin { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::MakeClosure { .. } | Op::CallC { .. }));
 
     // ---- emission -------------------------------------------------------
     let mut a = Asm::new();
@@ -244,6 +245,8 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
     let loop_top = a.label();
     let stubs: Vec<Label> = (0..t.snapshots.len() + 1).map(|_| a.label()).collect();
     let interrupt_stub = stubs[t.snapshots.len()];
+    // a called C function yielded: leave as it left the VM
+    let left_vm = a.label();
     let used_g: Vec<R> = [R::Rbx, R::Rbp, R::R12, R::R13, R::R14, R::R15].to_vec();
     // a side trace runs inside its root's native frame: entered from an
     // exit stub with everything set up, it has no prologue
@@ -788,6 +791,25 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                 // (the call may have moved the stack)
                 a.load(R::R13, R::R12, OFF_BASE);
             }
+            Op::CallC { slot, nargs, nres, savedpc, frames, off, snap } => {
+                for e in &t.snapshots[snap.0 as usize].entries {
+                    store_value(&mut a, &home, t, e.value, R::R13, e.slot as i32 * TV)?;
+                }
+                let live = live_across(i);
+                call_out(
+                    &mut a,
+                    &live,
+                    helpers::callc as usize,
+                    &[Arg::L, Arg::Imm((*slot - *off) as u64), Arg::Imm(*nargs as u64), Arg::Imm(*nres as i64 as u64), Arg::Imm(*savedpc as u64), Arg::Imm(*frames as u64)],
+                );
+                a.cmp_ri(R::Rax, -1);
+                a.jcc(Cond::E, left_vm);
+                // (Lua code may have moved the stack)
+                a.load(R::R13, R::R12, OFF_BASE);
+                if let Home::G(d) = dst {
+                    a.mov_rr32(d, R::Rax);
+                }
+            }
             Op::TGet { t: tb, k, buf } => {
                 a.mov_ri64(R::Rdx, *buf as u64);
                 store_value(&mut a, &home, t, *k, R::Rdx, 0)?;
@@ -808,15 +830,41 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                 a.jcc(Cond::E, stub(*snap));
             }
             Op::MakeClosure { cl, site, vals, nvals, buf } => {
-                a.mov_ri64(R::Rdx, *buf as u64);
-                for k in 0..*nvals as usize {
-                    store_value(&mut a, &home, t, vals[k], R::Rdx, k as i32 * TV)?;
+                let caps = &(*(*site as *const crate::jit::recorder::ClosureSite)).caps;
+                for c in caps {
+                    let v = vals[c.idx as usize];
+                    if c.kind as u32 == crate::lvmexecute::LCT_REF {
+                        // (the stack slot the upvalue opens on)
+                        store_value(&mut a, &home, t, v, R::R13, c.slot as i32 * TV)?;
+                    } else if c.kind as u32 == crate::lvmexecute::LCT_VAL {
+                        a.mov_ri64(R::Rdx, *buf as u64);
+                        store_value(&mut a, &home, t, v, R::Rdx, c.idx as i32 * TV)?;
+                    }
                 }
+                let _ = nvals;
                 let live = live_across(i);
                 call_out(&mut a, &live, helpers::make_closure as usize, &[Arg::L, Arg::G(g(*cl)?), Arg::Imm(*site as u64), Arg::Imm(*buf as u64)]);
                 if let Home::G(d) = dst {
                     a.mov_rr(d, R::Rax);
                 }
+            }
+            Op::CloseUpvals { slot, snap } => {
+                // only when an open upvalue is at or above the slot (the
+                // list is sorted by level, highest first)
+                let skip = a.label();
+                a.load(R::Rax, R::R12, OFF_OPENUPVAL);
+                a.test_rr(R::Rax, R::Rax);
+                a.jcc(Cond::E, skip);
+                a.load(R::Rcx, R::Rax, OFF_UV_V);
+                a.lea(R::Rdx, R::R13, *slot as i32 * TV);
+                a.cmp_rr(R::Rcx, R::Rdx);
+                a.jcc(Cond::B, skip);
+                for e in &t.snapshots[snap.0 as usize].entries {
+                    store_value(&mut a, &home, t, e.value, R::R13, e.slot as i32 * TV)?;
+                }
+                let live = live_across(i);
+                call_out(&mut a, &live, helpers::close_upvals as usize, &[Arg::L, Arg::Imm(*slot as u64)]);
+                a.bind(skip);
             }
             Op::TMeta { t: tb, snap } => {
                 let tb = g(*tb)?;
@@ -1022,6 +1070,9 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         return Err("too many snapshots".into());
     }
     let tag = (t.tag as u32 & 0x7fff) << 16;
+    a.bind(left_vm);
+    a.mov_ri(R::Rax, crate::jit::trace::EXIT_LEFT_VM as u64);
+    a.jmp(exit);
     for (k, sn) in snaps.iter().enumerate() {
         a.bind(stubs[k]);
         for e in &sn.entries {
@@ -1374,6 +1425,60 @@ mod helpers {
         (*L).top = (*cip).top;
     }
 
+    /// Any C function in slot `slot` of the trace's frame, called as the
+    /// interpreter's CALL does (inlined frames made real around it): the
+    /// number of results; -1 when it yielded (the VM is left as the CALL
+    /// leaves it: frames and all).
+    pub unsafe extern "sysv64" fn callc(L: *mut lua_State, slot: i64, nargs: i64, nres: i64, savedpc: *const u32, frames: *const Vec<crate::jit::snapshots::SnapFrame>) -> i64 {
+        let ci0 = push_virtual(L, frames);
+        (*(*L).ci).savedpc = savedpc;
+        let ra = (*L).base.add(slot as usize);
+        let argtop = ra.add(1 + nargs as usize);
+        let ccl = clvalue(ra);
+        let ci = crate::ldo::incr_ci(L);
+        (*ci).func = ra;
+        (*ci).p = std::ptr::null_mut();
+        (*ci).base = ra.add(1);
+        (*ci).top = argtop.add((*ccl).stacksize as usize);
+        (*ci).savedpc = std::ptr::null();
+        (*ci).flags = 0;
+        (*ci).nresults = nres as i32;
+        (*L).base = (*ci).base;
+        (*L).top = argtop;
+        crate::ldo::luaD_checkstackfornewci(L, (*ccl).stacksize as i32);
+        let f = Closure::c(ccl).f.unwrap_unchecked();
+        let n = f(L);
+        if n < 0 {
+            return -1;
+        }
+        let ci = (*L).ci;
+        let cip = ci.sub(1);
+        let func = (*ci).func;
+        let mut res = func;
+        let mut vali = (*L).top.sub(n as usize);
+        let valend = (*L).top;
+        let mut i = nres;
+        while i != 0 && vali < valend {
+            setobj(res, vali);
+            res = res.add(1);
+            vali = vali.add(1);
+            i -= 1;
+        }
+        while i > 0 {
+            setnilvalue(res);
+            res = res.add(1);
+            i -= 1;
+        }
+        (*L).ci = cip;
+        let count = res.offset_from(func) as i64;
+        pop_virtual(L, ci0);
+        if nres < 0 {
+            // (the instruction taking every result reads L->top)
+            (*L).top = res;
+        }
+        count
+    }
+
     pub extern "sysv64" fn pow(a: f64, b: f64) -> f64 {
         crate::lmathlib::luai_numpow(a, b)
     }
@@ -1406,6 +1511,11 @@ mod helpers {
         1
     }
 
+    /// CLOSEUPVALS at trace slot `slot`.
+    pub unsafe extern "sysv64" fn close_upvals(L: *mut lua_State, slot: i64) {
+        crate::lfunc::luaF_close(L, (*L).base.add(slot as usize));
+    }
+
     /// NEWCLOSURE / DUPCLOSURE as the interpreter does them.
     pub unsafe extern "sysv64" fn make_closure(L: *mut lua_State, cl: *mut Closure, site: *const crate::jit::recorder::ClosureSite, buf: *const TValue) -> *mut Closure {
         use crate::lfunc::luaF_newLclosure;
@@ -1420,8 +1530,13 @@ mod helpers {
         if !site.dup {
             let pv = site.target as *mut Proto;
             let ncl = luaF_newLclosure(L, (*pv).nups as i32, (*cl).env, pv);
-            for (ui, &(kind, idx)) in site.caps.iter().enumerate() {
-                setobj(Closure::uprefs(ncl).add(ui), src(kind, idx));
+            for (ui, c) in site.caps.iter().enumerate() {
+                let dst = Closure::uprefs(ncl).add(ui);
+                if c.kind as u32 == crate::lvmexecute::LCT_REF {
+                    setupvalue(dst, crate::lfunc::luaF_findupval(L, (*L).base.add(c.slot as usize)));
+                } else {
+                    setobj(dst, src(c.kind, c.idx));
+                }
             }
             return ncl;
         }
@@ -1429,7 +1544,7 @@ mod helpers {
         let mut ncl = if (*kcl).env == (*cl).env { kcl } else { luaF_newLclosure(L, (*kcl).nupvalues as i32, (*cl).env, Closure::proto(kcl)) };
         let mut ui = 0usize;
         while ui < site.caps.len() {
-            let (kind, idx) = site.caps[ui];
+            let (kind, idx) = (site.caps[ui].kind, site.caps[ui].idx);
             let uvp = src(kind, idx);
             let dst = Closure::uprefs(ncl).add(ui);
             if ncl == kcl && luaO_rawequalObj(dst, uvp) {

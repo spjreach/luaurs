@@ -133,6 +133,8 @@ unsafe extern "sysv64-unwind" fn h_OP_BREAK(L: *mut lua_State, mut pc: *const In
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -292,6 +294,8 @@ unsafe extern "sysv64-unwind" fn h_OP_GET_UDATA_KS(L: *mut lua_State, mut pc: *c
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -445,6 +449,8 @@ unsafe extern "sysv64-unwind" fn h_OP_SET_UDATA_KS(L: *mut lua_State, mut pc: *c
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -598,6 +604,8 @@ unsafe extern "sysv64-unwind" fn h_OP_NAMECALL_UDATA(L: *mut lua_State, mut pc: 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -751,6 +759,8 @@ unsafe extern "sysv64-unwind" fn h_OP_NOP(L: *mut lua_State, mut pc: *const Inst
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -902,6 +912,8 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_NIL(L: *mut lua_State, mut pc: *const
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -1054,6 +1066,8 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_B(L: *mut lua_State, mut pc: *const I
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -1207,6 +1221,8 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_N(L: *mut lua_State, mut pc: *const I
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -1359,6 +1375,8 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_K(L: *mut lua_State, mut pc: *const I
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -1511,6 +1529,8 @@ unsafe extern "sysv64-unwind" fn h_OP_MOVE(L: *mut lua_State, mut pc: *const Ins
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -1681,6 +1701,8 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_GLOBAL(L: *mut lua_State, mut pc: *con
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -1847,6 +1869,8 @@ unsafe extern "sysv64-unwind" fn h_OP_SET_GLOBAL(L: *mut lua_State, mut pc: *con
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -2028,6 +2052,8 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_UPVAL(L: *mut lua_State, mut pc: *cons
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -2199,6 +2225,8 @@ unsafe extern "sysv64-unwind" fn s_OP_SET_UPVAL(L: *mut lua_State, mut pc: *cons
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -2354,6 +2382,8 @@ unsafe extern "sysv64-unwind" fn h_OP_CLOSE_UPVALS(L: *mut lua_State, mut pc: *c
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -2525,6 +2555,8 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_IMPORT(L: *mut lua_State, mut pc: *con
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -2707,6 +2739,8 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_TABLE_KS(L: *mut lua_State, mut pc: *c
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -2962,6 +2996,8 @@ unsafe extern "sysv64-unwind" fn s_OP_SET_TABLE_KS(L: *mut lua_State, mut pc: *c
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -3185,6 +3221,8 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_TABLE(L: *mut lua_State, mut pc: *cons
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -3395,6 +3433,8 @@ unsafe extern "sysv64-unwind" fn s_OP_SET_TABLE(L: *mut lua_State, mut pc: *cons
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -3584,6 +3624,8 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_TABLE_N(L: *mut lua_State, mut pc: *co
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -3773,6 +3815,8 @@ unsafe extern "sysv64-unwind" fn s_OP_SET_TABLE_N(L: *mut lua_State, mut pc: *co
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -3938,6 +3982,8 @@ unsafe extern "sysv64-unwind" fn h_OP_NEW_CLOSURE(L: *mut lua_State, mut pc: *co
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -4166,6 +4212,8 @@ unsafe extern "sysv64-unwind" fn s_OP_NAMECALL(L: *mut lua_State, mut pc: *const
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -4512,6 +4560,8 @@ unsafe extern "sysv64-unwind" fn s_OP_CALL(L: *mut lua_State, mut pc: *const Ins
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -4850,6 +4900,8 @@ unsafe extern "sysv64-unwind" fn s_OP_CALL_FB(L: *mut lua_State, mut pc: *const 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -5119,6 +5171,8 @@ unsafe extern "sysv64-unwind" fn s_OP_RETURN(L: *mut lua_State, mut pc: *const I
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -5301,6 +5355,8 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP(L: *mut lua_State, mut pc: *const Ins
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -5452,6 +5508,8 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP_IF(L: *mut lua_State, mut pc: *const 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -5606,6 +5664,8 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP_IF_NOT(L: *mut lua_State, mut pc: *co
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -5789,6 +5849,8 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_EQ(L: *mut lua_State, mut pc: *con
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -6019,6 +6081,8 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_NOT_EQ(L: *mut lua_State, mut pc: 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -6242,6 +6306,8 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_LE(L: *mut lua_State, mut pc: *con
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -6439,6 +6505,8 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_NOT_LE(L: *mut lua_State, mut pc: 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -6636,6 +6704,8 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_LT(L: *mut lua_State, mut pc: *con
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -6833,6 +6903,8 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_NOT_LT(L: *mut lua_State, mut pc: 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -7033,6 +7105,8 @@ unsafe extern "sysv64-unwind" fn s_OP_ADD(L: *mut lua_State, mut pc: *const Inst
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -7223,6 +7297,8 @@ unsafe extern "sysv64-unwind" fn s_OP_SUB(L: *mut lua_State, mut pc: *const Inst
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -7413,6 +7489,8 @@ unsafe extern "sysv64-unwind" fn s_OP_MUL(L: *mut lua_State, mut pc: *const Inst
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -7590,6 +7668,8 @@ unsafe extern "sysv64-unwind" fn s_OP_DIV(L: *mut lua_State, mut pc: *const Inst
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -7760,6 +7840,8 @@ unsafe extern "sysv64-unwind" fn s_OP_I_DIV(L: *mut lua_State, mut pc: *const In
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -7930,6 +8012,8 @@ unsafe extern "sysv64-unwind" fn s_OP_MOD(L: *mut lua_State, mut pc: *const Inst
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -8089,6 +8173,8 @@ unsafe extern "sysv64-unwind" fn h_OP_POW(L: *mut lua_State, mut pc: *const Inst
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -8266,6 +8352,8 @@ unsafe extern "sysv64-unwind" fn s_OP_ADD_K(L: *mut lua_State, mut pc: *const In
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -8443,6 +8531,8 @@ unsafe extern "sysv64-unwind" fn s_OP_SUB_K(L: *mut lua_State, mut pc: *const In
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -8620,6 +8710,8 @@ unsafe extern "sysv64-unwind" fn s_OP_MUL_K(L: *mut lua_State, mut pc: *const In
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -8790,6 +8882,8 @@ unsafe extern "sysv64-unwind" fn s_OP_DIV_K(L: *mut lua_State, mut pc: *const In
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -8960,6 +9054,8 @@ unsafe extern "sysv64-unwind" fn s_OP_I_DIV_K(L: *mut lua_State, mut pc: *const 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -9130,6 +9226,8 @@ unsafe extern "sysv64-unwind" fn s_OP_MOD_K(L: *mut lua_State, mut pc: *const In
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -9318,6 +9416,8 @@ unsafe extern "sysv64-unwind" fn s_OP_POW_K(L: *mut lua_State, mut pc: *const In
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -9488,6 +9588,8 @@ unsafe extern "sysv64-unwind" fn h_OP_AND(L: *mut lua_State, mut pc: *const Inst
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -9641,6 +9743,8 @@ unsafe extern "sysv64-unwind" fn h_OP_OR(L: *mut lua_State, mut pc: *const Instr
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -9794,6 +9898,8 @@ unsafe extern "sysv64-unwind" fn h_OP_AND_K(L: *mut lua_State, mut pc: *const In
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -9947,6 +10053,8 @@ unsafe extern "sysv64-unwind" fn h_OP_OR_K(L: *mut lua_State, mut pc: *const Ins
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -10100,6 +10208,8 @@ unsafe extern "sysv64-unwind" fn h_OP_CONCAT(L: *mut lua_State, mut pc: *const I
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -10269,6 +10379,8 @@ unsafe extern "sysv64-unwind" fn s_OP_NOT(L: *mut lua_State, mut pc: *const Inst
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -10439,6 +10551,8 @@ unsafe extern "sysv64-unwind" fn s_OP_MINUS(L: *mut lua_State, mut pc: *const In
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -10633,6 +10747,8 @@ unsafe extern "sysv64-unwind" fn s_OP_LENGTH(L: *mut lua_State, mut pc: *const I
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -10798,6 +10914,8 @@ unsafe extern "sysv64-unwind" fn h_OP_NEW_TABLE(L: *mut lua_State, mut pc: *cons
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -10954,6 +11072,8 @@ unsafe extern "sysv64-unwind" fn h_OP_DUP_TABLE(L: *mut lua_State, mut pc: *cons
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -11108,6 +11228,8 @@ unsafe extern "sysv64-unwind" fn h_OP_SET_LIST(L: *mut lua_State, mut pc: *const
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -11281,6 +11403,8 @@ unsafe extern "sysv64-unwind" fn h_OP_FOR_N_PREP(L: *mut lua_State, mut pc: *con
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -11473,6 +11597,8 @@ unsafe extern "sysv64-unwind" fn s_OP_FOR_N_LOOP(L: *mut lua_State, mut pc: *con
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -11639,6 +11765,8 @@ unsafe extern "sysv64-unwind" fn h_OP_FOR_G_PREP(L: *mut lua_State, mut pc: *con
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -11880,6 +12008,8 @@ unsafe extern "sysv64-unwind" fn s_OP_FOR_G_LOOP(L: *mut lua_State, mut pc: *con
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -11938,12 +12068,7 @@ unsafe extern "sysv64-unwind" fn s_OP_FOR_G_LOOP(L: *mut lua_State, mut pc: *con
                         index += 1;
                     }
                     if found {
-                        if SS && crate::jit::state::trace_enabled() {
-                            let p = (*(*L).ci).p;
-                            if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
-                                pc = (*p).code.add(resume as usize);
-                            }
-                        }
+                        trace_backedge!();
                         become dispatch(L, pc, base, k);
                     }
                     let sizenode = 1i32 << (*h).lsizenode;
@@ -12103,6 +12228,8 @@ unsafe extern "sysv64-unwind" fn h_OP_FOR_G_PREP_INEXT(L: *mut lua_State, mut pc
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -12264,6 +12391,8 @@ unsafe extern "sysv64-unwind" fn h_OP_FOR_G_PREP_NEXT(L: *mut lua_State, mut pc:
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -12426,6 +12555,8 @@ unsafe extern "sysv64-unwind" fn h_OP_NATIVE_CALL(L: *mut lua_State, mut pc: *co
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -12578,6 +12709,8 @@ unsafe extern "sysv64-unwind" fn h_OP_GET_VARARGS(L: *mut lua_State, mut pc: *co
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -12751,6 +12884,8 @@ unsafe extern "sysv64-unwind" fn h_OP_DUP_CLOSURE(L: *mut lua_State, mut pc: *co
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -12966,6 +13101,8 @@ unsafe extern "sysv64-unwind" fn s_OP_PREP_VARARGS(L: *mut lua_State, mut pc: *c
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -13146,6 +13283,8 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_BACK(L: *mut lua_State, mut pc: *cons
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -13301,6 +13440,8 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_KX(L: *mut lua_State, mut pc: *const 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -13454,6 +13595,8 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP_X(L: *mut lua_State, mut pc: *const I
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -13607,6 +13750,8 @@ unsafe extern "sysv64-unwind" fn h_OP_FAST_CALL(L: *mut lua_State, mut pc: *cons
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -13775,6 +13920,8 @@ unsafe extern "sysv64-unwind" fn h_OP_COVERAGE(L: *mut lua_State, mut pc: *const
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -13949,6 +14096,8 @@ unsafe extern "sysv64-unwind" fn s_OP_SUB_RK(L: *mut lua_State, mut pc: *const I
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -14126,6 +14275,8 @@ unsafe extern "sysv64-unwind" fn s_OP_DIV_RK(L: *mut lua_State, mut pc: *const I
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -14420,6 +14571,8 @@ unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL1(L: *mut lua_State, mut pc: *con
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -14732,6 +14885,8 @@ unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL2(L: *mut lua_State, mut pc: *con
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -15046,6 +15201,8 @@ unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL2_K(L: *mut lua_State, mut pc: *c
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -15287,6 +15444,8 @@ unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL3(L: *mut lua_State, mut pc: *con
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -15460,6 +15619,8 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP_X_EQ_K_NIL(L: *mut lua_State, mut pc:
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -15628,6 +15789,8 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_X_EQ_K_B(L: *mut lua_State, mut pc: *
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -15798,6 +15961,8 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_X_EQ_K_N(L: *mut lua_State, mut pc: *
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -15969,6 +16134,8 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_X_EQ_K_S(L: *mut lua_State, mut pc: *
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -16125,6 +16292,8 @@ unsafe extern "sysv64-unwind" fn h_OP_CMP_PROTO(L: *mut lua_State, mut pc: *cons
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -16281,6 +16450,8 @@ unsafe extern "sysv64-unwind" fn h_OP_FAST_P_CALL(L: *mut lua_State, mut pc: *co
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -16470,6 +16641,8 @@ unsafe extern "sysv64-unwind" fn h_OP_NEW_CLASS_MEMBER(L: *mut lua_State, mut pc
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -16630,6 +16803,8 @@ unsafe extern "sysv64-unwind" fn h_OP_NEW_CLASS(L: *mut lua_State, mut pc: *cons
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -16796,6 +16971,8 @@ unsafe extern "sysv64-unwind" fn h_OP_CONSTRUCT(L: *mut lua_State, mut pc: *cons
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -16952,6 +17129,8 @@ unsafe extern "sysv64-unwind" fn h_OP_FIN_CONSTRUCT(L: *mut lua_State, mut pc: *
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -17119,6 +17298,8 @@ unsafe extern "sysv64-unwind" fn h_OP_GET_PRIVATE_FIELD(L: *mut lua_State, mut p
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -17275,6 +17456,8 @@ unsafe extern "sysv64-unwind" fn h_OP_SET_PRIVATE_FIELD(L: *mut lua_State, mut p
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -17431,6 +17614,8 @@ unsafe extern "sysv64-unwind" fn h_DEFAULT(L: *mut lua_State, mut pc: *const Ins
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return;
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -17683,6 +17868,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NOP(L: *mut lua_State, mut pc:
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -17834,6 +18021,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_NIL(L: *mut lua_State, mu
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -17986,6 +18175,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_B(L: *mut lua_State, mut 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -18139,6 +18330,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_N(L: *mut lua_State, mut 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -18291,6 +18484,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_K(L: *mut lua_State, mut 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -18443,6 +18638,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MOVE(L: *mut lua_State, mut pc
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -18595,6 +18792,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_GLOBAL(L: *mut lua_State, 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -18761,6 +18960,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_GLOBAL(L: *mut lua_State, 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -18928,6 +19129,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_UPVAL(L: *mut lua_State, m
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -19082,6 +19285,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_UPVAL(L: *mut lua_State, m
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -19237,6 +19442,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CLOSE_UPVALS(L: *mut lua_State
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -19392,6 +19599,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_IMPORT(L: *mut lua_State, 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -19553,6 +19762,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_TABLE_KS(L: *mut lua_State
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -19781,6 +19992,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_TABLE_KS(L: *mut lua_State
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -19970,6 +20183,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_TABLE(L: *mut lua_State, m
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -20134,6 +20349,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_TABLE(L: *mut lua_State, m
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -20303,6 +20520,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_TABLE_N(L: *mut lua_State,
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -20467,6 +20686,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_TABLE_N(L: *mut lua_State,
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -20632,6 +20853,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_CLOSURE(L: *mut lua_State,
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -20799,6 +21022,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NAMECALL(L: *mut lua_State, mu
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -21036,6 +21261,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP(L: *mut lua_State, mut pc
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -21187,6 +21414,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF(L: *mut lua_State, mut
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -21341,6 +21570,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT(L: *mut lua_State,
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -21495,6 +21726,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_EQ(L: *mut lua_State, 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -21696,6 +21929,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT_EQ(L: *mut lua_Sta
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -21897,6 +22132,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_LE(L: *mut lua_State, 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -22072,6 +22309,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT_LE(L: *mut lua_Sta
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -22247,6 +22486,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_LT(L: *mut lua_State, 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -22422,6 +22663,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT_LT(L: *mut lua_Sta
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -22597,6 +22840,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_ADD(L: *mut lua_State, mut pc:
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -22762,6 +23007,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SUB(L: *mut lua_State, mut pc:
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -22927,6 +23174,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MUL(L: *mut lua_State, mut pc:
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -23079,6 +23328,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DIV(L: *mut lua_State, mut pc:
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -23231,6 +23482,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_I_DIV(L: *mut lua_State, mut p
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -23383,6 +23636,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MOD(L: *mut lua_State, mut pc:
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -23542,6 +23797,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_POW(L: *mut lua_State, mut pc:
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -23701,6 +23958,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_ADD_K(L: *mut lua_State, mut p
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -23860,6 +24119,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SUB_K(L: *mut lua_State, mut p
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -24019,6 +24280,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MUL_K(L: *mut lua_State, mut p
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -24171,6 +24434,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DIV_K(L: *mut lua_State, mut p
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -24323,6 +24588,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_I_DIV_K(L: *mut lua_State, mut
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -24475,6 +24742,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MOD_K(L: *mut lua_State, mut p
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -24634,6 +24903,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_POW_K(L: *mut lua_State, mut p
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -24804,6 +25075,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_AND(L: *mut lua_State, mut pc:
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -24957,6 +25230,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_OR(L: *mut lua_State, mut pc: 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -25110,6 +25385,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_AND_K(L: *mut lua_State, mut p
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -25263,6 +25540,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_OR_K(L: *mut lua_State, mut pc
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -25416,6 +25695,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CONCAT(L: *mut lua_State, mut 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -25572,6 +25853,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NOT(L: *mut lua_State, mut pc:
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -25725,6 +26008,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MINUS(L: *mut lua_State, mut p
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -25895,6 +26180,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LENGTH(L: *mut lua_State, mut 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -26060,6 +26347,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_TABLE(L: *mut lua_State, m
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -26216,6 +26505,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DUP_TABLE(L: *mut lua_State, m
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -26370,6 +26661,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_LIST(L: *mut lua_State, mu
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -26543,6 +26836,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_N_PREP(L: *mut lua_State, 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -26707,6 +27002,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_N_LOOP(L: *mut lua_State, 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -26873,6 +27170,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_PREP(L: *mut lua_State, 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -27065,6 +27364,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_LOOP(L: *mut lua_State, 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -27123,12 +27424,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_LOOP(L: *mut lua_State, 
                         index += 1;
                     }
                     if found {
-                        if SS && crate::jit::state::trace_enabled() {
-                            let p = (*(*L).ci).p;
-                            if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
-                                pc = (*p).code.add(resume as usize);
-                            }
-                        }
+                        trace_backedge!();
                         return pc;
                     }
                     let sizenode = 1i32 << (*h).lsizenode;
@@ -27288,6 +27584,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_PREP_INEXT(L: *mut lua_S
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -27449,6 +27747,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_PREP_NEXT(L: *mut lua_St
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -27611,6 +27911,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NATIVE_CALL(L: *mut lua_State,
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -27763,6 +28065,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_VARARGS(L: *mut lua_State,
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -27936,6 +28240,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DUP_CLOSURE(L: *mut lua_State,
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -28120,6 +28426,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_PREP_VARARGS(L: *mut lua_State
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -28284,6 +28592,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_BACK(L: *mut lua_State, m
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -28439,6 +28749,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_KX(L: *mut lua_State, mut
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -28592,6 +28904,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X(L: *mut lua_State, mut 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -28745,6 +29059,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL(L: *mut lua_State, m
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -28913,6 +29229,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_COVERAGE(L: *mut lua_State, mu
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -29069,6 +29387,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SUB_RK(L: *mut lua_State, mut 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -29228,6 +29548,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DIV_RK(L: *mut lua_State, mut 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -29391,6 +29713,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL1(L: *mut lua_State, 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -29558,6 +29882,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL2(L: *mut lua_State, 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -29727,6 +30053,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL2_K(L: *mut lua_State
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -29896,6 +30224,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL3(L: *mut lua_State, 
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -30069,6 +30399,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_NIL(L: *mut lua_St
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -30223,6 +30555,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_B(L: *mut lua_Stat
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -30378,6 +30712,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_N(L: *mut lua_Stat
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -30534,6 +30870,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_S(L: *mut lua_Stat
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -30690,6 +31028,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CMP_PROTO(L: *mut lua_State, m
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -30846,6 +31186,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_CLASS_MEMBER(L: *mut lua_S
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -31006,6 +31348,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_CLASS(L: *mut lua_State, m
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -31172,6 +31516,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CONSTRUCT(L: *mut lua_State, m
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -31328,6 +31674,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FIN_CONSTRUCT(L: *mut lua_Stat
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -31495,6 +31843,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_PRIVATE_FIELD(L: *mut lua_
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }
@@ -31651,6 +32001,8 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_PRIVATE_FIELD(L: *mut lua_
                     if let Some(resume) = crate::jit::on_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                         if resume == crate::jit::RESUME_FRAME {
                             { reload_frame!() }
+                        } else if resume == crate::jit::LEFT_VM {
+                            return std::ptr::null();
                         } else {
                             pc = (*p).code.add(resume as usize);
                         }

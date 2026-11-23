@@ -90,7 +90,16 @@ pub struct Recorder {
     /// the trace's own frame's vararg count, when the trace reads them
     /// (checked at entry)
     varargs: Option<u16>,
+    /// a call of a C function that may run Lua code was just recorded:
+    /// (its frame slot, results wanted, the pc after it, the CallInfo depth
+    /// of its caller - deeper instructions are the callee's, not recorded
+    /// - , the result count it defines)
+    callback: Option<(usize, i32, u32, isize, Ref)>,
 }
+
+/// `Snapshot::top` of an exit that keeps the L->top the trace left (after
+/// a call returning a variable number of results).
+pub const KEEP_TOP: u16 = u16::MAX;
 
 /// `Recorder::mm` result slot of a comparison metamethod.
 const CMP_RESULT: usize = usize::MAX;
@@ -169,6 +178,7 @@ impl Recorder {
             mm: Vec::new(),
             fresh: Vec::new(),
             varargs: None,
+            callback: None,
         }
     }
 
@@ -213,6 +223,12 @@ impl Recorder {
         }
         r.b.off = off;
         r
+    }
+
+    /// While a recorded C call runs Lua code: the CallInfo depth below
+    /// which its instructions are (they aren't recorded).
+    pub fn paused_depth(&self) -> Option<isize> {
+        self.callback.map(|c| c.3)
     }
 
     /// The parent exit a side trace continues.
@@ -306,6 +322,16 @@ impl Recorder {
                     Some(ty) => self.b.trace.insts[r.index()].ty = ty,
                     _ => return Step::Abort(AbortReason::UnsupportedType("builtin result type")),
                 }
+            }
+        }
+        if let Some((a, nres, next, _, cnt)) = self.callback.take() {
+            if pc != next {
+                return Step::Abort(AbortReason::Internal("C call didn't return normally".into()));
+            }
+            // (exits from here on resume after the call)
+            self.b.pc = pc;
+            if let Err(e) = self.after_callback(a, nres, cnt, base) {
+                return Step::Abort(e);
             }
         }
         if let Some((slot, nres, next)) = self.pending_c.take() {
@@ -1351,6 +1377,41 @@ impl Recorder {
             self.b.set_slot(ra, v);
         } else if o(O::NewClosure) || o(O::DupClosure) {
             self.record_closure(pc, insn, base)?;
+        } else if o(O::FastPCall) {
+            // pcall / xpcall of a function: the interpreter's fast path is
+            // the CALL of the builtin after it, recorded as that
+            let call_at = pc as usize + 1 + c;
+            let call = *code.add(call_at);
+            let (ra, nres) = (a_of(call), c_of(call) as i32 - 1);
+            let g = (*self.l).global;
+            let target = if a == 0 { (*g).builtinPcall } else { (*g).builtinXpcall };
+            let (cl, clr) = self.cur_closure();
+            let nparams = if b_of(call) == 0 {
+                match self.top {
+                    Some(t) => t - (self.b.off + ra) - 1,
+                    None => return Err(unsupported_type("pcall without a known top")),
+                }
+            } else {
+                b_of(call) - 1
+            };
+            let funcs_ok = if a == 0 {
+                nparams >= 1 && (*base.add(ra + 1)).tt == LUA_TFUNCTION
+            } else {
+                nparams >= 2 && (*base.add(ra + 1)).tt == LUA_TFUNCTION && (*base.add(ra + 2)).tt == LUA_TFUNCTION
+            };
+            if (*(*cl).env).safeenv == 0 || (*self.l).nCcalls > (*self.l).baseCcalls || target.is_null() || !funcs_ok {
+                // the fast path declines: the CALL after it runs (recorded next)
+                return Ok(());
+            }
+            self.guard_safeenv(clr);
+            let nargs = self.call_args(ra, b_of(call))?;
+            let f = self.gc_const(target as usize, IrType::Function);
+            self.b.set_slot(ra, f);
+            let ret_pc = call_at as u32 + if op_of(call) == O::CallFb as u8 { 2 } else { 1 };
+            self.record_callback(ra, nargs, nres, ret_pc, base)?;
+        } else if o(O::CloseUpvals) {
+            let snap = self.b.snapshot();
+            self.b.emit(Op::CloseUpvals { slot: (self.b.off + a) as u16, snap }, IrType::Nil);
         } else if o(O::Namecall) {
             self.record_namecall(insn, aux, base)?;
         } else if o(O::GetUpval) {
@@ -1986,9 +2047,10 @@ impl Recorder {
         Ok(())
     }
 
-    /// NEWCLOSURE / DUPCLOSURE with value or upvalue captures (a reference
-    /// capture of a local would point into slots the trace keeps in
-    /// registers).
+    /// NEWCLOSURE / DUPCLOSURE. A local captured by reference gets an open
+    /// upvalue on its stack slot (the trace stores the slot's value there
+    /// first; calls of the closure in the trace use the trace's value of
+    /// the slot - `GuardUvSlot` - and CLOSEUPVALS stores it again).
     unsafe fn record_closure(&mut self, pc: u32, insn: u32, base: StkId) -> R<()> {
         let a = a_of(insn);
         let proto = self.cur_proto();
@@ -2006,28 +2068,29 @@ impl Recorder {
         };
         let code = (*proto).code;
         let mut caps = Vec::with_capacity(nups);
-        let mut vals = [Ref(0); 4];
+        let mut vals = [Ref(0); 8];
         let mut nvals = 0usize;
         for ui in 0..nups {
             let uinsn = *code.add(pc as usize + 1 + ui);
             let (kind, idx) = (a_of(uinsn) as u8, b_of(uinsn));
-            if kind as u32 == crate::lvmexecute::LCT_REF {
-                return Err(unsupported_type("closure capturing a local by reference"));
+            let by_ref = kind as u32 == crate::lvmexecute::LCT_REF;
+            if by_ref && dup {
+                return Err(unsupported_type("DUPCLOSURE capturing by reference"));
             }
-            if kind as u32 == crate::lvmexecute::LCT_VAL {
-                if nvals == 4 {
+            if kind as u32 == crate::lvmexecute::LCT_VAL || by_ref {
+                if nvals == vals.len() {
                     return Err(unsupported_type("closure with many captured values"));
                 }
                 vals[nvals] = self.read(idx, base)?;
-                caps.push((kind, nvals as u8));
+                caps.push(Capture { kind, idx: nvals as u8, slot: (self.b.off + idx) as u16 });
                 nvals += 1;
             } else {
-                caps.push((kind, idx as u8));
+                caps.push(Capture { kind, idx: idx as u8, slot: 0 });
             }
         }
         let (_, clr) = self.cur_closure();
         let site = Box::leak(Box::new(ClosureSite { dup, target, caps })) as *const ClosureSite as usize;
-        let buf = Box::leak(vec![0u64; 8].into_boxed_slice()).as_mut_ptr() as usize;
+        let buf = Box::leak(vec![0u64; 16].into_boxed_slice()).as_mut_ptr() as usize;
         let v = self.b.emit(Op::MakeClosure { cl: clr, site, vals, nvals: nvals as u8, buf }, IrType::Function);
         if !self.mm.is_empty() {
             self.fresh.push(v);
@@ -2150,7 +2213,14 @@ impl Recorder {
         let (a, bb, c) = (a_of(insn), b_of(insn), c_of(insn));
         self.mm_store_ok(None)?;
         let Some(table_arg) = leaf_c(self.l, fp) else {
-            return Err(AbortReason::UnsupportedOpcode("Call (C function)"));
+            // any other C function: called as the interpreter does (it may
+            // call Lua)
+            let nargs = self.call_args(a, bb)?;
+            let f = self.read(a, base)?;
+            let snap = self.b.snapshot();
+            self.b.emit(Op::GuardCFunc { f, fp, snap }, IrType::Nil);
+            let ret_pc = pc + if op_of(insn) == O::CallFb as u8 { 2 } else { 1 };
+            return self.record_callback(a, nargs, c as i32 - 1, ret_pc, base);
         };
         if c == 0 || c > 4 {
             return Err(unsupported_type("C call with variable or many results"));
@@ -2179,6 +2249,82 @@ impl Recorder {
             self.b.forget_slot(s);
         }
         self.pending_c = Some((a, nres, ret_pc));
+        Ok(())
+    }
+
+    /// A call of a C function that may run Lua code (its function is in
+    /// frame slot `a`, guarded, `nargs` arguments above it, `nres` results
+    /// wanted, -1: all). Everything the trace knows about memory and slots
+    /// is read again after it (`after_callback`).
+    unsafe fn record_callback(&mut self, a: usize, nargs: usize, nres: i32, ret_pc: u32, base: StkId) -> R<()> {
+        self.mm_store_ok(None)?;
+        if nargs > 250 {
+            return Err(unsupported_type("C call with many arguments"));
+        }
+        for k in 0..nargs {
+            // (their values go to the stack with the snapshot)
+            self.read(a + 1 + k, base)?;
+        }
+        let snap = self.b.snapshot();
+        let (savedpc, frames) = self.call_context(ret_pc);
+        let cnt = self.b.emit(Op::CallC { slot: (self.b.off + a) as u16, nargs: nargs as u8, nres: nres as i16, savedpc, frames, off: self.b.off as u16, snap }, IrType::I32);
+        self.inserts = true;
+        self.ustores = true;
+        for s in a..a + 1 + nargs {
+            self.b.forget_slot(s);
+        }
+        let depth = (*self.l).ci.offset_from((*self.l).base_ci);
+        self.callback = Some((a, nres, ret_pc, depth, cnt));
+        Ok(())
+    }
+
+    /// After a recorded C call that may have run Lua code: every slot the
+    /// trace knows is read again (Lua code can change the frame's locals
+    /// through upvalues); the results, as many as there were (guarded).
+    unsafe fn after_callback(&mut self, a: usize, nres: i32, cnt: Ref, base: StkId) -> R<()> {
+        let off = self.b.off;
+        self.b.reload = true;
+        // (the stack has every value: they were stored before the call)
+        let mut slots = self.b.known_slots();
+        let saved = self.b.off;
+        self.b.off = 0;
+        for &s in &slots {
+            self.b.forget_slot(s);
+        }
+        self.b.off = saved;
+        let count = if nres < 0 { (*self.l).top.offset_from(base.add(a)) as usize } else { nres as usize };
+        if nres < 0 {
+            // a different number of results exits right after the call,
+            // L->top where the call left it
+            self.b.set_top(Some(KEEP_TOP as usize));
+            let snap = self.b.snapshot();
+            let k = self.b.ki32(count as i32);
+            self.b.emit(Op::Guard { cmp: Cmp::Eq, a: cnt, b: k, snap }, IrType::Nil);
+            self.set_top(Some(off + a + count));
+        }
+        for j in 0..count {
+            slots.push(off + a + j);
+        }
+        slots.sort_unstable();
+        slots.dedup();
+        self.b.reload = true;
+        let saved = self.b.off;
+        self.b.off = 0;
+        for s in slots {
+            let tv = self.root_base.add(s);
+            let Some(ty) = IrType::of_tag((*tv).tt) else {
+                self.b.off = saved;
+                return Err(unsupported_type("slot type after a C call"));
+            };
+            if ty == IrType::LightUserdata && (*tv).extra[0] != LU_TAG_ITERATOR {
+                self.b.off = saved;
+                return Err(unsupported_type("light userdata"));
+            }
+            let snap = self.b.snapshot();
+            let v = self.b.emit(Op::SReload { slot: s as u16, snap }, ty);
+            self.b.set_slot(s, v);
+        }
+        self.b.off = saved;
         Ok(())
     }
 
@@ -2298,7 +2444,7 @@ impl Recorder {
         let (header, parent) = self.side.unwrap();
         let mut out = std::mem::replace(&mut self.b.trace, Trace::new(TraceId(0), std::ptr::null_mut(), 0));
         let entries: Vec<SnapEntry> = self.b.written().into_iter().map(|(s, v)| SnapEntry { slot: s as u16, value: v }).collect();
-        out.snapshots.push(Snapshot { pc: header, entries, ref_limit: Ref(out.insts.len() as u32), frames: vec![], top: None });
+        out.snapshots.push(Snapshot { pc: header, entries, ref_limit: Ref(out.insts.len() as u32), frames: vec![], top: None, stack_current: false });
         out.start_pc = header;
         out.end_pc = self.loop_end;
         out.loop_ref = None;
@@ -2373,7 +2519,7 @@ impl Recorder {
         };
 
         // entry snapshot: resume at the loop header, nothing modified yet
-        out.snapshots.push(Snapshot { pc: rec.start_pc, entries: vec![], ref_limit: Ref(0), frames: vec![], top: None });
+        out.snapshots.push(Snapshot { pc: rec.start_pc, entries: vec![], ref_limit: Ref(0), frames: vec![], top: None, stack_current: false });
         let entry = SnapId(0);
 
         // pre-roll: slot loads. Constants stay in the body so their
@@ -2535,9 +2681,12 @@ impl Recorder {
                     let old = &rec.snapshots[s.0 as usize];
                     let mut entries: BTreeMap<u16, Ref> = old.entries.iter().map(|e| (e.slot, rm(e.value))).collect();
                     // carried slots not yet rewritten this iteration hold
-                    // the PHI (the stack still has the trace-entry value)
-                    for (&slot, &phi) in &phi_of {
-                        entries.entry(slot as u16).or_insert(phi);
+                    // the PHI (the stack still has the trace-entry value) -
+                    // unless a call of Lua code stored them all
+                    if !old.stack_current {
+                        for (&slot, &phi) in &phi_of {
+                            entries.entry(slot as u16).or_insert(phi);
+                        }
                     }
                     out.snapshots.push(Snapshot {
                         pc: old.pc,
@@ -2545,6 +2694,7 @@ impl Recorder {
                         ref_limit: Ref(u32::MAX),
                         frames: old.frames.clone(),
                         top: old.top,
+                        stack_current: old.stack_current,
                     });
                     SnapId(out.snapshots.len() as u32 - 1)
                 });
@@ -2590,6 +2740,7 @@ impl Recorder {
             ref_limit: Ref(out.insts.len() as u32),
             frames: vec![],
             top: None,
+            stack_current: false,
         });
         // each snapshot covers the values defined before its first user
         for (i, inst) in out.insts.iter().enumerate() {
@@ -2669,12 +2820,22 @@ fn rec_key(t: &Trace, p: Ref) -> Option<(u8, Ref, u32)> {
 
 /// How a closure is built (`Op::MakeClosure`): DUPCLOSURE of the constant
 /// closure `target`, or NEWCLOSURE of prototype `target`; per upvalue, its
-/// capture kind (LCT_VAL: index into the passed values; LCT_UPVAL: upvalue
-/// of the creating closure).
+/// capture.
 pub struct ClosureSite {
     pub dup: bool,
     pub target: usize,
-    pub caps: Vec<(u8, u8)>,
+    pub caps: Vec<Capture>,
+}
+
+/// One upvalue of a new closure: `kind` LCT_VAL (`idx`: index into the
+/// passed values), LCT_REF (`idx` likewise: the value of trace slot
+/// `slot`, which the upvalue is opened on) or LCT_UPVAL (`idx`: upvalue of
+/// the creating closure).
+#[derive(Clone, Copy)]
+pub struct Capture {
+    pub kind: u8,
+    pub idx: u8,
+    pub slot: u16,
 }
 
 /// Builtins the trace compiler has an instruction for.
@@ -2763,7 +2924,7 @@ fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *pre = rm(*pre);
             *back = rm(*back);
         }
-        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop | FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } => {}
+        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop | FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } => {}
         UStore { cl, v, .. } => {
             *cl = rm(*cl);
             *v = rm(*v);
@@ -2809,6 +2970,8 @@ fn set_snapshot(op: &mut Op, s: SnapId) {
         | Concat { snap, .. }
         | GuardVecEq { snap, .. }
         | VargLoad { snap, .. }
+        | CloseUpvals { snap, .. }
+        | CallC { snap, .. }
         | UStore { snap, .. } => *snap = s,
         _ => {}
     }

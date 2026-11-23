@@ -66,4 +66,8 @@ pub struct Snapshot {
     /// the stack top (a trace slot) between a call returning a variable
     /// number of values and the instruction taking them (L->top on exit)
     pub top: Option<u16>,
+    /// taken after a recorded call of Lua code in the iteration: slots it
+    /// doesn't list hold their current values on the stack (the call
+    /// stored everything), so closing the loop adds no PHIs for them
+    pub stack_current: bool,
 }

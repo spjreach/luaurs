@@ -35,6 +35,9 @@ pub struct IrBuilder {
     /// inside a metamethod (called from C: its frame can't be recreated):
     /// every exit resumes at the arithmetic instruction that called it
     pub forced: Option<SnapId>,
+    /// a call of Lua code was recorded: slots are read where they are used
+    /// (SReload), not once at trace entry
+    pub reload: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -61,6 +64,7 @@ impl IrBuilder {
             frames: Vec::new(),
             top: None,
             forced: None,
+            reload: false,
         }
     }
 
@@ -122,9 +126,18 @@ impl IrBuilder {
             return r;
         }
         let snap = self.snapshot();
-        let r = self.emit(Op::SLoad { slot: slot as u16, guarded: true, snap }, ty);
+        let r = if self.reload {
+            self.emit(Op::SReload { slot: slot as u16, snap }, ty)
+        } else {
+            self.emit(Op::SLoad { slot: slot as u16, guarded: true, snap }, ty)
+        };
         self.slots[slot] = Some(r);
         r
+    }
+
+    /// Trace slots the trace has a value for.
+    pub fn known_slots(&self) -> Vec<usize> {
+        self.slots.iter().enumerate().filter(|(_, v)| v.is_some()).map(|(s, _)| s).collect()
     }
 
     /// The value currently mapped to `slot`, if any (no load).
@@ -216,7 +229,7 @@ impl IrBuilder {
             .map(|(s, v)| SnapEntry { slot: s as u16, value: v.unwrap() })
             .collect();
         let id = SnapId(self.trace.snapshots.len() as u32);
-        self.trace.snapshots.push(Snapshot { pc: self.pc, entries, ref_limit: Ref(self.trace.insts.len() as u32), frames: self.frames.clone(), top: self.top });
+        self.trace.snapshots.push(Snapshot { pc: self.pc, entries, ref_limit: Ref(self.trace.insts.len() as u32), frames: self.frames.clone(), top: self.top, stack_current: self.reload });
         self.last_snap = Some((id, self.pc, self.writes));
         id
     }

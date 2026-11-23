@@ -164,6 +164,13 @@ pub enum Op {
     /// `Vec<SnapFrame>` of the inlined frames to materialize around the
     /// call, 0 at the trace's own frame; `off`: the calling frame's base)
     CCall { slot: u16, nargs: u8, nres: u8, savedpc: usize, frames: usize, off: u16, snap: SnapId },
+    /// a call of any C function (it may call Lua: `pcall`, `table.sort` with
+    /// a comparator, ...) in trace slot `slot` with `nargs` arguments,
+    /// `nres` results (-1: all of them), like the interpreter's CALL; the
+    /// slots `snap` lists are stored first (everything after it reads the
+    /// stack again). Defines the number of results (an I32). When the
+    /// function yields, the trace leaves the VM there (`EXIT_LEFT_VM`)
+    CallC { slot: u16, nargs: u8, nres: i16, savedpc: usize, frames: usize, off: u16, snap: SnapId },
     /// `R(a) = R(b) .. ... .. R(c)` (strings and numbers) by `luaV_concat`
     /// on the stack, after storing the slots `snap` lists
     Concat { a: u16, b: u16, c: u16, savedpc: usize, frames: usize, off: u16, snap: SnapId },
@@ -183,7 +190,13 @@ pub enum Op {
     /// a closure (`NEWCLOSURE` / `DUPCLOSURE`) as described by the leaked
     /// `ClosureSite` at `site`, inside closure `cl`, its captured register
     /// values `vals[..nvals]` passed through the scratch TValues at `buf`
-    MakeClosure { cl: Ref, site: usize, vals: [Ref; 4], nvals: u8, buf: usize },
+    /// (a local captured by reference: stored to its stack slot, which the
+    /// new upvalue points at)
+    MakeClosure { cl: Ref, site: usize, vals: [Ref; 8], nvals: u8, buf: usize },
+    /// `CLOSEUPVALS`: closes the open upvalues at or above trace slot
+    /// `slot`, after storing the slots `snap` lists (only when there are
+    /// any: the stack must hold the values they capture)
+    CloseUpvals { slot: u16, snap: SnapId },
     /// a new table (`NEWTABLE`)
     NewTable { narray: u32, nhash: u32 },
     /// a copy of template table `tpl` (`DUPTABLE`; a Table constant)
@@ -262,7 +275,7 @@ impl Inst {
             XLoad { p, .. } => vec![*p],
             XStore { p, v } => vec![*p, *v],
             GuardPlainTable { t, .. } => vec![*t],
-            FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } => vec![],
+            FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } => vec![],
             UStore { cl, v, .. } => vec![*cl, *v],
             Not(a) | LudToI32(a) | I32ToLud(a) => vec![*a],
             TMeta { t, .. } => vec![*t],
@@ -294,7 +307,7 @@ impl Inst {
         use Op::*;
         match &self.op {
             SLoad { guarded: true, snap, .. } => Some(*snap),
-            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } | GuardVecEq { snap, .. } | VargLoad { snap, .. } => {
+            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } | GuardVecEq { snap, .. } | VargLoad { snap, .. } | CloseUpvals { snap, .. } | CallC { snap, .. } => {
                 Some(*snap)
             }
             _ => None,
@@ -317,7 +330,8 @@ impl Inst {
     pub fn moves_tables(&self) -> bool {
         use Op::*;
         match self.op {
-            TSet { .. } => true,
+            // (a call of Lua code can do anything to any table)
+            TSet { .. } | CallC { .. } => true,
             Builtin { bfid, .. } => bfid == luau_common::bytecode::BuiltinFunction::TableInsert as u8,
             _ => false,
         }

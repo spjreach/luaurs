@@ -98,6 +98,10 @@ pub struct Trace {
     pub exit_pcs: Box<[u32]>,
 }
 
+/// A trace's return value when a C function it called yielded (the VM is
+/// left).
+pub const EXIT_LEFT_VM: u32 = u32::MAX;
+
 /// `Trace::exit_pcs` flag.
 pub const FAST_EXIT: u32 = 0x8000_0000;
 
