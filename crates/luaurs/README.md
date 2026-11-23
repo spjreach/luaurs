@@ -119,21 +119,21 @@ much slower; on loop-heavy code it can make it a lot faster. On the classic shoo
 
 | Benchmark | luaurs + tracing | C++ Luau | LuaJIT 2.1 |
 |---|---:|---:|---:|
-| spectral-norm | **5.4** | 54.4 | 2.0 |
-| n-body | **7.3** | 24.8 | 3.3 |
-| heapsort | **40.4** | 111.7 | 22.7 |
-| fannkuch-redux | **61.6** | 134.7 | 24.0 |
-| binary-trees | **124.9** | 158.9 | 79.0 |
-| mandel | **137.3** | 207.2 | 34.0 |
+| mandel | **11.9** | 210.3 | 31.7 |
+| spectral-norm | **2.6** | 53.9 | 1.7 |
+| n-body | **4.8** | 25.8 | 3.7 |
+| heapsort | **32.7** | 109.3 | 22.7 |
+| fannkuch-redux | **38.5** | 135.8 | 24.3 |
+| binary-trees | **107.3** | 138.4 | 73.7 |
 
-So it beats C++ Luau everywhere here, and LuaJIT is the next target. Traces handle calls
+So it beats C++ Luau everywhere here, and LuaJIT on mandel (allocation sinking removes all of its complex-number tables); the rest is within 1.3-1.6x of LuaJIT. Traces handle calls
 (inlined, vararg functions included), upvalues, closures (also capturing locals by reference),
 table fields, arrays and appends, `pairs`/`ipairs`, vectors, string and math builtins, any C
 function - including ones that call back into Lua like `pcall`, `table.sort` with a comparator or
 `string.gsub` with a function, and yields through them inside coroutines - arithmetic and
 comparison metamethods, and loops inside loops.
 
-So it beats C++ Luau everywhere here, and LuaJIT is the next target. What it can't trace yet
+So it beats C++ Luau everywhere here, and LuaJIT on mandel (allocation sinking removes all of its complex-number tables); the rest is within 1.3-1.6x of LuaJIT. What it can't trace yet
 (it simply leaves those loops to the regular JIT): creating tables inside the loop, metamethods,
 calls into C functions such as `math.random`, storing strings or tables into fields, loops nested
 inside the traced loop, and `#t`. `LUAU_TRACE_LOG=1` (or `=2` for reasons) prints what it
