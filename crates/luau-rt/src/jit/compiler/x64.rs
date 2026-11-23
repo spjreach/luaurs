@@ -38,6 +38,10 @@ const OFF_T_NODE: i32 = offset_of!(LuaTable, node) as i32;
 const NODE_SIZE: i32 = std::mem::size_of::<LuaNode>() as i32;
 const OFF_NODE_KEY: i32 = (offset_of!(LuaNode, key) + offset_of!(TKey, value)) as i32;
 const OFF_NODE_KEYTT: i32 = (offset_of!(LuaNode, key) + offset_of!(TKey, ttnext)) as i32;
+const OFF_MARKED: i32 = offset_of!(GCheader, marked) as i32;
+const OFF_TS_LEN: i32 = offset_of!(TString, len) as i32;
+const OFF_TOTALBYTES: i32 = offset_of!(global_State, totalbytes) as i32;
+const OFF_GCTHRESHOLD: i32 = offset_of!(global_State, GCthreshold) as i32;
 const OFF_CL_ENV: i32 = offset_of!(Closure, env) as i32;
 const OFF_CL_P: i32 = (CLOSURE_HEADER + offset_of!(LClosure, p)) as i32;
 const OFF_CL_UPREFS: i32 = (CLOSURE_HEADER + offset_of!(LClosure, uprefs)) as i32;
@@ -139,7 +143,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         }
         let defines = !matches!(
             inst.op,
-            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. }
+            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. }
         );
         if !defines {
             continue;
@@ -158,6 +162,15 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
             dying[(end + 1).min(n)].push(i);
         }
     }
+
+    // values in registers still needed after instruction i (saved around a
+    // call out of the trace)
+    let live_across = |i: usize| -> Vec<Home> {
+        (0..i).filter(|&j| home[j] != Home::None && used[j] && (last[j] == END || last[j] > i)).map(|j| home[j]).collect()
+    };
+    // a trace that allocates checks for GC work at its back edge (and exits
+    // for the collector to run: nothing collects while a trace runs)
+    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. }));
 
     // ---- emission -------------------------------------------------------
     let mut a = Asm::new();
@@ -253,10 +266,6 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                 load_value(&mut a, dst, inst.ty, p, 0)?;
             }
             Op::XStore { p, v } => {
-                let vt = t.ty(*v);
-                if vt.is_gc() {
-                    return Err("store of a GC object (needs a write barrier)".into());
-                }
                 let p = g(*p)?;
                 store_value(&mut a, &home, t, *v, p, 0)?;
             }
@@ -438,6 +447,43 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                     a.lea(d, R::Rcx, off);
                 }
             }
+            Op::Barrier { t: tb, v } => {
+                // only a black table can need it (the helper checks the rest)
+                let skip = a.label();
+                let tb = g(*tb)?;
+                a.test8_mi(tb, OFF_MARKED, 1 << crate::lgc::BLACKBIT);
+                a.jcc(Cond::E, skip);
+                let live = live_across(i);
+                call_out(&mut a, &live, helpers::barrier as usize, &[Arg::L, Arg::G(tb), Arg::G(g(*v)?)]);
+                a.bind(skip);
+            }
+            Op::TLen { t: tb } => {
+                let live = live_across(i);
+                call_out(&mut a, &live, helpers::len as usize, &[Arg::G(g(*tb)?)]);
+                if let Home::F(d) = dst {
+                    a.cvtsi2sd64(d, R::Rax);
+                }
+            }
+            Op::SLen { s } => {
+                if let Home::F(d) = dst {
+                    a.load32(R::Rax, g(*s)?, OFF_TS_LEN);
+                    a.cvtsi2sd64(d, R::Rax);
+                }
+            }
+            Op::NewTable { narray, nhash } => {
+                let live = live_across(i);
+                call_out(&mut a, &live, helpers::new_table as usize, &[Arg::L, Arg::Imm(*narray as u64), Arg::Imm(*nhash as u64)]);
+                if let Home::G(d) = dst {
+                    a.mov_rr(d, R::Rax);
+                }
+            }
+            Op::DupTable { tpl } => {
+                let live = live_across(i);
+                call_out(&mut a, &live, helpers::dup_table as usize, &[Arg::L, Arg::G(g(*tpl)?)]);
+                if let Home::G(d) = dst {
+                    a.mov_rr(d, R::Rax);
+                }
+            }
             Op::HSlot { t: tb, idx } => {
                 if let Home::G(d) = dst {
                     let tb = g(*tb)?;
@@ -583,6 +629,11 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         a.load(R::Rax, R::R12, OFF_GLOBAL);
         a.cmp64_mi(R::Rax, OFF_INTERRUPT, 0);
         a.jcc(Cond::NE, interrupt_stub);
+        if allocates {
+            a.load(R::Rcx, R::Rax, OFF_TOTALBYTES);
+            a.cmp_rm(R::Rcx, R::Rax, OFF_GCTHRESHOLD);
+            a.jcc(Cond::AE, interrupt_stub);
+        }
         let moves: Vec<(Home, Home)> = t
             .insts
             .iter()
@@ -733,4 +784,86 @@ fn mov_home(a: &mut Asm, d: Home, s: Home) -> Result<(), String> {
         (d, s) => return Err(format!("move between {:?} and {:?}", d, s)),
     }
     Ok(())
+}
+
+// ---- calls out of the trace ---------------------------------------------
+
+/// An argument of a call out of the trace.
+enum Arg {
+    /// the lua_State
+    L,
+    /// a value in a general register home
+    G(R),
+    Imm(u64),
+}
+
+/// Caller-saved registers the allocator hands out (sysv64: every xmm too).
+const CALLER_SAVED: [R; 6] = [R::Rsi, R::Rdi, R::R8, R::R9, R::R10, R::R11];
+
+/// Calls `f` (sysv64) with `args`, keeping the caller-saved registers in
+/// `live` intact; the result is left in rax. rsp is 8 mod 16 in trace code
+/// (six pushes after the call into it).
+fn call_out(a: &mut Asm, live: &[Home], f: usize, args: &[Arg]) {
+    let gs: Vec<R> = live.iter().filter_map(|h| match h {
+        Home::G(r) if CALLER_SAVED.contains(r) => Some(*r),
+        _ => None,
+    }).collect();
+    let xs: Vec<X> = live.iter().filter_map(|h| match h {
+        Home::F(x) => Some(*x),
+        _ => None,
+    }).collect();
+    let size = 8 * (gs.len() + xs.len()) as i32;
+    let frame = (size + 15) / 16 * 16 + 8;
+    a.sub_ri(R::Rsp, frame);
+    for (k, &r) in gs.iter().enumerate() {
+        a.store(R::Rsp, 8 * k as i32, r);
+    }
+    for (k, &x) in xs.iter().enumerate() {
+        a.movsd_store(R::Rsp, 8 * (gs.len() + k) as i32, x);
+    }
+    const ARGS: [R; 6] = [R::Rdi, R::Rsi, R::Rdx, R::Rcx, R::R8, R::R9];
+    for (k, arg) in args.iter().enumerate() {
+        let d = ARGS[k];
+        match *arg {
+            Arg::L => a.mov_rr(d, R::R12),
+            Arg::Imm(v) => a.mov_ri64(d, v),
+            Arg::G(r) => match gs.iter().position(|&s| s == r) {
+                // (it may already be overwritten by an earlier argument)
+                Some(slot) => a.load(d, R::Rsp, 8 * slot as i32),
+                None => a.mov_rr(d, r),
+            },
+        }
+    }
+    a.call_abs(f);
+    for (k, &r) in gs.iter().enumerate() {
+        a.load(r, R::Rsp, 8 * k as i32);
+    }
+    for (k, &x) in xs.iter().enumerate() {
+        a.movsd_load(x, R::Rsp, 8 * (gs.len() + k) as i32);
+    }
+    a.add_ri(R::Rsp, frame);
+}
+
+/// Runtime helpers trace code calls (sysv64; they never raise errors or
+/// run the collector).
+mod helpers {
+    use crate::lobject::*;
+
+    pub unsafe extern "sysv64" fn barrier(L: *mut lua_State, t: *mut LuaTable, v: *mut GCObject) {
+        if crate::lgc::isblack(t as *mut GCObject) && crate::lgc::iswhite(v) {
+            crate::lgc::luaC_barriertable(L, t, v);
+        }
+    }
+
+    pub unsafe extern "sysv64" fn len(t: *mut LuaTable) -> i64 {
+        crate::ltable::luaH_getn(t) as i64
+    }
+
+    pub unsafe extern "sysv64" fn new_table(L: *mut lua_State, narray: i64, nhash: i64) -> *mut LuaTable {
+        crate::ltable::luaH_new(L, narray as i32, nhash as i32)
+    }
+
+    pub unsafe extern "sysv64" fn dup_table(L: *mut lua_State, tpl: *mut LuaTable) -> *mut LuaTable {
+        crate::ltable::luaH_clone(L, tpl)
+    }
 }

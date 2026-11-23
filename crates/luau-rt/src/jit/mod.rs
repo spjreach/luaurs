@@ -141,7 +141,11 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
         let ex = f(base, L);
         LAST_RUN.with(|c| c.set(cycles().wrapping_sub(t0)));
         if ex & 0x8000_0000 != 0 {
-            // interrupted at the back edge: resume at the header
+            // interrupted at the back edge, or GC work is due (traces that
+            // allocate exit for it): resume at the header
+            if crate::lgc::luaC_needsGC(L) {
+                crate::lgc::luaC_step(L, true);
+            }
             return resume_at(header);
         }
         let (tag, k) = (((ex >> 16) & 0x7fff) as u16, ex & 0xffff);

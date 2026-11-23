@@ -611,6 +611,9 @@ impl Recorder {
             let p = self.array_slot(t, idx)?;
             let v = self.read(a, base)?;
             self.b.emit(Op::XStore { p, v }, IrType::Nil);
+            if self.b.trace.ty(v).is_gc() {
+                self.b.emit(Op::Barrier { t, v }, IrType::Nil);
+            }
         } else if o(O::And) || o(O::Or) || o(O::AndK) || o(O::OrK) {
             // R(A) = R(B) and/or R(C) (or constant C): which operand is
             // taken depends only on R(B)'s truthiness, which its type pins
@@ -660,11 +663,39 @@ impl Recorder {
                 (((*cl).env), self.b.emit(Op::ClEnv { cl: clr }, IrType::Ptr))
             };
             let v = self.read(a, base)?;
-            if self.b.trace.ty(v).is_gc() {
-                return Err(unsupported_type("store of a GC object (write barrier)"));
-            }
             let (p, _) = self.field_ref(h, t, kidx, true)?;
             self.b.emit(Op::XStore { p, v }, IrType::Nil);
+            if self.b.trace.ty(v).is_gc() {
+                self.b.emit(Op::Barrier { t, v }, IrType::Nil);
+            }
+        } else if o(O::Length) {
+            let tv = base.add(bb);
+            let x = self.read(bb, base)?;
+            let v = if (*tv).tt == LUA_TTABLE {
+                if !(*hvalue(tv)).metatable.is_null() {
+                    return Err(unsupported_type("length of a table with a metatable"));
+                }
+                let snap = self.b.snapshot();
+                self.b.emit(Op::GuardPlainTable { t: x, store: false, snap }, IrType::Nil);
+                self.b.emit(Op::TLen { t: x }, IrType::Number)
+            } else if (*tv).tt == LUA_TSTRING {
+                self.b.emit(Op::SLen { s: x }, IrType::Number)
+            } else {
+                return Err(unsupported_type("length of a non-table"));
+            };
+            self.b.set_slot(a, v);
+        } else if o(O::NewTable) {
+            let nhash = if bb == 0 { 0 } else { 1u32 << (bb - 1) };
+            let v = self.b.emit(Op::NewTable { narray: aux, nhash }, IrType::Table);
+            self.b.set_slot(a, v);
+        } else if o(O::DupTable) {
+            let kv = (*proto).k.add(d_of(insn) as usize);
+            if (*kv).tt != LUA_TTABLE {
+                return Err(unsupported_type("DUPTABLE of a non-table"));
+            }
+            let tpl = self.b.kptr((*kv).value.gc as usize, IrType::Table);
+            let v = self.b.emit(Op::DupTable { tpl }, IrType::Table);
+            self.b.set_slot(a, v);
         } else if o(O::GetUpval) {
             let (cl, clr) = self.cur_closure();
             let ur = Closure::uprefs(cl).add(bb);
@@ -1288,6 +1319,13 @@ fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *k = rm(*k);
         }
         HSlot { t, .. } => *t = rm(*t),
+        Barrier { t, v } => {
+            *t = rm(*t);
+            *v = rm(*v);
+        }
+        TLen { t } => *t = rm(*t),
+        SLen { s } => *s = rm(*s),
+        DupTable { tpl } => *tpl = rm(*tpl),
         GuardProto { f, p, .. } => {
             *f = rm(*f);
             *p = rm(*p);
@@ -1297,7 +1335,7 @@ fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *pre = rm(*pre);
             *back = rm(*back);
         }
-        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop | FrameFunc => {}
+        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop | FrameFunc | NewTable { .. } => {}
     }
 }
 

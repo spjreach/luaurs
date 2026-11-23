@@ -117,6 +117,18 @@ pub enum Op {
     /// adds keys, so the table's hash part can't change while it runs)
     HSlot { t: Ref, idx: u32 },
 
+    /// GC write barrier after storing `v` (a GC object) into table `t`
+    /// (`luaC_barriert`)
+    Barrier { t: Ref, v: Ref },
+    /// `#t` of a table without a metatable (a Number)
+    TLen { t: Ref },
+    /// length of string `s` (a Number)
+    SLen { s: Ref },
+    /// a new table (`NEWTABLE`)
+    NewTable { narray: u32, nhash: u32 },
+    /// a copy of template table `tpl` (`DUPTABLE`; a Table constant)
+    DupTable { tpl: Ref },
+
     // ---- functions --------------------------------------------------------
     /// the running closure of the trace's own frame (`L->ci->func`)
     FrameFunc,
@@ -174,7 +186,11 @@ impl Inst {
             XLoad { p, .. } => vec![*p],
             XStore { p, v } => vec![*p, *v],
             GuardPlainTable { t, .. } => vec![*t],
-            FrameFunc => vec![],
+            FrameFunc | NewTable { .. } => vec![],
+            Barrier { t, v } => vec![*t, *v],
+            TLen { t } => vec![*t],
+            SLen { s } => vec![*s],
+            DupTable { tpl } => vec![*tpl],
             HRef { t, k, .. } => vec![*t, *k],
             HSlot { t, .. } => vec![*t],
             ULoad { cl, .. } | ClEnv { cl } | GuardUvSlot { cl, .. } => vec![*cl],
