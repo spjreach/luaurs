@@ -17,6 +17,9 @@ pub(crate) unsafe fn execute_threaded(L: *mut lua_State) {
 unsafe extern "sysv64-unwind" fn h_OP_BREAK(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -135,7 +138,7 @@ unsafe extern "sysv64-unwind" fn h_OP_BREAK(L: *mut lua_State, mut pc: *const In
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -173,6 +176,9 @@ unsafe extern "sysv64-unwind" fn h_OP_BREAK(L: *mut lua_State, mut pc: *const In
 unsafe extern "sysv64-unwind" fn h_OP_GET_UDATA_KS(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -291,7 +297,7 @@ unsafe extern "sysv64-unwind" fn h_OP_GET_UDATA_KS(L: *mut lua_State, mut pc: *c
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -323,6 +329,9 @@ unsafe extern "sysv64-unwind" fn h_OP_GET_UDATA_KS(L: *mut lua_State, mut pc: *c
 unsafe extern "sysv64-unwind" fn h_OP_SET_UDATA_KS(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -441,7 +450,7 @@ unsafe extern "sysv64-unwind" fn h_OP_SET_UDATA_KS(L: *mut lua_State, mut pc: *c
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -473,6 +482,9 @@ unsafe extern "sysv64-unwind" fn h_OP_SET_UDATA_KS(L: *mut lua_State, mut pc: *c
 unsafe extern "sysv64-unwind" fn h_OP_NAMECALL_UDATA(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -591,7 +603,7 @@ unsafe extern "sysv64-unwind" fn h_OP_NAMECALL_UDATA(L: *mut lua_State, mut pc: 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -623,6 +635,9 @@ unsafe extern "sysv64-unwind" fn h_OP_NAMECALL_UDATA(L: *mut lua_State, mut pc: 
 unsafe extern "sysv64-unwind" fn h_OP_NOP(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -741,7 +756,7 @@ unsafe extern "sysv64-unwind" fn h_OP_NOP(L: *mut lua_State, mut pc: *const Inst
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -771,6 +786,9 @@ unsafe extern "sysv64-unwind" fn h_OP_NOP(L: *mut lua_State, mut pc: *const Inst
 unsafe extern "sysv64-unwind" fn h_OP_LOAD_NIL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -889,7 +907,7 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_NIL(L: *mut lua_State, mut pc: *const
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -920,6 +938,9 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_NIL(L: *mut lua_State, mut pc: *const
 unsafe extern "sysv64-unwind" fn h_OP_LOAD_B(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -1038,7 +1059,7 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_B(L: *mut lua_State, mut pc: *const I
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -1070,6 +1091,9 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_B(L: *mut lua_State, mut pc: *const I
 unsafe extern "sysv64-unwind" fn h_OP_LOAD_N(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -1188,7 +1212,7 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_N(L: *mut lua_State, mut pc: *const I
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -1219,6 +1243,9 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_N(L: *mut lua_State, mut pc: *const I
 unsafe extern "sysv64-unwind" fn h_OP_LOAD_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -1337,7 +1364,7 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_K(L: *mut lua_State, mut pc: *const I
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -1368,6 +1395,9 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_K(L: *mut lua_State, mut pc: *const I
 unsafe extern "sysv64-unwind" fn h_OP_MOVE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -1486,7 +1516,7 @@ unsafe extern "sysv64-unwind" fn h_OP_MOVE(L: *mut lua_State, mut pc: *const Ins
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -1535,6 +1565,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_GET_GLOBAL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -1653,7 +1686,7 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_GLOBAL(L: *mut lua_State, mut pc: *con
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -1698,6 +1731,9 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_GLOBAL(L: *mut lua_State, mut pc: *con
 unsafe extern "sysv64-unwind" fn h_OP_SET_GLOBAL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -1816,7 +1852,7 @@ unsafe extern "sysv64-unwind" fn h_OP_SET_GLOBAL(L: *mut lua_State, mut pc: *con
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -1876,6 +1912,9 @@ next!(1);
 unsafe extern "sysv64-unwind" fn s_OP_GET_UPVAL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -1994,7 +2033,7 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_UPVAL(L: *mut lua_State, mut pc: *cons
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -2044,6 +2083,9 @@ next!(1);
 unsafe extern "sysv64-unwind" fn s_OP_SET_UPVAL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -2162,7 +2204,7 @@ unsafe extern "sysv64-unwind" fn s_OP_SET_UPVAL(L: *mut lua_State, mut pc: *cons
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -2196,6 +2238,9 @@ unsafe extern "sysv64-unwind" fn s_OP_SET_UPVAL(L: *mut lua_State, mut pc: *cons
 unsafe extern "sysv64-unwind" fn h_OP_CLOSE_UPVALS(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -2314,7 +2359,7 @@ unsafe extern "sysv64-unwind" fn h_OP_CLOSE_UPVALS(L: *mut lua_State, mut pc: *c
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -2364,6 +2409,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_GET_IMPORT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -2482,7 +2530,7 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_IMPORT(L: *mut lua_State, mut pc: *con
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -2543,6 +2591,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_GET_TABLE_KS(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -2661,7 +2712,7 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_TABLE_KS(L: *mut lua_State, mut pc: *c
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -2795,6 +2846,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_SET_TABLE_KS(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -2913,7 +2967,7 @@ unsafe extern "sysv64-unwind" fn s_OP_SET_TABLE_KS(L: *mut lua_State, mut pc: *c
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -3015,6 +3069,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_GET_TABLE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -3133,7 +3190,7 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_TABLE(L: *mut lua_State, mut pc: *cons
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -3222,6 +3279,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_SET_TABLE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -3340,7 +3400,7 @@ unsafe extern "sysv64-unwind" fn s_OP_SET_TABLE(L: *mut lua_State, mut pc: *cons
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -3408,6 +3468,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_GET_TABLE_N(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -3526,7 +3589,7 @@ unsafe extern "sysv64-unwind" fn s_OP_GET_TABLE_N(L: *mut lua_State, mut pc: *co
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -3594,6 +3657,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_SET_TABLE_N(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -3712,7 +3778,7 @@ unsafe extern "sysv64-unwind" fn s_OP_SET_TABLE_N(L: *mut lua_State, mut pc: *co
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -3756,6 +3822,9 @@ unsafe extern "sysv64-unwind" fn s_OP_SET_TABLE_N(L: *mut lua_State, mut pc: *co
 unsafe extern "sysv64-unwind" fn h_OP_NEW_CLOSURE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -3874,7 +3943,7 @@ unsafe extern "sysv64-unwind" fn h_OP_NEW_CLOSURE(L: *mut lua_State, mut pc: *co
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -3981,6 +4050,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_NAMECALL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -4099,7 +4171,7 @@ unsafe extern "sysv64-unwind" fn s_OP_NAMECALL(L: *mut lua_State, mut pc: *const
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -4324,6 +4396,9 @@ become dispatch(L, (*p).codeentry, nbase, (*p).k);
 unsafe extern "sysv64-unwind" fn s_OP_CALL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -4442,7 +4517,7 @@ unsafe extern "sysv64-unwind" fn s_OP_CALL(L: *mut lua_State, mut pc: *const Ins
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -4659,6 +4734,9 @@ become dispatch(L, (*p).codeentry, nbase, (*p).k);
 unsafe extern "sysv64-unwind" fn s_OP_CALL_FB(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -4777,7 +4855,7 @@ unsafe extern "sysv64-unwind" fn s_OP_CALL_FB(L: *mut lua_State, mut pc: *const 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -4925,6 +5003,9 @@ become dispatch_frame(L, (*cip).savedpc, (*cip).base, (*(*cip).p).k);
 unsafe extern "sysv64-unwind" fn s_OP_RETURN(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -5043,7 +5124,7 @@ unsafe extern "sysv64-unwind" fn s_OP_RETURN(L: *mut lua_State, mut pc: *const I
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -5104,6 +5185,9 @@ unsafe extern "sysv64-unwind" fn s_OP_RETURN(L: *mut lua_State, mut pc: *const I
 unsafe extern "sysv64-unwind" fn h_OP_JUMP(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -5222,7 +5306,7 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP(L: *mut lua_State, mut pc: *const Ins
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -5252,6 +5336,9 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP(L: *mut lua_State, mut pc: *const Ins
 unsafe extern "sysv64-unwind" fn h_OP_JUMP_IF(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -5370,7 +5457,7 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP_IF(L: *mut lua_State, mut pc: *const 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -5403,6 +5490,9 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP_IF(L: *mut lua_State, mut pc: *const 
 unsafe extern "sysv64-unwind" fn h_OP_JUMP_IF_NOT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -5521,7 +5611,7 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP_IF_NOT(L: *mut lua_State, mut pc: *co
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -5583,6 +5673,9 @@ next!(2);
 unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_EQ(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -5701,7 +5794,7 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_EQ(L: *mut lua_State, mut pc: *con
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -5810,6 +5903,9 @@ next!(2);
 unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_NOT_EQ(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -5928,7 +6024,7 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_NOT_EQ(L: *mut lua_State, mut pc: 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -6030,6 +6126,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_LE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -6148,7 +6247,7 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_LE(L: *mut lua_State, mut pc: *con
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -6224,6 +6323,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_NOT_LE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -6342,7 +6444,7 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_NOT_LE(L: *mut lua_State, mut pc: 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -6418,6 +6520,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_LT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -6536,7 +6641,7 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_LT(L: *mut lua_State, mut pc: *con
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -6612,6 +6717,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_NOT_LT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -6730,7 +6838,7 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_IF_NOT_LT(L: *mut lua_State, mut pc: 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -6809,6 +6917,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_ADD(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -6927,7 +7038,7 @@ unsafe extern "sysv64-unwind" fn s_OP_ADD(L: *mut lua_State, mut pc: *const Inst
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -6996,6 +7107,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_SUB(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -7114,7 +7228,7 @@ unsafe extern "sysv64-unwind" fn s_OP_SUB(L: *mut lua_State, mut pc: *const Inst
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -7183,6 +7297,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_MUL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -7301,7 +7418,7 @@ unsafe extern "sysv64-unwind" fn s_OP_MUL(L: *mut lua_State, mut pc: *const Inst
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -7357,6 +7474,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_DIV(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -7475,7 +7595,7 @@ unsafe extern "sysv64-unwind" fn s_OP_DIV(L: *mut lua_State, mut pc: *const Inst
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -7524,6 +7644,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_I_DIV(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -7642,7 +7765,7 @@ unsafe extern "sysv64-unwind" fn s_OP_I_DIV(L: *mut lua_State, mut pc: *const In
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -7691,6 +7814,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_MOD(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -7809,7 +7935,7 @@ unsafe extern "sysv64-unwind" fn s_OP_MOD(L: *mut lua_State, mut pc: *const Inst
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -7847,6 +7973,9 @@ unsafe extern "sysv64-unwind" fn s_OP_MOD(L: *mut lua_State, mut pc: *const Inst
 unsafe extern "sysv64-unwind" fn h_OP_POW(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -7965,7 +8094,7 @@ unsafe extern "sysv64-unwind" fn h_OP_POW(L: *mut lua_State, mut pc: *const Inst
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -8021,6 +8150,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_ADD_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -8139,7 +8271,7 @@ unsafe extern "sysv64-unwind" fn s_OP_ADD_K(L: *mut lua_State, mut pc: *const In
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -8195,6 +8327,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_SUB_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -8313,7 +8448,7 @@ unsafe extern "sysv64-unwind" fn s_OP_SUB_K(L: *mut lua_State, mut pc: *const In
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -8369,6 +8504,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_MUL_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -8487,7 +8625,7 @@ unsafe extern "sysv64-unwind" fn s_OP_MUL_K(L: *mut lua_State, mut pc: *const In
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -8536,6 +8674,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_DIV_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -8654,7 +8795,7 @@ unsafe extern "sysv64-unwind" fn s_OP_DIV_K(L: *mut lua_State, mut pc: *const In
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -8703,6 +8844,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_I_DIV_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -8821,7 +8965,7 @@ unsafe extern "sysv64-unwind" fn s_OP_I_DIV_K(L: *mut lua_State, mut pc: *const 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -8870,6 +9014,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_MOD_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -8988,7 +9135,7 @@ unsafe extern "sysv64-unwind" fn s_OP_MOD_K(L: *mut lua_State, mut pc: *const In
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -9055,6 +9202,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_POW_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -9173,7 +9323,7 @@ unsafe extern "sysv64-unwind" fn s_OP_POW_K(L: *mut lua_State, mut pc: *const In
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -9222,6 +9372,9 @@ unsafe extern "sysv64-unwind" fn s_OP_POW_K(L: *mut lua_State, mut pc: *const In
 unsafe extern "sysv64-unwind" fn h_OP_AND(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -9340,7 +9493,7 @@ unsafe extern "sysv64-unwind" fn h_OP_AND(L: *mut lua_State, mut pc: *const Inst
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -9372,6 +9525,9 @@ unsafe extern "sysv64-unwind" fn h_OP_AND(L: *mut lua_State, mut pc: *const Inst
 unsafe extern "sysv64-unwind" fn h_OP_OR(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -9490,7 +9646,7 @@ unsafe extern "sysv64-unwind" fn h_OP_OR(L: *mut lua_State, mut pc: *const Instr
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -9522,6 +9678,9 @@ unsafe extern "sysv64-unwind" fn h_OP_OR(L: *mut lua_State, mut pc: *const Instr
 unsafe extern "sysv64-unwind" fn h_OP_AND_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -9640,7 +9799,7 @@ unsafe extern "sysv64-unwind" fn h_OP_AND_K(L: *mut lua_State, mut pc: *const In
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -9672,6 +9831,9 @@ unsafe extern "sysv64-unwind" fn h_OP_AND_K(L: *mut lua_State, mut pc: *const In
 unsafe extern "sysv64-unwind" fn h_OP_OR_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -9790,7 +9952,7 @@ unsafe extern "sysv64-unwind" fn h_OP_OR_K(L: *mut lua_State, mut pc: *const Ins
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -9822,6 +9984,9 @@ unsafe extern "sysv64-unwind" fn h_OP_OR_K(L: *mut lua_State, mut pc: *const Ins
 unsafe extern "sysv64-unwind" fn h_OP_CONCAT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -9940,7 +10105,7 @@ unsafe extern "sysv64-unwind" fn h_OP_CONCAT(L: *mut lua_State, mut pc: *const I
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -9988,6 +10153,9 @@ next!(1);
 unsafe extern "sysv64-unwind" fn s_OP_NOT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -10106,7 +10274,7 @@ unsafe extern "sysv64-unwind" fn s_OP_NOT(L: *mut lua_State, mut pc: *const Inst
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -10155,6 +10323,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_MINUS(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -10273,7 +10444,7 @@ unsafe extern "sysv64-unwind" fn s_OP_MINUS(L: *mut lua_State, mut pc: *const In
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -10346,6 +10517,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_LENGTH(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -10464,7 +10638,7 @@ unsafe extern "sysv64-unwind" fn s_OP_LENGTH(L: *mut lua_State, mut pc: *const I
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -10508,6 +10682,9 @@ unsafe extern "sysv64-unwind" fn s_OP_LENGTH(L: *mut lua_State, mut pc: *const I
 unsafe extern "sysv64-unwind" fn h_OP_NEW_TABLE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -10626,7 +10803,7 @@ unsafe extern "sysv64-unwind" fn h_OP_NEW_TABLE(L: *mut lua_State, mut pc: *cons
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -10661,6 +10838,9 @@ unsafe extern "sysv64-unwind" fn h_OP_NEW_TABLE(L: *mut lua_State, mut pc: *cons
 unsafe extern "sysv64-unwind" fn h_OP_DUP_TABLE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -10779,7 +10959,7 @@ unsafe extern "sysv64-unwind" fn h_OP_DUP_TABLE(L: *mut lua_State, mut pc: *cons
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -10812,6 +10992,9 @@ unsafe extern "sysv64-unwind" fn h_OP_DUP_TABLE(L: *mut lua_State, mut pc: *cons
 unsafe extern "sysv64-unwind" fn h_OP_SET_LIST(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -10930,7 +11113,7 @@ unsafe extern "sysv64-unwind" fn h_OP_SET_LIST(L: *mut lua_State, mut pc: *const
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -10982,6 +11165,9 @@ unsafe extern "sysv64-unwind" fn h_OP_SET_LIST(L: *mut lua_State, mut pc: *const
 unsafe extern "sysv64-unwind" fn h_OP_FOR_N_PREP(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -11100,7 +11286,7 @@ unsafe extern "sysv64-unwind" fn h_OP_FOR_N_PREP(L: *mut lua_State, mut pc: *con
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -11171,6 +11357,9 @@ next!(1);
 unsafe extern "sysv64-unwind" fn s_OP_FOR_N_LOOP(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -11289,7 +11478,7 @@ unsafe extern "sysv64-unwind" fn s_OP_FOR_N_LOOP(L: *mut lua_State, mut pc: *con
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -11334,6 +11523,9 @@ unsafe extern "sysv64-unwind" fn s_OP_FOR_N_LOOP(L: *mut lua_State, mut pc: *con
 unsafe extern "sysv64-unwind" fn h_OP_FOR_G_PREP(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -11452,7 +11644,7 @@ unsafe extern "sysv64-unwind" fn h_OP_FOR_G_PREP(L: *mut lua_State, mut pc: *con
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -11572,6 +11764,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_FOR_G_LOOP(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -11690,7 +11885,7 @@ unsafe extern "sysv64-unwind" fn s_OP_FOR_G_LOOP(L: *mut lua_State, mut pc: *con
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -11792,6 +11987,9 @@ unsafe extern "sysv64-unwind" fn s_OP_FOR_G_LOOP(L: *mut lua_State, mut pc: *con
 unsafe extern "sysv64-unwind" fn h_OP_FOR_G_PREP_INEXT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -11910,7 +12108,7 @@ unsafe extern "sysv64-unwind" fn h_OP_FOR_G_PREP_INEXT(L: *mut lua_State, mut pc
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -11950,6 +12148,9 @@ unsafe extern "sysv64-unwind" fn h_OP_FOR_G_PREP_INEXT(L: *mut lua_State, mut pc
 unsafe extern "sysv64-unwind" fn h_OP_FOR_G_PREP_NEXT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -12068,7 +12269,7 @@ unsafe extern "sysv64-unwind" fn h_OP_FOR_G_PREP_NEXT(L: *mut lua_State, mut pc:
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -12109,6 +12310,9 @@ unsafe extern "sysv64-unwind" fn h_OP_FOR_G_PREP_NEXT(L: *mut lua_State, mut pc:
 unsafe extern "sysv64-unwind" fn h_OP_NATIVE_CALL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -12227,7 +12431,7 @@ unsafe extern "sysv64-unwind" fn h_OP_NATIVE_CALL(L: *mut lua_State, mut pc: *co
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -12258,6 +12462,9 @@ unsafe extern "sysv64-unwind" fn h_OP_NATIVE_CALL(L: *mut lua_State, mut pc: *co
 unsafe extern "sysv64-unwind" fn h_OP_GET_VARARGS(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -12376,7 +12583,7 @@ unsafe extern "sysv64-unwind" fn h_OP_GET_VARARGS(L: *mut lua_State, mut pc: *co
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -12428,6 +12635,9 @@ unsafe extern "sysv64-unwind" fn h_OP_GET_VARARGS(L: *mut lua_State, mut pc: *co
 unsafe extern "sysv64-unwind" fn h_OP_DUP_CLOSURE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -12546,7 +12756,7 @@ unsafe extern "sysv64-unwind" fn h_OP_DUP_CLOSURE(L: *mut lua_State, mut pc: *co
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -12640,6 +12850,9 @@ unsafe extern "sysv64-unwind" fn h_OP_PREP_VARARGS(L: *mut lua_State, pc: *const
 unsafe extern "sysv64-unwind" fn s_OP_PREP_VARARGS(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -12758,7 +12971,7 @@ unsafe extern "sysv64-unwind" fn s_OP_PREP_VARARGS(L: *mut lua_State, mut pc: *c
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -12817,6 +13030,9 @@ jump!(1 + id(insn));
 unsafe extern "sysv64-unwind" fn s_OP_JUMP_BACK(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -12935,7 +13151,7 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_BACK(L: *mut lua_State, mut pc: *cons
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -12969,6 +13185,9 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_BACK(L: *mut lua_State, mut pc: *cons
 unsafe extern "sysv64-unwind" fn h_OP_LOAD_KX(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -13087,7 +13306,7 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_KX(L: *mut lua_State, mut pc: *const 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -13119,6 +13338,9 @@ unsafe extern "sysv64-unwind" fn h_OP_LOAD_KX(L: *mut lua_State, mut pc: *const 
 unsafe extern "sysv64-unwind" fn h_OP_JUMP_X(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -13237,7 +13459,7 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP_X(L: *mut lua_State, mut pc: *const I
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -13269,6 +13491,9 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP_X(L: *mut lua_State, mut pc: *const I
 unsafe extern "sysv64-unwind" fn h_OP_FAST_CALL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -13387,7 +13612,7 @@ unsafe extern "sysv64-unwind" fn h_OP_FAST_CALL(L: *mut lua_State, mut pc: *cons
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -13434,6 +13659,9 @@ unsafe extern "sysv64-unwind" fn h_OP_FAST_CALL(L: *mut lua_State, mut pc: *cons
 unsafe extern "sysv64-unwind" fn h_OP_COVERAGE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -13552,7 +13780,7 @@ unsafe extern "sysv64-unwind" fn h_OP_COVERAGE(L: *mut lua_State, mut pc: *const
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -13605,6 +13833,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_SUB_RK(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -13723,7 +13954,7 @@ unsafe extern "sysv64-unwind" fn s_OP_SUB_RK(L: *mut lua_State, mut pc: *const I
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -13779,6 +14010,9 @@ slow!();
 unsafe extern "sysv64-unwind" fn s_OP_DIV_RK(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -13897,7 +14131,7 @@ unsafe extern "sysv64-unwind" fn s_OP_DIV_RK(L: *mut lua_State, mut pc: *const I
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -14070,6 +14304,9 @@ become generic1(L, pc, base, k);
 unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL1(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -14188,7 +14425,7 @@ unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL1(L: *mut lua_State, mut pc: *con
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -14379,6 +14616,9 @@ become generic2(L, pc, base, k);
 unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL2(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -14497,7 +14737,7 @@ unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL2(L: *mut lua_State, mut pc: *con
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -14690,6 +14930,9 @@ become generic2(L, pc, base, k);
 unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL2_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -14808,7 +15051,7 @@ unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL2_K(L: *mut lua_State, mut pc: *c
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -14928,6 +15171,9 @@ become generic3(L, pc, base, k);
 unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL3(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -15046,7 +15292,7 @@ unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL3(L: *mut lua_State, mut pc: *con
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -15098,6 +15344,9 @@ unsafe extern "sysv64-unwind" fn s_OP_FAST_CALL3(L: *mut lua_State, mut pc: *con
 unsafe extern "sysv64-unwind" fn h_OP_JUMP_X_EQ_K_NIL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -15216,7 +15465,7 @@ unsafe extern "sysv64-unwind" fn h_OP_JUMP_X_EQ_K_NIL(L: *mut lua_State, mut pc:
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -15263,6 +15512,9 @@ jump!(1 + if eq != aux_not(aux) { id(insn) } else { 1 });
 unsafe extern "sysv64-unwind" fn s_OP_JUMP_X_EQ_K_B(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -15381,7 +15633,7 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_X_EQ_K_B(L: *mut lua_State, mut pc: *
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -15430,6 +15682,9 @@ jump!(1 + if eq != aux_not(aux) { id(insn) } else { 1 });
 unsafe extern "sysv64-unwind" fn s_OP_JUMP_X_EQ_K_N(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -15548,7 +15803,7 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_X_EQ_K_N(L: *mut lua_State, mut pc: *
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -15598,6 +15853,9 @@ jump!(1 + if eq != aux_not(aux) { id(insn) } else { 1 });
 unsafe extern "sysv64-unwind" fn s_OP_JUMP_X_EQ_K_S(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -15716,7 +15974,7 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_X_EQ_K_S(L: *mut lua_State, mut pc: *
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -15751,6 +16009,9 @@ unsafe extern "sysv64-unwind" fn s_OP_JUMP_X_EQ_K_S(L: *mut lua_State, mut pc: *
 unsafe extern "sysv64-unwind" fn h_OP_CMP_PROTO(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -15869,7 +16130,7 @@ unsafe extern "sysv64-unwind" fn h_OP_CMP_PROTO(L: *mut lua_State, mut pc: *cons
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -15904,6 +16165,9 @@ unsafe extern "sysv64-unwind" fn h_OP_CMP_PROTO(L: *mut lua_State, mut pc: *cons
 unsafe extern "sysv64-unwind" fn h_OP_FAST_P_CALL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -16022,7 +16286,7 @@ unsafe extern "sysv64-unwind" fn h_OP_FAST_P_CALL(L: *mut lua_State, mut pc: *co
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -16090,6 +16354,9 @@ unsafe extern "sysv64-unwind" fn h_OP_FAST_P_CALL(L: *mut lua_State, mut pc: *co
 unsafe extern "sysv64-unwind" fn h_OP_NEW_CLASS_MEMBER(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -16208,7 +16475,7 @@ unsafe extern "sysv64-unwind" fn h_OP_NEW_CLASS_MEMBER(L: *mut lua_State, mut pc
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -16247,6 +16514,9 @@ unsafe extern "sysv64-unwind" fn h_OP_NEW_CLASS_MEMBER(L: *mut lua_State, mut pc
 unsafe extern "sysv64-unwind" fn h_OP_NEW_CLASS(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -16365,7 +16635,7 @@ unsafe extern "sysv64-unwind" fn h_OP_NEW_CLASS(L: *mut lua_State, mut pc: *cons
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -16410,6 +16680,9 @@ unsafe extern "sysv64-unwind" fn h_OP_NEW_CLASS(L: *mut lua_State, mut pc: *cons
 unsafe extern "sysv64-unwind" fn h_OP_CONSTRUCT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -16528,7 +16801,7 @@ unsafe extern "sysv64-unwind" fn h_OP_CONSTRUCT(L: *mut lua_State, mut pc: *cons
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -16563,6 +16836,9 @@ unsafe extern "sysv64-unwind" fn h_OP_CONSTRUCT(L: *mut lua_State, mut pc: *cons
 unsafe extern "sysv64-unwind" fn h_OP_FIN_CONSTRUCT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -16681,7 +16957,7 @@ unsafe extern "sysv64-unwind" fn h_OP_FIN_CONSTRUCT(L: *mut lua_State, mut pc: *
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -16727,6 +17003,9 @@ unsafe extern "sysv64-unwind" fn h_OP_FIN_CONSTRUCT(L: *mut lua_State, mut pc: *
 unsafe extern "sysv64-unwind" fn h_OP_GET_PRIVATE_FIELD(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -16845,7 +17124,7 @@ unsafe extern "sysv64-unwind" fn h_OP_GET_PRIVATE_FIELD(L: *mut lua_State, mut p
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -16880,6 +17159,9 @@ unsafe extern "sysv64-unwind" fn h_OP_GET_PRIVATE_FIELD(L: *mut lua_State, mut p
 unsafe extern "sysv64-unwind" fn h_OP_SET_PRIVATE_FIELD(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -16998,7 +17280,7 @@ unsafe extern "sysv64-unwind" fn h_OP_SET_PRIVATE_FIELD(L: *mut lua_State, mut p
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -17033,6 +17315,9 @@ unsafe extern "sysv64-unwind" fn h_OP_SET_PRIVATE_FIELD(L: *mut lua_State, mut p
 unsafe extern "sysv64-unwind" fn h_DEFAULT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -17151,7 +17436,7 @@ unsafe extern "sysv64-unwind" fn h_DEFAULT(L: *mut lua_State, mut pc: *const Ins
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -17282,6 +17567,9 @@ static HANDLERS: [Handler; 256] = {
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NOP(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -17400,7 +17688,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NOP(L: *mut lua_State, mut pc:
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -17430,6 +17718,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NOP(L: *mut lua_State, mut pc:
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_NIL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -17548,7 +17839,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_NIL(L: *mut lua_State, mu
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -17579,6 +17870,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_NIL(L: *mut lua_State, mu
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_B(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -17697,7 +17991,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_B(L: *mut lua_State, mut 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -17729,6 +18023,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_B(L: *mut lua_State, mut 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_N(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -17847,7 +18144,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_N(L: *mut lua_State, mut 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -17878,6 +18175,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_N(L: *mut lua_State, mut 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -17996,7 +18296,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_K(L: *mut lua_State, mut 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -18027,6 +18327,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_K(L: *mut lua_State, mut 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MOVE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -18145,7 +18448,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MOVE(L: *mut lua_State, mut pc
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -18176,6 +18479,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MOVE(L: *mut lua_State, mut pc
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_GLOBAL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -18294,7 +18600,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_GLOBAL(L: *mut lua_State, 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -18339,6 +18645,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_GLOBAL(L: *mut lua_State, 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_GLOBAL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -18457,7 +18766,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_GLOBAL(L: *mut lua_State, 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -18503,6 +18812,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_GLOBAL(L: *mut lua_State, 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_UPVAL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -18621,7 +18933,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_UPVAL(L: *mut lua_State, m
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -18654,6 +18966,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_UPVAL(L: *mut lua_State, m
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_UPVAL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -18772,7 +19087,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_UPVAL(L: *mut lua_State, m
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -18806,6 +19121,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_UPVAL(L: *mut lua_State, m
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CLOSE_UPVALS(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -18924,7 +19242,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CLOSE_UPVALS(L: *mut lua_State
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -18958,6 +19276,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CLOSE_UPVALS(L: *mut lua_State
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_IMPORT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -19076,7 +19397,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_IMPORT(L: *mut lua_State, 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -19116,6 +19437,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_IMPORT(L: *mut lua_State, 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_TABLE_KS(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -19234,7 +19558,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_TABLE_KS(L: *mut lua_State
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -19341,6 +19665,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_TABLE_KS(L: *mut lua_State
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_TABLE_KS(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -19459,7 +19786,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_TABLE_KS(L: *mut lua_State
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -19527,6 +19854,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_TABLE_KS(L: *mut lua_State
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_TABLE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -19645,7 +19975,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_TABLE(L: *mut lua_State, m
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -19688,6 +20018,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_TABLE(L: *mut lua_State, m
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_TABLE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -19806,7 +20139,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_TABLE(L: *mut lua_State, m
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -19854,6 +20187,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_TABLE(L: *mut lua_State, m
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_TABLE_N(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -19972,7 +20308,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_TABLE_N(L: *mut lua_State,
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -20015,6 +20351,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_TABLE_N(L: *mut lua_State,
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_TABLE_N(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -20133,7 +20472,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_TABLE_N(L: *mut lua_State,
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -20177,6 +20516,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_TABLE_N(L: *mut lua_State,
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_CLOSURE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -20295,7 +20637,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_CLOSURE(L: *mut lua_State,
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -20341,6 +20683,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_CLOSURE(L: *mut lua_State,
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NAMECALL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -20459,7 +20804,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NAMECALL(L: *mut lua_State, mu
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -20575,6 +20920,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NAMECALL(L: *mut lua_State, mu
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -20693,7 +21041,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP(L: *mut lua_State, mut pc
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -20723,6 +21071,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP(L: *mut lua_State, mut pc
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -20841,7 +21192,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF(L: *mut lua_State, mut
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -20874,6 +21225,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF(L: *mut lua_State, mut
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -20992,7 +21346,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT(L: *mut lua_State,
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -21025,6 +21379,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT(L: *mut lua_State,
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_EQ(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -21143,7 +21500,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_EQ(L: *mut lua_State, 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -21223,6 +21580,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_EQ(L: *mut lua_State, 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT_EQ(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -21341,7 +21701,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT_EQ(L: *mut lua_Sta
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -21421,6 +21781,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT_EQ(L: *mut lua_Sta
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_LE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -21539,7 +21902,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_LE(L: *mut lua_State, 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -21593,6 +21956,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_LE(L: *mut lua_State, 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT_LE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -21711,7 +22077,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT_LE(L: *mut lua_Sta
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -21765,6 +22131,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT_LE(L: *mut lua_Sta
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_LT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -21883,7 +22252,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_LT(L: *mut lua_State, 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -21937,6 +22306,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_LT(L: *mut lua_State, 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT_LT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -22055,7 +22427,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT_LT(L: *mut lua_Sta
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -22109,6 +22481,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_IF_NOT_LT(L: *mut lua_Sta
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_ADD(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -22227,7 +22602,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_ADD(L: *mut lua_State, mut pc:
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -22271,6 +22646,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_ADD(L: *mut lua_State, mut pc:
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SUB(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -22389,7 +22767,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SUB(L: *mut lua_State, mut pc:
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -22433,6 +22811,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SUB(L: *mut lua_State, mut pc:
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MUL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -22551,7 +22932,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MUL(L: *mut lua_State, mut pc:
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -22582,6 +22963,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MUL(L: *mut lua_State, mut pc:
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DIV(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -22700,7 +23084,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DIV(L: *mut lua_State, mut pc:
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -22731,6 +23115,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DIV(L: *mut lua_State, mut pc:
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_I_DIV(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -22849,7 +23236,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_I_DIV(L: *mut lua_State, mut p
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -22880,6 +23267,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_I_DIV(L: *mut lua_State, mut p
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MOD(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -22998,7 +23388,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MOD(L: *mut lua_State, mut pc:
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -23036,6 +23426,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MOD(L: *mut lua_State, mut pc:
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_POW(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -23154,7 +23547,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_POW(L: *mut lua_State, mut pc:
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -23192,6 +23585,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_POW(L: *mut lua_State, mut pc:
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_ADD_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -23310,7 +23706,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_ADD_K(L: *mut lua_State, mut p
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -23348,6 +23744,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_ADD_K(L: *mut lua_State, mut p
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SUB_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -23466,7 +23865,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SUB_K(L: *mut lua_State, mut p
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -23504,6 +23903,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SUB_K(L: *mut lua_State, mut p
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MUL_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -23622,7 +24024,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MUL_K(L: *mut lua_State, mut p
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -23653,6 +24055,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MUL_K(L: *mut lua_State, mut p
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DIV_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -23771,7 +24176,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DIV_K(L: *mut lua_State, mut p
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -23802,6 +24207,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DIV_K(L: *mut lua_State, mut p
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_I_DIV_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -23920,7 +24328,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_I_DIV_K(L: *mut lua_State, mut
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -23951,6 +24359,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_I_DIV_K(L: *mut lua_State, mut
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MOD_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -24069,7 +24480,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MOD_K(L: *mut lua_State, mut p
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -24107,6 +24518,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MOD_K(L: *mut lua_State, mut p
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_POW_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -24225,7 +24639,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_POW_K(L: *mut lua_State, mut p
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -24274,6 +24688,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_POW_K(L: *mut lua_State, mut p
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_AND(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -24392,7 +24809,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_AND(L: *mut lua_State, mut pc:
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -24424,6 +24841,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_AND(L: *mut lua_State, mut pc:
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_OR(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -24542,7 +24962,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_OR(L: *mut lua_State, mut pc: 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -24574,6 +24994,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_OR(L: *mut lua_State, mut pc: 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_AND_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -24692,7 +25115,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_AND_K(L: *mut lua_State, mut p
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -24724,6 +25147,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_AND_K(L: *mut lua_State, mut p
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_OR_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -24842,7 +25268,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_OR_K(L: *mut lua_State, mut pc
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -24874,6 +25300,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_OR_K(L: *mut lua_State, mut pc
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CONCAT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -24992,7 +25421,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CONCAT(L: *mut lua_State, mut 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -25027,6 +25456,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CONCAT(L: *mut lua_State, mut 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NOT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -25145,7 +25577,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NOT(L: *mut lua_State, mut pc:
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -25177,6 +25609,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NOT(L: *mut lua_State, mut pc:
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MINUS(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -25295,7 +25730,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MINUS(L: *mut lua_State, mut p
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -25344,6 +25779,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_MINUS(L: *mut lua_State, mut p
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LENGTH(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -25462,7 +25900,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LENGTH(L: *mut lua_State, mut 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -25506,6 +25944,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LENGTH(L: *mut lua_State, mut 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_TABLE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -25624,7 +26065,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_TABLE(L: *mut lua_State, m
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -25659,6 +26100,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_TABLE(L: *mut lua_State, m
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DUP_TABLE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -25777,7 +26221,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DUP_TABLE(L: *mut lua_State, m
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -25810,6 +26254,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DUP_TABLE(L: *mut lua_State, m
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_LIST(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -25928,7 +26375,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_LIST(L: *mut lua_State, mu
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -25980,6 +26427,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_LIST(L: *mut lua_State, mu
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_N_PREP(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -26098,7 +26548,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_N_PREP(L: *mut lua_State, 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -26141,6 +26591,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_N_PREP(L: *mut lua_State, 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_N_LOOP(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -26259,7 +26712,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_N_LOOP(L: *mut lua_State, 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -26304,6 +26757,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_N_LOOP(L: *mut lua_State, 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_PREP(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -26422,7 +26878,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_PREP(L: *mut lua_State, 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -26493,6 +26949,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_PREP(L: *mut lua_State, 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_LOOP(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -26611,7 +27070,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_LOOP(L: *mut lua_State, 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -26713,6 +27172,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_LOOP(L: *mut lua_State, 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_PREP_INEXT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -26831,7 +27293,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_PREP_INEXT(L: *mut lua_S
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -26871,6 +27333,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_PREP_INEXT(L: *mut lua_S
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_PREP_NEXT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -26989,7 +27454,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_PREP_NEXT(L: *mut lua_St
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -27030,6 +27495,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FOR_G_PREP_NEXT(L: *mut lua_St
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NATIVE_CALL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -27148,7 +27616,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NATIVE_CALL(L: *mut lua_State,
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -27179,6 +27647,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NATIVE_CALL(L: *mut lua_State,
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_VARARGS(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -27297,7 +27768,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_VARARGS(L: *mut lua_State,
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -27349,6 +27820,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_VARARGS(L: *mut lua_State,
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DUP_CLOSURE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -27467,7 +27941,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DUP_CLOSURE(L: *mut lua_State,
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -27530,6 +28004,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DUP_CLOSURE(L: *mut lua_State,
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_PREP_VARARGS(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -27648,7 +28125,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_PREP_VARARGS(L: *mut lua_State
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -27691,6 +28168,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_PREP_VARARGS(L: *mut lua_State
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_BACK(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -27809,7 +28289,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_BACK(L: *mut lua_State, m
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -27843,6 +28323,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_BACK(L: *mut lua_State, m
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_KX(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -27961,7 +28444,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_KX(L: *mut lua_State, mut
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -27993,6 +28476,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_LOAD_KX(L: *mut lua_State, mut
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -28111,7 +28597,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X(L: *mut lua_State, mut 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -28143,6 +28629,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X(L: *mut lua_State, mut 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -28261,7 +28750,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL(L: *mut lua_State, m
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -28308,6 +28797,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL(L: *mut lua_State, m
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_COVERAGE(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -28426,7 +28918,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_COVERAGE(L: *mut lua_State, mu
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -28461,6 +28953,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_COVERAGE(L: *mut lua_State, mu
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SUB_RK(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -28579,7 +29074,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SUB_RK(L: *mut lua_State, mut 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -28617,6 +29112,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SUB_RK(L: *mut lua_State, mut 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DIV_RK(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -28735,7 +29233,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DIV_RK(L: *mut lua_State, mut 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -28777,6 +29275,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_DIV_RK(L: *mut lua_State, mut 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL1(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -28895,7 +29396,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL1(L: *mut lua_State, 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -28941,6 +29442,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL1(L: *mut lua_State, 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL2(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -29059,7 +29563,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL2(L: *mut lua_State, 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -29107,6 +29611,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL2(L: *mut lua_State, 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL2_K(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -29225,7 +29732,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL2_K(L: *mut lua_State
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -29273,6 +29780,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL2_K(L: *mut lua_State
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL3(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -29391,7 +29901,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL3(L: *mut lua_State, 
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -29443,6 +29953,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FAST_CALL3(L: *mut lua_State, 
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_NIL(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -29561,7 +30074,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_NIL(L: *mut lua_St
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -29594,6 +30107,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_NIL(L: *mut lua_St
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_B(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -29712,7 +30228,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_B(L: *mut lua_Stat
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -29746,6 +30262,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_B(L: *mut lua_Stat
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_N(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -29864,7 +30383,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_N(L: *mut lua_Stat
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -29899,6 +30418,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_N(L: *mut lua_Stat
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_S(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -30017,7 +30539,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_S(L: *mut lua_Stat
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -30052,6 +30574,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_JUMP_X_EQ_K_S(L: *mut lua_Stat
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CMP_PROTO(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -30170,7 +30695,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CMP_PROTO(L: *mut lua_State, m
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -30205,6 +30730,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CMP_PROTO(L: *mut lua_State, m
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_CLASS_MEMBER(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -30323,7 +30851,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_CLASS_MEMBER(L: *mut lua_S
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -30362,6 +30890,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_CLASS_MEMBER(L: *mut lua_S
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_CLASS(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -30480,7 +31011,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_CLASS(L: *mut lua_State, m
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -30525,6 +31056,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_NEW_CLASS(L: *mut lua_State, m
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CONSTRUCT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -30643,7 +31177,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CONSTRUCT(L: *mut lua_State, m
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -30678,6 +31212,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_CONSTRUCT(L: *mut lua_State, m
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FIN_CONSTRUCT(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -30796,7 +31333,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FIN_CONSTRUCT(L: *mut lua_Stat
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -30842,6 +31379,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_FIN_CONSTRUCT(L: *mut lua_Stat
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_PRIVATE_FIELD(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -30960,7 +31500,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_PRIVATE_FIELD(L: *mut lua_
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}
@@ -30995,6 +31535,9 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_GET_PRIVATE_FIELD(L: *mut lua_
 pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_PRIVATE_FIELD(L: *mut lua_State, mut pc: *const Instruction, mut base: StkId, mut k: *mut TValue) -> *const Instruction {
     let mut cl: *mut Closure = clvalue((*(*L).ci).func);
     const SS: bool = false;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = true;
 
     macro_rules! reload_frame {
         () => {{
@@ -31113,7 +31656,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn st_OP_SET_PRIVATE_FIELD(L: *mut lua_
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}

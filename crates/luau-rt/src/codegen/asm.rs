@@ -901,6 +901,18 @@ impl Asm {
         self.modrm_rr(dst.0, src.0);
         self.byte(mode);
     }
+    /// cmpps dst, src, predicate (0 = eq, ordered)
+    pub fn cmpps(&mut self, dst: X, src: X, pred: u8) {
+        self.sse_rr(0, 0xc2, dst, src);
+        self.byte(pred);
+    }
+    /// movmskps r32, xmm (lane sign bits)
+    pub fn movmskps(&mut self, dst: R, src: X) {
+        self.rex(false, dst as u8, 0, src.0, false);
+        self.byte(0x0f);
+        self.byte(0x50);
+        self.modrm_rr(dst as u8, src.0);
+    }
     /// dpps dst, src, imm (SSE4.1)
     pub fn dpps(&mut self, dst: X, src: X, imm: u8) {
         self.byte(0x66);

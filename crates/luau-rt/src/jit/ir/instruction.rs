@@ -88,6 +88,20 @@ pub enum Op {
     /// builtin id
     Math1(u8, Ref),
 
+    // ---- vectors (3 x f32, in an xmm register; lane 3 is junk) -----------
+    /// lane-wise `a op b` in single precision (`op`: 0x58 add, 0x5c sub,
+    /// 0x59 mul, 0x5e div); an operand that is a Number is rounded to f32
+    /// and used for every lane; `floor`: each lane floored after (IDIV)
+    VArith { op: u8, a: Ref, b: Ref, floor: bool },
+    /// `-v`
+    VNeg(Ref),
+    /// lane `lane` of vector `v`, as a Number
+    VGet { v: Ref, lane: u8 },
+    /// the vector of three Numbers (rounded to f32)
+    VMake { x: Ref, y: Ref, z: Ref },
+    /// exits unless `a == b` (every lane, IEEE: NaN never equal) is `want`
+    GuardVecEq { a: Ref, b: Ref, want: bool, snap: SnapId },
+
     // ---- conversions ----------------------------------------------------
     /// f64 -> I32, exits unless exact (array indexing by a number)
     NumToI32 { a: Ref, snap: SnapId },
@@ -233,7 +247,10 @@ impl Inst {
             Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) | Mod(a, b) | Pow(a, b) | IDiv(a, b) | AddI32(a, b) => {
                 vec![*a, *b]
             }
-            Neg(a) | Math1(_, a) | I32ToNum(a) | ASize(a) => vec![*a],
+            Neg(a) | Math1(_, a) | I32ToNum(a) | ASize(a) | VNeg(a) => vec![*a],
+            VArith { a, b, .. } | GuardVecEq { a, b, .. } => vec![*a, *b],
+            VGet { v, .. } => vec![*v],
+            VMake { x, y, z } => vec![*x, *y, *z],
             NumToI32 { a, .. } => vec![*a],
             ARef { t, idx } => vec![*t, *idx],
             XLoad { p, .. } => vec![*p],
@@ -271,7 +288,7 @@ impl Inst {
         use Op::*;
         match &self.op {
             SLoad { guarded: true, snap, .. } => Some(*snap),
-            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } => {
+            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } | GuardVecEq { snap, .. } => {
                 Some(*snap)
             }
             _ => None,
@@ -286,6 +303,7 @@ impl Inst {
             self.op,
             KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | Add(..) | Sub(..) | Mul(..) | Div(..) | Mod(..)
                 | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | ARef { .. } | FrameFunc | ClEnv { .. } | HSlot { .. } | Not(_) | LudToI32(_) | I32ToLud(_)
+                | VArith { .. } | VNeg(_) | VGet { .. } | VMake { .. }
         )
     }
 

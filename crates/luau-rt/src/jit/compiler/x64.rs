@@ -60,7 +60,7 @@ const TEMP_X: [X; 2] = [X(14), X(15)];
 /// spill slots (8 bytes each) every trace's native frame has, below the
 /// saved registers; side traces run in their root's frame, so it's fixed
 const SPILL_SLOTS: usize = 64;
-const SPILL_BYTES: i32 = SPILL_SLOTS as i32 * 8;
+const SPILL_BYTES: i32 = SPILL_SLOTS as i32 * 16;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Home {
@@ -71,8 +71,9 @@ enum Home {
     S(u8),
 }
 
+/// (16 bytes each: a vector fits; xmm spills always move all 16)
 fn spill_off(n: u8) -> i32 {
-    n as i32 * 8
+    n as i32 * 16
 }
 
 fn needs_reg(ty: IrType) -> Option<bool> {
@@ -176,7 +177,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         }
         let defines = !matches!(
             inst.op,
-            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. } | Op::HMiss { .. } | Op::GuardCFunc { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. }
+            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. } | Op::HMiss { .. } | Op::GuardCFunc { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::GuardVecEq { .. }
         ) && !matches!(inst.op, Op::Builtin { nres: 0, .. });
         if !defines {
             continue;
@@ -301,7 +302,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                     if needs_reg(t.ty(o)) == Some(true) {
                         let x = *TEMP_X.get(tx).ok_or("too many spilled operands")?;
                         tx += 1;
-                        a.movsd_load(x, R::Rsp, spill_off(s));
+                        a.movups_load(x, R::Rsp, spill_off(s));
                         over.push((o.index(), Home::F(x)));
                     } else {
                         let r = *TEMP_G.get(tg).ok_or("too many spilled operands")?;
@@ -537,6 +538,62 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                 if let Home::F(d) = dst {
                     a.movapd(d, X(0));
                 }
+            }
+            Op::VArith { op, a: x, b: y, floor } => {
+                // operands to xmm0 / xmm1 (a number: rounded, broadcast)
+                for (k, v) in [(0u8, *x), (1u8, *y)] {
+                    let src = f(v)?;
+                    if t.ty(v) == IrType::Number {
+                        a.cvtsd2ss(X(k), src);
+                        a.shufps(X(k), X(k), 0);
+                    } else {
+                        a.movaps(X(k), src);
+                    }
+                }
+                a.ps_rr(*op, X(0), X(1));
+                if *floor {
+                    a.roundps(X(0), X(0), 9);
+                }
+                if let Home::F(d) = dst {
+                    a.movaps(d, X(0));
+                }
+            }
+            Op::VNeg(x) => {
+                a.mov_ri(R::Rax, 0x8000_0000);
+                a.movd_xr(X(1), R::Rax);
+                a.shufps(X(1), X(1), 0);
+                a.movaps(X(0), f(*x)?);
+                a.xorps(X(0), X(1));
+                if let Home::F(d) = dst {
+                    a.movaps(d, X(0));
+                }
+            }
+            Op::VGet { v, lane } => {
+                a.movaps(X(0), f(*v)?);
+                if *lane != 0 {
+                    a.shufps(X(0), X(0), *lane);
+                }
+                if let Home::F(d) = dst {
+                    a.cvtss2sd(d, X(0));
+                }
+            }
+            Op::VMake { x, y, z } => {
+                a.cvtsd2ss(X(0), f(*x)?);
+                a.cvtsd2ss(X(1), f(*y)?);
+                a.unpcklps(X(0), X(1));
+                a.cvtsd2ss(X(1), f(*z)?);
+                a.movlhps(X(0), X(1));
+                if let Home::F(d) = dst {
+                    a.movaps(d, X(0));
+                }
+            }
+            Op::GuardVecEq { a: x, b: y, want, snap } => {
+                a.movaps(X(0), f(*x)?);
+                a.cmpps(X(0), f(*y)?, 0);
+                a.movmskps(R::Rax, X(0));
+                a.and32_ri(R::Rax, 7);
+                a.cmp32_ri(R::Rax, 7);
+                a.jcc(if *want { Cond::NE } else { Cond::E }, stub(*snap));
             }
             Op::LudToI32(x) | Op::I32ToLud(x) => {
                 if let Home::G(d) = dst {
@@ -888,7 +945,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         }
         if let Some(s) = spill_to {
             match dst {
-                Home::F(x) => a.movsd_store(R::Rsp, spill_off(s), x),
+                Home::F(x) => a.movups_store(R::Rsp, spill_off(s), x),
                 Home::G(r) => a.store(R::Rsp, spill_off(s), r),
                 _ => {}
             }
@@ -991,6 +1048,7 @@ fn load_value(a: &mut Asm, h: Home, ty: IrType, base: R, disp: i32) -> Result<()
     match (h, ty) {
         (Home::None, _) => {}
         (Home::F(x), IrType::Number) => a.movsd_load(x, base, disp),
+        (Home::F(x), IrType::Vector) => a.movups_load(x, base, disp),
         (Home::G(r), IrType::Boolean) => a.load32(r, base, disp),
         (Home::G(r), _) => a.load(r, base, disp),
         (h, ty) => return Err(format!("can't load {:?} into {:?}", ty, h)),
@@ -1002,6 +1060,19 @@ fn load_value(a: &mut Asm, h: Home, ty: IrType, base: R, disp: i32) -> Result<()
 fn store_value(a: &mut Asm, home: &[Home], t: &Trace, v: Ref, base: R, disp: i32) -> Result<(), String> {
     let ty = t.ty(v);
     let tag = ty.tag().ok_or_else(|| format!("store of a non-Lua value {:?}", ty))?;
+    if ty == IrType::Vector {
+        // x, y, z (z in the extra word), then the tag over lane 3
+        match home[v.index()] {
+            Home::F(x) => a.movups_store(base, disp, x),
+            Home::S(s) => {
+                a.movups_load(X(0), R::Rsp, spill_off(s));
+                a.movups_store(base, disp, X(0));
+            }
+            h => return Err(format!("vector {} has no home {:?}", v.0, h)),
+        }
+        a.store32_i(base, disp + OFF_TT, tag as u32);
+        return Ok(());
+    }
     match (home[v.index()], &t.inst(v).op) {
         (Home::F(x), _) => a.movsd_store(base, disp, x),
         (Home::G(r), _) => a.store(base, disp, r),
@@ -1071,12 +1142,12 @@ fn mov_home(a: &mut Asm, d: Home, s: Home) -> Result<(), String> {
         (Home::F(d), Home::G(s)) => a.movq_xr(d, s),
         (Home::G(d), Home::F(s)) => a.movq_rx(d, s),
         (Home::G(d), Home::S(s)) => a.load(d, R::Rsp, spill_off(s)),
-        (Home::F(d), Home::S(s)) => a.movsd_load(d, R::Rsp, spill_off(s)),
+        (Home::F(d), Home::S(s)) => a.movups_load(d, R::Rsp, spill_off(s)),
         (Home::S(d), Home::G(s)) => a.store(R::Rsp, spill_off(d), s),
-        (Home::S(d), Home::F(s)) => a.movsd_store(R::Rsp, spill_off(d), s),
+        (Home::S(d), Home::F(s)) => a.movups_store(R::Rsp, spill_off(d), s),
         (Home::S(d), Home::S(s)) => {
-            a.load(R::Rax, R::Rsp, spill_off(s));
-            a.store(R::Rsp, spill_off(d), R::Rax);
+            a.movups_load(X(0), R::Rsp, spill_off(s));
+            a.movups_store(R::Rsp, spill_off(d), X(0));
         }
         (d, s) => return Err(format!("move between {:?} and {:?}", d, s)),
     }
@@ -1111,14 +1182,14 @@ fn call_out(a: &mut Asm, live: &[Home], f: usize, args: &[Arg]) {
         Home::F(x) => Some(*x),
         _ => None,
     }).collect();
-    let size = 8 * (gs.len() + xs.len()) as i32;
+    let size = 8 * gs.len() as i32 + 16 * xs.len() as i32;
     let frame = (size + 15) / 16 * 16 + 8;
     a.sub_ri(R::Rsp, frame);
     for (k, &r) in gs.iter().enumerate() {
         a.store(R::Rsp, 8 * k as i32, r);
     }
     for (k, &x) in xs.iter().enumerate() {
-        a.movsd_store(R::Rsp, 8 * (gs.len() + k) as i32, x);
+        a.movups_store(R::Rsp, 8 * gs.len() as i32 + 16 * k as i32, x);
     }
     const ARGS: [R; 6] = [R::Rdi, R::Rsi, R::Rdx, R::Rcx, R::R8, R::R9];
     // register arguments move all at once (a source can be another
@@ -1177,7 +1248,7 @@ fn call_out(a: &mut Asm, live: &[Home], f: usize, args: &[Arg]) {
         a.load(r, R::Rsp, 8 * k as i32);
     }
     for (k, &x) in xs.iter().enumerate() {
-        a.movsd_load(x, R::Rsp, 8 * (gs.len() + k) as i32);
+        a.movups_load(x, R::Rsp, 8 * gs.len() as i32 + 16 * k as i32);
     }
     a.add_ri(R::Rsp, frame);
 }

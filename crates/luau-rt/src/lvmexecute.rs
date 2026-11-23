@@ -259,6 +259,9 @@ unsafe fn execute<const SS: bool>(L: *mut lua_State) {
     let mut cl: *mut Closure;
     let mut base: StkId;
     let mut k: *mut TValue;
+    // (true in the single-instruction steps native code runs: they only do
+    // the instruction - native code calls the tracing JIT itself)
+    const IN_STEP: bool = false;
 
     macro_rules! reload_frame {
         () => {{
@@ -377,7 +380,7 @@ unsafe fn execute<const SS: bool>(L: *mut lua_State) {
                         }
                     }
                 }
-            } else if crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
+            } else if !IN_STEP && crate::jit::TRACE_HOOKS.load(std::sync::atomic::Ordering::Relaxed) {
                 let p = (*(*L).ci).p;
                 match crate::jit::threaded_backedge(L, p, pc.offset_from((*p).code) as u32, base) {
                     0 => {}

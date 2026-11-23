@@ -599,14 +599,10 @@ pub unsafe fn threaded_backedge(L: *mut lua_State, p: *mut Proto, header: u32, b
     if is_recording() {
         return 0;
     }
-    // Only functions without native code: one with native code is in the
-    // threaded interpreter just for a while (after a bail) and is traced
-    // from its native loops; mixing trace exits with native re-entry
-    // mid-function there was found to corrupt state.
-    #[cfg(all(target_arch = "x86_64", windows))]
-    if !(*p).execdata.is_null() {
-        return 0;
-    }
+    // (a function with native code gets here when its native code left
+    // for the interpreter mid-loop: the loop then runs here until the
+    // frame changes, so it is traced from here too. Native code's own
+    // loop instructions run as steps, which never get here: IN_STEP)
     let depth = ci_depth(L);
     let r = on_backedge(L, p, header, base);
     if is_recording() {

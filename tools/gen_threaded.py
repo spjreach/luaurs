@@ -195,7 +195,8 @@ out.append("")
 # Opcodes that switch call frames are excluded (native code exits to the
 # interpreter handler for them instead).
 STEP = "return pc;"
-step_prologue = fix("\n".join(prologue), STEP).replace("return;", "return std::ptr::null();")
+step_prologue = fix("\n".join(prologue), STEP).replace("return;", "return std::ptr::null();").replace("const IN_STEP: bool = false;", "const IN_STEP: bool = true;")
+assert "const IN_STEP: bool = true;" in step_prologue
 step_table = []
 for arm in arms:
     pat = arm["pat"]

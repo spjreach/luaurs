@@ -294,7 +294,7 @@ impl Recorder {
             if let Some(r) = r {
                 let tv = self.root_base.add(slot);
                 match IrType::of_tag((*tv).tt) {
-                    Some(ty) if ty != IrType::Vector => self.b.trace.insts[r.index()].ty = ty,
+                    Some(ty) => self.b.trace.insts[r.index()].ty = ty,
                     _ => return Step::Abort(AbortReason::UnsupportedType("builtin result type")),
                 }
             }
@@ -308,7 +308,7 @@ impl Recorder {
             self.b.pc = pc;
             for i in 0..nres {
                 let tv = base.add(slot + i);
-                let Some(ty) = IrType::of_tag((*tv).tt).filter(|t| *t != IrType::Vector) else {
+                let Some(ty) = IrType::of_tag((*tv).tt) else {
                     return Step::Abort(AbortReason::UnsupportedType("C function result type"));
                 };
                 let snap = self.b.snapshot();
@@ -402,6 +402,12 @@ impl Recorder {
                 let ty = IrType::of_tag((*tv).tt).ok_or(unsupported_type("constant"))?;
                 self.gc_const((*tv).value.gc as usize, ty)
             }
+            LUA_TVECTOR => {
+                // (loaded from the constant itself: it outlives the trace)
+                let p = self.b.kptr(tv as usize, IrType::Ptr);
+                let snap = self.b.snapshot();
+                self.b.emit(Op::XLoad { p, snap }, IrType::Vector)
+            }
             _ => return Err(unsupported_type("constant")),
         })
     }
@@ -412,6 +418,41 @@ impl Recorder {
             return Err(unsupported_type("arithmetic with a non-number constant"));
         }
         Ok(self.b.knum((*kv).value.n))
+    }
+
+    /// The operands of an arithmetic instruction the interpreter does on
+    /// vectors (vector +-*/ vector, vector */ number, number */ vector,
+    /// vector // number, constants included), if it is one.
+    unsafe fn vector_operands(&mut self, op: u8, bb: usize, c: usize, base: StkId) -> R<Option<(Ref, Ref)>> {
+        let o = |x: O| op == x as u8;
+        let kv = |c: usize| (*self.cur_proto()).k.add(c) as *const TValue;
+        let (tb, tc): (*const TValue, *const TValue) = if o(O::Add) || o(O::Sub) || o(O::Mul) || o(O::Div) || o(O::IDiv) {
+            (base.add(bb), base.add(c))
+        } else if o(O::AddK) || o(O::SubK) || o(O::MulK) || o(O::DivK) || o(O::IDivK) {
+            (base.add(bb), kv(c))
+        } else if o(O::DivRk) {
+            (kv(bb), base.add(c))
+        } else {
+            return Ok(None);
+        };
+        let (vb, vc) = ((*tb).tt == LUA_TVECTOR, (*tc).tt == LUA_TVECTOR);
+        if !vb && !vc {
+            return Ok(None);
+        }
+        let (nb, nc) = ((*tb).tt == LUA_TNUMBER, (*tc).tt == LUA_TNUMBER);
+        let ok = if o(O::Add) || o(O::Sub) || o(O::AddK) || o(O::SubK) {
+            vb && vc
+        } else if o(O::IDiv) || o(O::IDivK) {
+            vb && nc
+        } else {
+            (vb && (vc || nc)) || (nb && vc)
+        };
+        if !ok {
+            return Err(unsupported_type("vector arithmetic the interpreter doesn't do"));
+        }
+        let x = if o(O::DivRk) { self.konst(bb)? } else { self.read(bb, base)? };
+        let y = if o(O::AddK) || o(O::SubK) || o(O::MulK) || o(O::DivK) || o(O::IDivK) { self.konst(c)? } else { self.read(c, base)? };
+        Ok(Some((x, y)))
     }
 
     fn arith(&mut self, op: u8, a: Ref, b: Ref) -> Ref {
@@ -542,6 +583,23 @@ impl Recorder {
             self.record_arith_mm(op, a, bb, None, Some(c), base)?;
         } else if o(O::Minus) && (*base.add(bb)).tt == LUA_TTABLE {
             self.record_arith_mm(op, a, bb, Some(bb), None, base)?;
+        } else if let Some((x, y)) = self.vector_operands(op, bb, c, base)? {
+            let opc = if o(O::Add) || o(O::AddK) {
+                0x58
+            } else if o(O::Sub) || o(O::SubK) {
+                0x5c
+            } else if o(O::Mul) || o(O::MulK) {
+                0x59
+            } else {
+                0x5e
+            };
+            let floor = o(O::IDiv) || o(O::IDivK);
+            let v = self.b.emit(Op::VArith { op: opc, a: x, b: y, floor }, IrType::Vector);
+            self.b.set_slot(a, v);
+        } else if o(O::Minus) && (*base.add(bb)).tt == LUA_TVECTOR {
+            let x = self.read(bb, base)?;
+            let v = self.b.emit(Op::VNeg(x), IrType::Vector);
+            self.b.set_slot(a, v);
         } else if o(O::Add) || o(O::Sub) || o(O::Mul) || o(O::Div) || o(O::Mod) || o(O::Pow) || o(O::IDiv) {
             let x = self.read_num(bb, base)?;
             let y = self.read_num(c, base)?;
@@ -583,6 +641,12 @@ impl Recorder {
                 // different types are never equal: the tag guards pin it
                 self.read(a, base)?;
                 self.read(rb, base)?;
+            } else if is_eq && ta == LUA_TVECTOR {
+                let eq = crate::lobject::luaO_rawequalObj(base.add(a), base.add(rb));
+                let x = self.read(a, base)?;
+                let y = self.read(rb, base)?;
+                let snap = self.b.snapshot();
+                self.b.emit(Op::GuardVecEq { a: x, b: y, want: eq, snap }, IrType::Nil);
             } else if is_eq && ta != LUA_TNUMBER && ta != LUA_TVECTOR && ta != LUA_TUSERDATA {
                 // same non-number type: identity (strings are interned);
                 // tables compare with __eq only when both have metatables
@@ -999,6 +1063,21 @@ impl Recorder {
                 self.read(c, base)?
             };
             self.b.set_slot(a, v);
+        } else if o(O::GetTableKs) && (*base.add(bb)).tt == LUA_TVECTOR {
+            // v.x / v.y / v.z (any case)
+            let kv = (*proto).k.add(aux as usize);
+            let lane = if (*kv).tt == LUA_TSTRING {
+                let name = crate::lobject::sbytes(tsvalue(kv));
+                if name.len() == 1 { ((name[0] | b' ').wrapping_sub(b'x') as u32) as usize } else { 3 }
+            } else {
+                3
+            };
+            if lane >= 3 {
+                return Err(unsupported_type("vector field other than x/y/z"));
+            }
+            let x = self.read(bb, base)?;
+            let v = self.b.emit(Op::VGet { v: x, lane: lane as u8 }, IrType::Number);
+            self.b.set_slot(a, v);
         } else if o(O::GetTableKs) || o(O::GetGlobal) {
             // a string-keyed field (of R(B), or of the environment)
             let kidx = aux as usize;
@@ -1393,7 +1472,7 @@ impl Recorder {
         use luau_common::bytecode::BuiltinFunction as B;
         let op = op_of(insn);
         let bfid = a_of(insn) as u8;
-        let banned = [B::Rawset, B::TableUnpack, B::SelectVararg, B::TableClear, B::Vector];
+        let banned = [B::Rawset, B::TableUnpack, B::SelectVararg, B::TableClear];
         if banned.iter().any(|&b| b as u8 == bfid) {
             return Err(AbortReason::UnsupportedOpcode(builtin_name(bfid)));
         }
@@ -1445,10 +1524,14 @@ impl Recorder {
             args[2] = self.read(((aux >> 8) & 0xff) as usize, base)?;
             nargs = 3;
         }
-        for a in &args[..nargs] {
-            if self.b.trace.ty(*a) == IrType::Vector {
-                return Err(unsupported_type("vector builtin argument"));
-            }
+        if bfid == B::Vector as u8 && nres == 1 && (2..=3).contains(&nargs) && args[..nargs].iter().all(|a| self.b.trace.ty(*a) == IrType::Number) {
+            // vector.create(x, y[, z]) of numbers: built in place (the
+            // interpreter's builtin succeeds and skips the CALL)
+            let z = if nargs == 3 { args[2] } else { self.b.knum(0.0) };
+            let v = self.b.emit(Op::VMake { x: args[0], y: args[1], z }, IrType::Vector);
+            self.b.set_slot(ra, v);
+            self.pending = Some((None, 0, call_at as u32 + 1, false));
+            return Ok(());
         }
         if bfid == B::Setmetatable as u8 {
             self.mm_store_ok(Some(args[0]))?;
@@ -1714,9 +1797,6 @@ impl Recorder {
         let mut args = [Ref(0); 3];
         for k in 0..nargs {
             args[k] = self.read(a + 1 + k, base)?;
-            if self.b.trace.ty(args[k]) == IrType::Vector {
-                return Err(unsupported_type("vector builtin argument"));
-            }
         }
         let buf = Box::leak(vec![0u64; 8].into_boxed_slice()).as_mut_ptr() as usize;
         let snap = self.b.snapshot();
@@ -1751,7 +1831,7 @@ impl Recorder {
         self.b.emit(Op::GuardCFunc { f, fp, snap }, IrType::Nil);
         for k in 0..nargs {
             let tv = base.add(a + 1 + k);
-            let ok = matches!((*tv).tt, LUA_TNUMBER | LUA_TSTRING | LUA_TBOOLEAN | LUA_TNIL) || (k == 0 && table_arg && (*tv).tt == LUA_TTABLE);
+            let ok = matches!((*tv).tt, LUA_TNUMBER | LUA_TSTRING | LUA_TBOOLEAN | LUA_TNIL | LUA_TVECTOR) || (k == 0 && table_arg && (*tv).tt == LUA_TTABLE);
             if !ok {
                 // (other types could run metamethods: Lua code)
                 return Err(unsupported_type("C call argument type"));
@@ -2347,7 +2427,17 @@ fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *cl = rm(*cl);
             *v = rm(*v);
         }
-        Not(a) | LudToI32(a) | I32ToLud(a) => *a = rm(*a),
+        Not(a) | LudToI32(a) | I32ToLud(a) | VNeg(a) => *a = rm(*a),
+        VArith { a, b, .. } | GuardVecEq { a, b, .. } => {
+            *a = rm(*a);
+            *b = rm(*b);
+        }
+        VGet { v, .. } => *v = rm(*v),
+        VMake { x, y, z } => {
+            *x = rm(*x);
+            *y = rm(*y);
+            *z = rm(*z);
+        }
     }
 }
 
@@ -2375,6 +2465,7 @@ fn set_snapshot(op: &mut Op, s: SnapId) {
         | CCall { snap, .. }
         | SReload { snap, .. }
         | Concat { snap, .. }
+        | GuardVecEq { snap, .. }
         | UStore { snap, .. } => *snap = s,
         _ => {}
     }
@@ -2395,18 +2486,22 @@ unsafe fn builtin_of(l: *mut lua_State, fp: usize) -> Option<u8> {
         if m.is_none() {
             let mut map = HashMap::new();
             let globals = (*l).gt;
-            let banned = [B::Rawset, B::TableUnpack, B::SelectVararg, B::Setmetatable, B::TableClear, B::Vector];
+            let banned = [B::Rawset, B::TableUnpack, B::SelectVararg, B::Setmetatable, B::TableClear];
             for id in 1..=255u8 {
                 let Ok(b) = B::try_from(id) else { continue };
                 if banned.contains(&b) {
                     continue;
                 }
                 let name = format!("{:?}", b);
-                let (lib, fname) = ["Math", "Bit32", "String", "Buffer"]
-                    .iter()
-                    .find(|p| name.starts_with(*p) && name.len() > p.len())
-                    .map(|p| (Some(p.to_lowercase()), name[p.len()..].to_lowercase()))
-                    .unwrap_or((None, name.to_lowercase()));
+                let (lib, fname) = if b == B::Vector {
+                    (Some("vector".to_string()), "create".to_string())
+                } else {
+                    ["Math", "Bit32", "String", "Buffer", "Vector"]
+                        .iter()
+                        .find(|p| name.starts_with(*p) && name.len() > p.len())
+                        .map(|p| (Some(p.to_lowercase()), name[p.len()..].to_lowercase()))
+                        .unwrap_or((None, name.to_lowercase()))
+                };
                 let table = match lib {
                     Some(lib) => match get_by_name(globals, lib.as_bytes()) {
                         Some(v) if (*v).tt == LUA_TTABLE => hvalue(v),
