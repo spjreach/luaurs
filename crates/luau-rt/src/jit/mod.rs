@@ -57,6 +57,14 @@ pub const EXIT_STORM_LIMIT: u32 = 16;
 /// Exits through one snapshot before a side trace is recorded from it.
 pub const HOTEXIT: u32 = 10;
 
+/// `exit_tries` of an exit whose side trace left the loop (a break /
+/// return path: the loop's normal end, not worth tracing or a storm).
+pub const EXIT_LEAVES: u8 = 250;
+
+/// Average cycles a trace runs before an exit that can't be continued,
+/// below which (with EXIT_STORM_LIMIT such exits) it is re-recorded.
+pub const STORM_CYCLES: u64 = 2000;
+
 /// `on_backedge` result: the trace left through a snapshot inside inlined
 /// calls; their frames were pushed and `L->ci` resumes at its savedpc.
 pub const RESUME_FRAME: u32 = u32::MAX;
@@ -156,6 +164,7 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
         // loop header, then linked to the exit); exits that can't be
         // side-traced count toward the storm limit, which drops the trace
         // for a re-record.
+        let run = LAST_RUN.with(|c| c.get());
         let (storm, resume, frames, side, top) = state::with(|s| {
             let max_sides = 64;
             let (nsides, root_end) = match s.traces.get(&key) {
@@ -166,12 +175,16 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
             let t = s.by_tag_mut(tag).expect("exit from an unknown trace");
             let sn = &t.snapshots[k as usize];
             let in_loop = !sn.frames.is_empty() || (sn.pc >= header && sn.pc <= root_end);
-            let traceable = in_loop && sn.frames.is_empty() && sn.pc != header && t.exit_tries[k as usize] < 3 && nsides < max_sides;
+            let sn_frames_empty = sn.frames.is_empty();
+            let tries = t.exit_tries[k as usize];
+            // (an exit whose side trace left the loop is the loop's end)
+            let leaves = tries == EXIT_LEAVES;
+            let traceable = in_loop && !leaves && sn.pc != header && t.exit_tries[k as usize] < 3 && nsides < max_sides;
             let (pc, frames, top) = (sn.pc, if sn.frames.is_empty() { None } else { Some(sn.clone()) }, sn.top);
             let mut side = None;
             // (an in-body guard resuming at the header is a while loop's
             // condition failing: the loop's normal end, like leaving it)
-            let loop_end_exit = sn.pc == header && k != 0;
+            let loop_end_exit = (sn.pc == header && k != 0) || leaves;
             let mut count_storm = in_loop && !traceable && !loop_end_exit;
             if traceable {
                 t.exit_counts[k as usize] += 1;
@@ -183,11 +196,19 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
             } else if !in_loop {
                 count_storm = false;
             }
+            if count_storm && std::env::var_os("LUAU_TRACE_STORMDBG").is_some() {
+                eprintln!("storm-exit frames={} header={} k0={} tries={} sides={}", !sn_frames_empty, pc == header, k == 0, tries, nsides);
+            }
             let root = s.traces.get_mut(&key).unwrap();
             if count_storm {
                 root.side_exits += 1;
+                root.storm_cycles += run;
             }
-            (root.side_exits >= EXIT_STORM_LIMIT, pc, frames, side.map(|x| (x, root.end_pc)), top)
+            // a trace is dropped for a re-record when its exits that can't
+            // be continued come often and quickly (a trace running a long
+            // time between them is still worth it)
+            let storm = root.side_exits >= EXIT_STORM_LIMIT && root.storm_cycles / (root.side_exits as u64) < STORM_CYCLES;
+            (storm, pc, frames.clone(), side.map(|x| (x, root.end_pc, frames.map(|f| f.frames).unwrap_or_default())), top)
         });
         if storm {
             let reason = trace::AbortReason::Internal("side exit storm".into());
@@ -197,12 +218,12 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
                 s.hot.penalize(p, header);
                 s.note_abort((id, header, reason));
             });
-        } else if let Some(((ptag, k, pc), end)) = side {
+        } else if let Some(((ptag, k, pc), end, sframes)) = side {
             // record a side trace from the exit's pc (the interpreter runs
             // on from there)
             let (sid, max_len) = state::with(|s| (s.new_id(), s.max_trace_len));
             debug::log(debug::Event::TraceStart { id: sid.0, pc });
-            let mut rec = recorder::Recorder::new_side(sid, p, crate::lobject::clvalue((*(*L).ci).func), pc, base, max_len, header, end, (ptag, k));
+            let mut rec = recorder::Recorder::new_side(sid, p, crate::lobject::clvalue((*(*L).ci).func), pc, base, max_len, header, end, (ptag, k), sframes);
             rec.set_state(L);
             RECORDER.with(|r| *r.borrow_mut() = Some((rec, base)));
             RECORDING.with(|r| r.set(true));
@@ -258,10 +279,10 @@ pub unsafe fn record_step(L: *mut lua_State, p: *mut Proto, pc: u32, base: StkId
         }
     });
     let Some(result) = result else { return };
-    let (id, header, proto, side) = RECORDER.with(|r| {
+    let (id, header, proto, side, parent) = RECORDER.with(|r| {
         let r = r.borrow();
         let (rec, _) = r.as_ref().unwrap();
-        (rec.id(), rec.header(), rec_proto(rec), rec.is_side())
+        (rec.id(), rec.header(), rec_proto(rec), rec.is_side(), rec.side_parent())
     });
     RECORDER.with(|r| *r.borrow_mut() = None);
     RECORDING.with(|r| r.set(false));
@@ -273,6 +294,13 @@ pub unsafe fn record_step(L: *mut lua_State, p: *mut Proto, pc: u32, base: StkId
         recorder::Step::Abort(reason) => {
             debug::log(debug::Event::TraceAbort { id: id.0, pc, reason: &reason });
             state::with(|s| {
+                if let (Some((ptag, k)), trace::AbortReason::LeftLoop) = (parent, &reason) {
+                    if let Some(t) = s.by_tag_mut(ptag) {
+                        if let Some(x) = t.exit_tries.get_mut(k as usize) {
+                            *x = EXIT_LEAVES;
+                        }
+                    }
+                }
                 if !side {
                     if reason == trace::AbortReason::LeftLoop {
                         s.hot.left_loop(proto, header);

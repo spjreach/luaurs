@@ -161,13 +161,39 @@ impl Recorder {
         header: u32,
         loop_end: u32,
         parent: (u16, u32),
+        frames: Vec<SnapFrame>,
     ) -> Recorder {
         let mut r = Recorder::new(id, proto, cl, start_pc, base, max_len);
         r.loop_end = loop_end;
         r.side = Some((header, parent));
+        // starting inside inlined calls: their frames are the parent's
+        // (virtual: no CallInfos while the trace runs)
+        if let Some(last) = frames.last() {
+            r.b.off = last.base as usize;
+        }
+        r.b.frames = frames.clone();
         // snapshot 0: the start, nothing done (the entry checks exit here)
         r.b.snapshot();
+        let off = r.b.off;
+        r.b.off = 0;
+        for f in &frames {
+            let fv = base.add(f.base as usize - 1);
+            let fcl = clvalue(fv);
+            let fp = Closure::proto(fcl);
+            let fr = r.b.slot(f.base as usize - 1, IrType::Function);
+            r.funcs.push((fp, fcl, Some(fr)));
+            if !r.protos.contains(&(fp as usize)) {
+                r.protos.push(fp as usize);
+            }
+            r.stack_need = r.stack_need.max(f.base as usize + f.nargs as usize + (*fcl).stacksize as usize + LUA_MINSTACK as usize);
+        }
+        r.b.off = off;
         r
+    }
+
+    /// The parent exit a side trace continues.
+    pub fn side_parent(&self) -> Option<(u16, u32)> {
+        self.side.map(|(_, p)| p)
     }
 
     pub fn set_state(&mut self, l: *mut lua_State) {
@@ -1311,7 +1337,8 @@ impl Recorder {
     /// RETURN from an inlined frame: its results go to the caller's slots.
     unsafe fn record_return(&mut self, insn: u32, base: StkId) -> R<()> {
         if self.funcs.len() == 1 {
-            return Err(AbortReason::UnsupportedControlFlow);
+            // returning from the loop's function: the loop is left
+            return Err(AbortReason::LeftLoop);
         }
         let (a, bb) = (a_of(insn), b_of(insn));
         let nret = if bb != 0 {
