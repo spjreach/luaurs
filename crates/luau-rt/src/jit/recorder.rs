@@ -573,10 +573,16 @@ impl Recorder {
     unsafe fn array_slot(&mut self, t: Ref, idx: Ref) -> R<Ref> {
         let snap = self.b.snapshot();
         let size = self.b.emit(Op::ASize(t), IrType::I32);
-        let zero = self.b.ki32(0);
-        self.b.emit(Op::Guard { cmp: Cmp::Le, a: zero, b: idx, snap }, IrType::Nil);
-        self.b.emit(Op::Guard { cmp: Cmp::Lt, a: idx, b: size, snap }, IrType::Nil);
-        Ok(self.b.emit(Op::ARef { t, idx }, IrType::Ptr))
+        // (0 <= idx < size: one unsigned compare)
+        self.b.emit(Op::Guard { cmp: Cmp::ULt, a: idx, b: size, snap }, IrType::Nil);
+        Ok(self.aref(t, idx))
+    }
+
+    /// Pointer to array element `idx` of table `t` (bounds checked by the
+    /// caller).
+    fn aref(&mut self, t: Ref, idx: Ref) -> Ref {
+        let base = self.b.emit(Op::ABase(t), IrType::Ptr);
+        self.b.emit(Op::ARef { t: base, idx }, IrType::Ptr)
     }
 
     /// 0-based array index for a number key in slot `r` (guarded integral).
@@ -945,7 +951,7 @@ impl Recorder {
             let continues = i_now < (*h).sizearray as usize && (*(*h).array.add(i_now)).tt != LUA_TNIL;
             if continues {
                 self.b.emit(Op::Guard { cmp: Cmp::Lt, a: i, b: size, snap }, IrType::Nil);
-                let p = self.b.emit(Op::ARef { t, idx: i }, IrType::Ptr);
+                let p = self.aref(t, i);
                 let ety = IrType::of_tag((*(*h).array.add(i_now)).tt).ok_or(unsupported_type("array element type"))?;
                 let v = self.b.emit(Op::XLoad { p, snap }, ety);
                 let one = self.b.ki32(1);
@@ -989,7 +995,7 @@ impl Recorder {
             let size = self.b.emit(Op::ASize(t), IrType::I32);
             let snap = self.b.snapshot();
             self.b.emit(Op::Guard { cmp: Cmp::Lt, a: i, b: size, snap }, IrType::Nil);
-            let p = self.b.emit(Op::ARef { t, idx: i }, IrType::Ptr);
+            let p = self.aref(t, i);
             let ety = IrType::of_tag((*(*h).array.add(i_now)).tt).ok_or(unsupported_type("array element type"))?;
             let v = self.b.emit(Op::XLoad { p, snap }, ety);
             let one = self.b.ki32(1);
@@ -2959,7 +2965,7 @@ fn math1_supported(bfid: u8) -> bool {
     [B::MathSqrt, B::MathFloor, B::MathCeil, B::MathAbs].iter().any(|&b| b as u8 == bfid)
 }
 
-fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
+pub(crate) fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
     use Op::*;
     match op {
         Guard { a, b, .. } => {
@@ -2979,7 +2985,7 @@ fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *a = rm(*a);
             *b = rm(*b);
         }
-        Neg(a) | Math1(_, a) | I32ToNum(a) | ASize(a) => *a = rm(*a),
+        Neg(a) | Math1(_, a) | I32ToNum(a) | ASize(a) | ABase(a) => *a = rm(*a),
         NumToI32 { a, .. } => *a = rm(*a),
         ARef { t, idx } => {
             *t = rm(*t);

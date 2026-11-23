@@ -40,6 +40,8 @@ pub enum Cmp {
     Nlt,
     /// not less or equal
     Nle,
+    /// unsigned less than (I32s: `0 <= a < b` in one compare when b >= 0)
+    ULt,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -111,9 +113,11 @@ pub enum Op {
     // ---- tables ---------------------------------------------------------
     /// the table's array size (`sizearray`, I32)
     ASize(Ref),
-    /// pointer to array element `idx` (I32, 0-based) of table `t`; the
-    /// caller guards `idx < ASize(t)` first
+    /// pointer to array element `idx` (I32, 0-based) of table `t` (a Table,
+    /// or its `ABase`); the caller guards `idx < ASize(t)` first
     ARef { t: Ref, idx: Ref },
+    /// table `t`'s array part (a Ptr; it moves only when keys are added)
+    ABase(Ref),
     /// load the TValue at a Ptr as `ty`; exits through `snap` on another tag
     XLoad { p: Ref, snap: SnapId },
     /// store `v` into the TValue at a Ptr (with its tag); a GC barrier is
@@ -268,7 +272,7 @@ impl Inst {
             Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) | Mod(a, b) | Pow(a, b) | IDiv(a, b) | AddI32(a, b) => {
                 vec![*a, *b]
             }
-            Neg(a) | Math1(_, a) | I32ToNum(a) | ASize(a) | VNeg(a) => vec![*a],
+            Neg(a) | Math1(_, a) | I32ToNum(a) | ASize(a) | VNeg(a) | ABase(a) => vec![*a],
             VArith { a, b, .. } | GuardVecEq { a, b, .. } => vec![*a, *b],
             VGet { v, .. } => vec![*v],
             VargLoad { idx, .. } => vec![*idx],
@@ -324,7 +328,7 @@ impl Inst {
         matches!(
             self.op,
             KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | Add(..) | Sub(..) | Mul(..) | Div(..) | Mod(..)
-                | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | ARef { .. } | FrameFunc | ClEnv { .. } | HSlot { .. } | Not(_) | LudToI32(_) | I32ToLud(_)
+                | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | ARef { .. } | ABase(_) | FrameFunc | ClEnv { .. } | HSlot { .. } | Not(_) | LudToI32(_) | I32ToLud(_)
                 | VArith { .. } | VNeg(_) | VGet { .. } | VMake { .. }
         )
     }

@@ -420,6 +420,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                             a.ucomisd(y, x);
                             a.jcc(Cond::AE, s);
                         }
+                        Cmp::ULt => return Err("unsigned compare of numbers".into()),
                         Cmp::Eq => {
                             a.ucomisd(x, y);
                             a.jcc(Cond::NE, s);
@@ -446,6 +447,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                         Cmp::Nle => Cond::LE,
                         Cmp::Eq => Cond::NE,
                         Cmp::Ne => Cond::E,
+                        Cmp::ULt => Cond::AE,
                     };
                     a.jcc(exit_if, s);
                 } else {
@@ -1000,12 +1002,22 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
             }
             Op::ARef { t: tb, idx } => {
                 if let Home::G(d) = dst {
+                    let is_base = t.ty(*tb) == IrType::Ptr;
                     let (tb, idx) = (g(*tb)?, g(*idx)?);
                     a.mov_rr32(R::Rax, idx);
                     a.shl_ri(R::Rax, 4);
-                    a.load(R::Rcx, tb, OFF_T_ARRAY);
-                    a.add_rr(R::Rax, R::Rcx);
+                    if is_base {
+                        a.add_rr(R::Rax, tb);
+                    } else {
+                        a.load(R::Rcx, tb, OFF_T_ARRAY);
+                        a.add_rr(R::Rax, R::Rcx);
+                    }
                     a.mov_rr(d, R::Rax);
+                }
+            }
+            Op::ABase(tb) => {
+                if let Home::G(d) = dst {
+                    a.load(d, g(*tb)?, OFF_T_ARRAY);
                 }
             }
             Op::Loop => {
@@ -1114,9 +1126,17 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
     Ok(Code { bytes: a.code, reentry })
 }
 
+/// The CPU has AVX (three-operand scalar arithmetic: no copies).
+fn avx() -> bool {
+    static AVX: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVX.get_or_init(|| std::arch::is_x86_feature_detected!("avx") && std::env::var_os("LUAU_TRACE_NOAVX").is_none())
+}
+
 /// d = x op y (scalar double), without clobbering x or y.
 fn binop(a: &mut Asm, opc: u8, d: X, x: X, y: X) {
-    if d == x {
+    if avx() {
+        a.vsd_rr(opc, d, x, y);
+    } else if d == x {
         a.sd_rr(opc, d, y);
     } else if d != y {
         a.movapd(d, x);

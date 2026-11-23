@@ -13,6 +13,7 @@ pub mod copy_propagation;
 pub mod cse;
 pub mod dce;
 pub mod forwarding;
+pub mod hoist_consts;
 pub mod licm;
 pub mod strength;
 pub mod util;
@@ -44,6 +45,8 @@ pub fn optimize_checked(t: &mut Trace) -> Result<(), String> {
             break;
         }
     }
+    validate(t)?;
+    hoist_consts::run(t);
     validate(t)
 }
 

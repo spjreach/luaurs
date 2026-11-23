@@ -27,6 +27,11 @@ pub fn compile(t: &Trace, link_to: Option<usize>) -> Result<CompiledTrace, Strin
     #[cfg(all(target_arch = "x86_64", windows))]
     {
         let code = unsafe { x64::compile(t, link_to)? };
+        // (LUAU_TRACE_ASM=dir: the machine code, for a disassembler)
+        if let Some(dir) = std::env::var_os("LUAU_TRACE_ASM") {
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::write(std::path::Path::new(&dir).join(format!("trace-{}{}.bin", t.id.0, if link_to.is_some() { "s" } else { "" })), &code.bytes);
+        }
         let entry = crate::codegen::mem::with_code(|m| unsafe { m.place(&code.bytes) }).ok_or("out of executable memory")?;
         Ok(CompiledTrace { entry, size: code.bytes.len(), reentry: entry + code.reentry })
     }

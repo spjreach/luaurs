@@ -54,6 +54,7 @@ pub fn map_op(op: &Op, map: &[Ref]) -> Op {
         Op::AddI32(a, b) => Op::AddI32(r(*a), r(*b)),
         Op::ASize(a) => Op::ASize(r(*a)),
         Op::ARef { t, idx } => Op::ARef { t: r(*t), idx: r(*idx) },
+        Op::ABase(t) => Op::ABase(r(*t)),
         Op::XLoad { p, snap } => Op::XLoad { p: r(*p), snap: *snap },
         Op::XStore { p, v } => Op::XStore { p: r(*p), v: r(*v) },
         Op::GuardPlainTable { t, store, snap } => Op::GuardPlainTable { t: r(*t), store: *store, snap: *snap },
@@ -194,6 +195,7 @@ pub fn compare(cmp: Cmp, a: f64, b: f64) -> bool {
         Cmp::Ne => a != b,
         Cmp::Nlt => !(a < b),
         Cmp::Nle => !(a <= b),
+        Cmp::ULt => a >= 0.0 && a < b,
     }
 }
 
@@ -205,5 +207,6 @@ pub fn compare_i32(cmp: Cmp, a: i32, b: i32) -> bool {
         Cmp::Ne => a != b,
         Cmp::Nlt => !(a < b),
         Cmp::Nle => !(a <= b),
+        Cmp::ULt => (a as u32) < (b as u32),
     }
 }
