@@ -77,6 +77,8 @@ pub struct Recorder {
     /// a leaf C call just recorded: (first result's frame slot, results,
     /// the pc the interpreter must be at next)
     pending_c: Option<(usize, usize, u32)>,
+    /// the trace stores to upvalues (their loads aren't loop-invariant)
+    ustores: bool,
 }
 
 /// `Op::Builtin::nres` for a call taking every result (the trace checks
@@ -149,6 +151,7 @@ impl Recorder {
             unrolled: 0,
             inserts: false,
             pending_c: None,
+            ustores: false,
         }
     }
 
@@ -353,6 +356,9 @@ impl Recorder {
     unsafe fn read(&mut self, r: usize, base: StkId) -> R<Ref> {
         let tv = base.add(r);
         let Some(ty) = IrType::of_tag((*tv).tt) else { return Err(unsupported_type("slot type")) };
+        if ty == IrType::LightUserdata && (*tv).extra[0] != LU_TAG_ITERATOR {
+            return Err(unsupported_type("light userdata"));
+        }
         if let Some(v) = self.b.peek(r) {
             // the trace's own value for the slot must agree with the stack
             let vt = self.b.trace.ty(v);
@@ -702,6 +708,41 @@ impl Recorder {
             let enters = if step_v > 0.0 { idx_v <= lim_v } else { lim_v <= idx_v };
             let (x, y) = if step_v > 0.0 { (idx, limit) } else { (limit, idx) };
             self.b.emit(Op::Guard { cmp: if enters { Cmp::Le } else { Cmp::Nle }, a: x, b: y, snap }, IrType::Nil);
+        } else if o(O::ForGLoop) && (pc as i64 + 1 + d_of(insn) as i64) as u32 == self.header() {
+            // pairs/ipairs over the array part: the next element, or exit
+            // (the hash part, a hole, the end: the interpreter goes on)
+            let aux = aux as i32;
+            if (*base.add(a)).tt != LUA_TNIL || (*base.add(a + 1)).tt != LUA_TTABLE || (*base.add(a + 2)).tt != LUA_TLIGHTUSERDATA {
+                return Err(unsupported_type("generic for over an iterator function"));
+            }
+            let h = hvalue(base.add(a + 1));
+            let i_now = (*base.add(a + 2)).value.p as usize;
+            if i_now >= (*h).sizearray as usize || (*(*h).array.add(i_now)).tt == LUA_TNIL {
+                return Err(AbortReason::LeftLoop);
+            }
+            self.read(a, base)?;
+            let t = self.read(a + 1, base)?;
+            let st = self.read(a + 2, base)?;
+            let i = self.b.emit(Op::LudToI32(st), IrType::I32);
+            let size = self.b.emit(Op::ASize(t), IrType::I32);
+            let snap = self.b.snapshot();
+            self.b.emit(Op::Guard { cmp: Cmp::Lt, a: i, b: size, snap }, IrType::Nil);
+            let p = self.b.emit(Op::ARef { t, idx: i }, IrType::Ptr);
+            let ety = IrType::of_tag((*(*h).array.add(i_now)).tt).ok_or(unsupported_type("array element type"))?;
+            let v = self.b.emit(Op::XLoad { p, snap }, ety);
+            let one = self.b.ki32(1);
+            let i1 = self.b.emit(Op::AddI32(i, one), IrType::I32);
+            let key = self.b.emit(Op::I32ToNum(i1), IrType::Number);
+            let st1 = self.b.emit(Op::I32ToLud(i1), IrType::LightUserdata);
+            self.b.set_slot(a + 2, st1);
+            self.b.set_slot(a + 3, key);
+            self.b.set_slot(a + 4, v);
+            // (as the interpreter: extra variables only for a positive aux;
+            // a negative one is ipairs' flag)
+            for k in 2..aux.max(2) as usize {
+                let nil = self.b.knil();
+                self.b.set_slot(a + 3 + k, nil);
+            }
         } else if o(O::ForNLoop) && (pc as i64 + 1 + d_of(insn) as i64) as u32 != self.header() {
             // the back edge of an unrolled inner loop: its direction is a
             // guard (a different trip count exits, for a side trace)
@@ -956,6 +997,60 @@ impl Recorder {
                 let k = self.b.knum((aux as usize + i) as f64);
                 let v = self.read(bb + i, base)?;
                 self.record_tset(a, k, v, base)?;
+            }
+        } else if o(O::Not) {
+            let x = self.read(bb, base)?;
+            let v = match self.b.trace.ty(x) {
+                IrType::Nil => self.b.kbool(true),
+                IrType::Boolean => self.b.emit(Op::Not(x), IrType::Boolean),
+                _ => self.b.kbool(false),
+            };
+            self.b.set_slot(a, v);
+        } else if o(O::Concat) {
+            for s in bb..=c {
+                let tt = (*base.add(s)).tt;
+                if tt != LUA_TSTRING && tt != LUA_TNUMBER {
+                    return Err(unsupported_type("concatenation of a non-string"));
+                }
+                // (the tag guards keep them strings/numbers: no __concat)
+                self.read(s, base)?;
+            }
+            if self.funcs.len() > 1 {
+                return Err(unsupported_type("concatenation in an inlined function"));
+            }
+            let snap = self.b.snapshot();
+            self.b.emit(Op::Concat { a: (self.b.off + a) as u16, b: (self.b.off + bb) as u16, c: (self.b.off + c) as u16, pc: pc + 1, snap }, IrType::Nil);
+            for s in bb..=c {
+                self.b.forget_slot(s);
+            }
+            self.b.forget_slot(a);
+            self.pending_c = Some((a, 1, pc + 1));
+        } else if o(O::SetUpval) {
+            let (cl, clr) = self.cur_closure();
+            let ur = Closure::uprefs(cl).add(bb);
+            if (*ur).tt != LUA_TUPVAL {
+                return Err(unsupported_type("store to a closed-by-value upvalue"));
+            }
+            let val = (*upvalue(ur)).v as *const TValue;
+            let rel = (val as isize - self.root_base as isize) / std::mem::size_of::<TValue>() as isize;
+            let v = self.read(a, base)?;
+            if rel >= 0 && rel < STACK_WINDOW as isize {
+                // open on a slot of the trace's frames: that slot is written
+                let slot = rel as usize;
+                if slot >= self.b.off {
+                    return Err(AbortReason::Internal("upvalue of the current frame".into()));
+                }
+                let snap = self.b.snapshot();
+                self.b.emit(Op::GuardUvSlot { cl: clr, idx: bb as u8, slot: slot as u16, snap }, IrType::Nil);
+                let saved = self.b.off;
+                self.b.off = 0;
+                self.b.set_slot(slot, v);
+                self.b.off = saved;
+            } else {
+                self.ustores = true;
+                let buf = Box::leak(vec![0u64; 2].into_boxed_slice()).as_mut_ptr() as usize;
+                let snap = self.b.snapshot();
+                self.b.emit(Op::UStore { cl: clr, idx: bb as u8, v, buf, snap }, IrType::Nil);
             }
         } else if o(O::Namecall) {
             self.record_namecall(insn, aux, base)?;
@@ -1586,7 +1681,7 @@ impl Recorder {
                 }
             }
             for (i, inst) in rec.insts.iter().enumerate() {
-                if !Self::hoistable(inst) || carried.contains(&Ref(i as u32)) {
+                if !Self::hoistable(inst) || carried.contains(&Ref(i as u32)) || (self.ustores && matches!(inst.op, Op::ULoad { .. })) {
                     continue;
                 }
                 let ops = inst.operands();
@@ -1924,7 +2019,12 @@ fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *pre = rm(*pre);
             *back = rm(*back);
         }
-        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop | FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } => {}
+        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop | FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } => {}
+        UStore { cl, v, .. } => {
+            *cl = rm(*cl);
+            *v = rm(*v);
+        }
+        Not(a) | LudToI32(a) | I32ToLud(a) => *a = rm(*a),
     }
 }
 
@@ -1950,7 +2050,9 @@ fn set_snapshot(op: &mut Op, s: SnapId) {
         | GuardCFunc { snap, .. }
         | TSet { snap, .. }
         | CCall { snap, .. }
-        | SReload { snap, .. } => *snap = s,
+        | SReload { snap, .. }
+        | Concat { snap, .. }
+        | UStore { snap, .. } => *snap = s,
         _ => {}
     }
 }

@@ -176,7 +176,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         }
         let defines = !matches!(
             inst.op,
-            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. } | Op::HMiss { .. } | Op::GuardCFunc { .. } | Op::TSet { .. } | Op::CCall { .. }
+            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. } | Op::HMiss { .. } | Op::GuardCFunc { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. }
         ) && !matches!(inst.op, Op::Builtin { nres: 0, .. });
         if !defines {
             continue;
@@ -235,7 +235,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
     };
     // a trace that allocates checks for GC work at its back edge (and exits
     // for the collector to run: nothing collects while a trace runs)
-    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::Builtin { .. } | Op::TSet { .. } | Op::CCall { .. }));
+    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::Builtin { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. }));
 
     // ---- emission -------------------------------------------------------
     let mut a = Asm::new();
@@ -287,7 +287,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
             if let Op::TGet { k, .. } | Op::TSet { k, .. } = inst.op {
                 ops.retain(|&o| o != k);
             }
-            if let Op::TSet { v, .. } = inst.op {
+            if let Op::TSet { v, .. } | Op::UStore { v, .. } = inst.op {
                 ops.retain(|&o| o != v);
             }
             for o in ops {
@@ -528,7 +528,41 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                     a.movapd(d, X(1));
                 }
             }
-            Op::Pow(..) => return Err("pow not supported yet".into()),
+            Op::Pow(x, y) => {
+                let live = live_across(i);
+                call_out(&mut a, &live, helpers::pow as usize, &[Arg::F(f(*x)?), Arg::F(f(*y)?)]);
+                if let Home::F(d) = dst {
+                    a.movapd(d, X(0));
+                }
+            }
+            Op::LudToI32(x) | Op::I32ToLud(x) => {
+                if let Home::G(d) = dst {
+                    a.mov_rr32(d, g(*x)?);
+                }
+            }
+            Op::Not(x) => {
+                if let Home::G(d) = dst {
+                    a.mov_rr(d, g(*x)?);
+                    a.alu32_ri(6, d, 1);
+                }
+            }
+            Op::Concat { a: ra, b, c, pc, snap } => {
+                for e in &t.snapshots[snap.0 as usize].entries {
+                    store_value(&mut a, &home, t, e.value, R::R13, e.slot as i32 * TV)?;
+                }
+                let savedpc = (*t.proto).code.add(*pc as usize) as u64;
+                let live = live_across(i);
+                call_out(&mut a, &live, helpers::concat as usize, &[Arg::L, Arg::Imm(*ra as u64), Arg::Imm(*b as u64), Arg::Imm(*c as u64), Arg::Imm(savedpc)]);
+                a.load(R::R13, R::R12, OFF_BASE);
+            }
+            Op::UStore { cl, idx, v, buf, snap } => {
+                a.mov_ri64(R::Rdx, *buf as u64);
+                store_value(&mut a, &home, t, *v, R::Rdx, 0)?;
+                let live = live_across(i);
+                call_out(&mut a, &live, helpers::ustore as usize, &[Arg::L, Arg::G(g(*cl)?), Arg::Imm(*idx as u64), Arg::Imm(*buf as u64)]);
+                a.test_rr(R::Rax, R::Rax);
+                a.jcc(Cond::E, stub(*snap));
+            }
             Op::Math1(bfid, x) => {
                 use luau_common::bytecode::BuiltinFunction as B;
                 if let Home::F(d) = dst {
@@ -983,8 +1017,10 @@ fn store_value(a: &mut Asm, home: &[Home], t: &Trace, v: Ref, base: R, disp: i32
         (Home::None, _) if ty == IrType::Nil => {}
         (h, op) => return Err(format!("value {} ({:?}) has no home {:?}", v.0, op, h)),
     }
-    // (extra, tt) as one 8-byte word: extra = 0
-    a.mov_ri64(R::Rax, (tag as u32 as u64) << 32);
+    // (extra, tt) as one 8-byte word: extra = 0 (an iterator index: its
+    // tag, the only light userdata traces handle)
+    let extra = if ty == IrType::LightUserdata { LU_TAG_ITERATOR as u32 as u64 } else { 0 };
+    a.mov_ri64(R::Rax, ((tag as u32 as u64) << 32) | extra);
     a.store(base, disp + OFF_TAGWORD, R::Rax);
     Ok(())
 }
@@ -1043,6 +1079,8 @@ enum Arg {
     /// a value in a general register home
     G(R),
     Imm(u64),
+    /// a number in an xmm register (the k-th float argument: xmm0, xmm1)
+    F(X),
 }
 
 /// Caller-saved registers the allocator hands out (sysv64: every xmm too).
@@ -1074,7 +1112,7 @@ fn call_out(a: &mut Asm, live: &[Home], f: usize, args: &[Arg]) {
     // argument's register: cycles go through rax); then arguments from the
     // save area, L and constants, which nothing else reads
     let mut moves: Vec<(R, R)> = Vec::new();
-    for (k, arg) in args.iter().enumerate() {
+    for (k, arg) in args.iter().filter(|x| !matches!(x, Arg::F(_))).enumerate() {
         if let Arg::G(r) = *arg {
             if !gs.contains(&r) && r != ARGS[k] {
                 moves.push((ARGS[k], r));
@@ -1095,9 +1133,23 @@ fn call_out(a: &mut Asm, live: &[Home], f: usize, args: &[Arg]) {
             }
         }
     }
-    for (k, arg) in args.iter().enumerate() {
-        let d = ARGS[k];
+    // float arguments (from allocated or temp xmm registers, intact)
+    let mut nf = 0u8;
+    for arg in args {
+        if let Arg::F(x) = *arg {
+            a.movapd(X(nf), x);
+            nf += 1;
+        }
+    }
+    let mut gi = 0usize;
+    for arg in args.iter() {
+        if matches!(arg, Arg::F(_)) {
+            continue;
+        }
+        let d = ARGS[gi];
+        gi += 1;
         match *arg {
+            Arg::F(_) => {}
             Arg::L => a.mov_rr(d, R::R12),
             Arg::Imm(v) => a.mov_ri64(d, v),
             Arg::G(r) => {
@@ -1131,12 +1183,75 @@ mod helpers {
     /// A leaf C function in slot `slot` of the trace's frame (L->ci): a
     /// normal (non-yieldable) call leaving `nres` results at the slot.
     pub unsafe extern "sysv64" fn ccall(L: *mut lua_State, slot: i64, nargs: i64, nres: i64, savedpc: *const u32) {
+        // the interpreter's direct C call (a leaf function never yields)
+        (*(*L).ci).savedpc = savedpc;
+        let ra = (*L).base.add(slot as usize);
+        let argtop = ra.add(1 + nargs as usize);
+        let ccl = clvalue(ra);
+        let ci = crate::ldo::incr_ci(L);
+        (*ci).func = ra;
+        (*ci).p = std::ptr::null_mut();
+        (*ci).base = ra.add(1);
+        (*ci).top = argtop.add((*ccl).stacksize as usize);
+        (*ci).savedpc = std::ptr::null();
+        (*ci).flags = 0;
+        (*ci).nresults = nres as i32;
+        (*L).base = (*ci).base;
+        (*L).top = argtop;
+        crate::ldo::luaD_checkstackfornewci(L, (*ccl).stacksize as i32);
+        let f = Closure::c(ccl).f.unwrap_unchecked();
+        let n = f(L);
+        debug_assert!(n >= 0, "a leaf C function yielded");
         let ci = (*L).ci;
-        (*ci).savedpc = savedpc;
-        let func = (*L).base.add(slot as usize);
-        (*L).top = func.add(1 + nargs as usize);
-        crate::ldo::luaD_callny(L, func, nres as i32);
-        (*L).top = (*(*L).ci).top;
+        let cip = ci.sub(1);
+        let mut res = (*ci).func;
+        let mut vali = (*L).top.sub(n.max(0) as usize);
+        let valend = (*L).top;
+        let mut i = nres;
+        while i != 0 && vali < valend {
+            setobj(res, vali);
+            res = res.add(1);
+            vali = vali.add(1);
+            i -= 1;
+        }
+        while i > 0 {
+            setnilvalue(res);
+            res = res.add(1);
+            i -= 1;
+        }
+        (*L).ci = cip;
+        (*L).base = (*cip).base;
+        (*L).top = (*cip).top;
+    }
+
+    pub extern "sysv64" fn pow(a: f64, b: f64) -> f64 {
+        crate::lmathlib::luai_numpow(a, b)
+    }
+
+    /// CONCAT on the trace frame's slots b..c into a.
+    pub unsafe extern "sysv64" fn concat(L: *mut lua_State, a: i64, b: i64, c: i64, savedpc: *const u32) {
+        (*(*L).ci).savedpc = savedpc;
+        crate::lvmutils::luaV_concat(L, (c - b + 1) as i32, c as i32);
+        let base = (*L).base;
+        setobj(base.add(a as usize), base.add(b as usize));
+    }
+
+    /// Stores buf[0] into upvalue `idx` of `cl`: 0 (nothing done) when it is
+    /// open on the trace's frames.
+    pub unsafe extern "sysv64" fn ustore(L: *mut lua_State, cl: *mut Closure, idx: i64, buf: *const TValue) -> i64 {
+        let ur = Closure::uprefs(cl).add(idx as usize);
+        if (*ur).tt != LUA_TUPVAL {
+            return 0;
+        }
+        let uv = upvalue(ur);
+        let v = (*uv).v;
+        let base = (*L).base;
+        if v >= base && v < base.add(1024) {
+            return 0;
+        }
+        setobj(v, buf);
+        crate::lgc::luaC_barrier(L, uv as *mut GCObject, buf);
+        1
     }
 
     pub unsafe extern "sysv64" fn tget(t: *mut LuaTable, key: *const TValue) -> *const TValue {

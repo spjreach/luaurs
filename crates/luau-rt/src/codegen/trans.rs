@@ -1676,8 +1676,9 @@ impl<'f> Tr<'f> {
         // the body never reads it
         let key_dead = !super::live::has(&self.live[target], ra + 3) && !self.is_volatile[ra + 3] && !dbg_off(8388608);
         let ra = ra as i32;
+        emit_loop_checks(&mut self.a, s);
+        self.trace_counter();
         let a = &mut self.a;
-        emit_loop_checks(a, s);
         a.cmp32_mi(R::R13, reg(ra) + TT, LUA_TNIL);
         a.jcc(Cond::NE, s);
         a.cmp32_mi(R::R13, reg(ra + 1) + TT, LUA_TTABLE);

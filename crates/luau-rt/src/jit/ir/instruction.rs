@@ -147,6 +147,19 @@ pub enum Op {
     /// the slots `snap` lists are stored first (the GC and error handling
     /// see the frame), `L->ci->savedpc` is bytecode index `pc`
     CCall { slot: u16, nargs: u8, nres: u8, pc: u32, snap: SnapId },
+    /// `R(a) = R(b) .. ... .. R(c)` (strings and numbers) by `luaV_concat`
+    /// on the stack, after storing the slots `snap` lists
+    Concat { a: u16, b: u16, c: u16, pc: u32, snap: SnapId },
+    /// upvalue `idx` of closure `cl` = `v` (through the scratch TValue at
+    /// `buf`); exits through `snap` if the upvalue is open on the trace's
+    /// frames (the recorder handles those itself)
+    UStore { cl: Ref, idx: u8, v: Ref, buf: usize, snap: SnapId },
+    /// `not a` of a boolean
+    Not(Ref),
+    /// a `pairs`/`ipairs` iterator index (light userdata) as an I32
+    LudToI32(Ref),
+    /// an I32 as an iterator index (stored with the iterator tag)
+    I32ToLud(Ref),
     /// stack slot `slot` (after a C call left a result there): guarded like
     /// SLoad, but where it is (never hoisted)
     SReload { slot: u16, snap: SnapId },
@@ -219,7 +232,9 @@ impl Inst {
             XLoad { p, .. } => vec![*p],
             XStore { p, v } => vec![*p, *v],
             GuardPlainTable { t, .. } => vec![*t],
-            FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } => vec![],
+            FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } => vec![],
+            UStore { cl, v, .. } => vec![*cl, *v],
+            Not(a) | LudToI32(a) | I32ToLud(a) => vec![*a],
             TMeta { t, .. } => vec![*t],
             TGet { t, k, .. } => vec![*t, *k],
             TSet { t, k, v, .. } => vec![*t, *k, *v],
@@ -244,7 +259,7 @@ impl Inst {
         use Op::*;
         match &self.op {
             SLoad { guarded: true, snap, .. } => Some(*snap),
-            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } => {
+            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } => {
                 Some(*snap)
             }
             _ => None,
@@ -258,7 +273,7 @@ impl Inst {
         matches!(
             self.op,
             KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | Add(..) | Sub(..) | Mul(..) | Div(..) | Mod(..)
-                | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | ARef { .. } | FrameFunc | ClEnv { .. } | HSlot { .. }
+                | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | ARef { .. } | FrameFunc | ClEnv { .. } | HSlot { .. } | Not(_) | LudToI32(_) | I32ToLud(_)
         )
     }
 
