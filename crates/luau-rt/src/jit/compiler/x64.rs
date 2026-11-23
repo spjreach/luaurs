@@ -175,7 +175,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         }
         let defines = !matches!(
             inst.op,
-            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. } | Op::HMiss { .. } | Op::GuardCFunc { .. }
+            Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::GuardPlainTable { .. } | Op::XStore { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::GuardUvSlot { .. } | Op::Barrier { .. } | Op::HMiss { .. } | Op::GuardCFunc { .. } | Op::TSet { .. }
         ) && !matches!(inst.op, Op::Builtin { nres: 0, .. });
         if !defines {
             continue;
@@ -234,7 +234,7 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
     };
     // a trace that allocates checks for GC work at its back edge (and exits
     // for the collector to run: nothing collects while a trace runs)
-    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::Builtin { .. }));
+    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::Builtin { .. } | Op::TSet { .. }));
 
     // ---- emission -------------------------------------------------------
     let mut a = Asm::new();
@@ -281,6 +281,12 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
         if !matches!(inst.op, Op::Phi { .. } | Op::Loop | Op::Builtin { .. }) {
             let mut ops = inst.operands();
             if let Op::XStore { v, .. } = inst.op {
+                ops.retain(|&o| o != v);
+            }
+            if let Op::TGet { k, .. } | Op::TSet { k, .. } = inst.op {
+                ops.retain(|&o| o != k);
+            }
+            if let Op::TSet { v, .. } = inst.op {
                 ops.retain(|&o| o != v);
             }
             for o in ops {
@@ -637,6 +643,25 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                     a.jcc(Cond::NE, s);
                     load_value(&mut a, dst, inst.ty, R::Rcx, 0)?;
                 }
+            }
+            Op::TGet { t: tb, k, buf } => {
+                a.mov_ri64(R::Rdx, *buf as u64);
+                store_value(&mut a, &home, t, *k, R::Rdx, 0)?;
+                let live = live_across(i);
+                call_out(&mut a, &live, helpers::tget as usize, &[Arg::G(g(*tb)?), Arg::Imm(*buf as u64)]);
+                if let Home::G(d) = dst {
+                    a.mov_rr(d, R::Rax);
+                }
+            }
+            Op::TSet { t: tb, k, v, buf, snap } => {
+                a.mov_ri64(R::Rdx, *buf as u64);
+                store_value(&mut a, &home, t, *k, R::Rdx, 0)?;
+                a.mov_ri64(R::Rdx, *buf as u64);
+                store_value(&mut a, &home, t, *v, R::Rdx, TV)?;
+                let live = live_across(i);
+                call_out(&mut a, &live, helpers::tset as usize, &[Arg::L, Arg::G(g(*tb)?), Arg::Imm(*buf as u64)]);
+                a.test_rr(R::Rax, R::Rax);
+                a.jcc(Cond::E, stub(*snap));
             }
             Op::TMeta { t: tb, snap } => {
                 let tb = g(*tb)?;
@@ -1077,6 +1102,22 @@ mod helpers {
         if crate::lgc::isblack(t as *mut GCObject) && crate::lgc::iswhite(v) {
             crate::lgc::luaC_barriertable(L, t, v);
         }
+    }
+
+    pub unsafe extern "sysv64" fn tget(t: *mut LuaTable, key: *const TValue) -> *const TValue {
+        crate::ltable::luaH_get(t, key)
+    }
+
+    /// Raw store; 0 (nothing done) for a key the interpreter must reject.
+    pub unsafe extern "sysv64" fn tset(L: *mut lua_State, t: *mut LuaTable, buf: *const TValue) -> i64 {
+        let key = buf;
+        if (*key).tt == LUA_TNIL || ((*key).tt == LUA_TNUMBER && (*key).value.n.is_nan()) {
+            return 0;
+        }
+        let slot = crate::ltable::luaH_set(L, t, key);
+        setobj(slot, buf.add(1));
+        crate::lgc::luaC_barriert(L, t, buf.add(1));
+        1
     }
 
     pub unsafe extern "sysv64" fn getstr(t: *mut LuaTable, k: *mut TString) -> *const TValue {

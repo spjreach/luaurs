@@ -72,6 +72,8 @@ pub struct Recorder {
     top: Option<usize>,
     /// iterations of inner loops recorded so far
     unrolled: usize,
+    /// a key may be added to a table (see Trace::inserts)
+    inserts: bool,
 }
 
 /// `Op::Builtin::nres` for a call taking every result (the trace checks
@@ -142,6 +144,7 @@ impl Recorder {
             l: std::ptr::null_mut(),
             top: None,
             unrolled: 0,
+            inserts: false,
         }
     }
 
@@ -398,6 +401,24 @@ impl Recorder {
         let m1 = self.b.ki32(-1);
         let i0 = self.b.emit(Op::AddI32(i, m1), IrType::I32);
         Ok((i0, n as usize - 1))
+    }
+
+    /// Whether `R(t)[R(k)]` (k = usize::MAX: never) can take the array
+    /// path: a number key that is an index of the array part (holding a
+    /// value, for reads; in bounds of a plain table, for stores).
+    unsafe fn array_key(base: StkId, t: usize, k: usize, store: bool) -> bool {
+        if k == usize::MAX {
+            return false;
+        }
+        let kv = base.add(k);
+        if (*kv).tt != LUA_TNUMBER {
+            return false;
+        }
+        let n = (*kv).value.n;
+        if n != n.floor() || !(1.0..=(i32::MAX as f64)).contains(&n) {
+            return false;
+        }
+        Self::observe_array(base, t, n as usize - 1, store).is_ok()
     }
 
     /// Checks (at record time) that the table in slot `r` has a live array
@@ -699,6 +720,12 @@ impl Recorder {
             if target != self.header() {
                 return Err(AbortReason::UnsupportedControlFlow);
             }
+        } else if o(O::GetTableN) && Self::observe_array(base, bb, c, false).is_err() {
+            let h = if (*base.add(bb)).tt == LUA_TTABLE { hvalue(base.add(bb)) } else { return Err(unsupported_type("indexing a non-table")) };
+            let val = crate::ltable::luaH_getnum(h, c as i32 + 1);
+            let k = self.b.knum((c + 1) as f64);
+            let v = self.record_tget(bb, k, val, base)?;
+            self.b.set_slot(a, v);
         } else if o(O::GetTableN) {
             Self::observe_array(base, bb, c, false)?;
             let t = self.read(bb, base)?;
@@ -708,6 +735,18 @@ impl Recorder {
                 .ok_or(unsupported_type("array element type"))?;
             let snap = self.b.snapshot();
             let v = self.b.emit(Op::XLoad { p, snap }, ety);
+            self.b.set_slot(a, v);
+        } else if o(O::GetTable) && !Self::array_key(base, bb, c, false) {
+            let tv = base.add(bb);
+            if (*tv).tt != LUA_TTABLE {
+                return Err(unsupported_type("indexing a non-table"));
+            }
+            let val = crate::ltable::luaH_get(hvalue(tv), base.add(c));
+            let k = self.read(c, base)?;
+            if matches!(self.b.trace.ty(k), IrType::Nil) {
+                return Err(unsupported_type("nil key"));
+            }
+            let v = self.record_tget(bb, k, val, base)?;
             self.b.set_slot(a, v);
         } else if o(O::GetTable) {
             let tv = base.add(c);
@@ -726,6 +765,10 @@ impl Recorder {
             let snap = self.b.snapshot();
             let v = self.b.emit(Op::XLoad { p, snap }, ety);
             self.b.set_slot(a, v);
+        } else if (o(O::SetTableN) || o(O::SetTable)) && !Self::array_key(base, bb, if o(O::SetTableN) { usize::MAX } else { c }, true) && !(o(O::SetTableN) && Self::observe_array(base, bb, c, true).is_ok()) {
+            let k = if o(O::SetTableN) { self.b.knum((c + 1) as f64) } else { self.read(c, base)? };
+            let v = self.read(a, base)?;
+            self.record_tset(bb, k, v, base)?;
         } else if o(O::SetTableN) || o(O::SetTable) {
             let i = if o(O::SetTableN) {
                 c
@@ -783,10 +826,22 @@ impl Recorder {
                 let (cl, clr) = self.cur_closure();
                 (((*cl).env), self.b.emit(Op::ClEnv { cl: clr }, IrType::Ptr))
             };
-            let p = self.field_ref(h, t, kidx, false)?;
-            let ety = IrType::of_tag((*p.1).tt).ok_or(unsupported_type("field type"))?;
-            let snap = self.b.snapshot();
-            let v = self.b.emit(Op::XLoad { p: p.0, snap }, ety);
+            let field = self.field_ref(h, t, kidx, false);
+            let v = match field {
+                Ok(p) => {
+                    let ety = IrType::of_tag((*p.1).tt).ok_or(unsupported_type("field type"))?;
+                    let snap = self.b.snapshot();
+                    self.b.emit(Op::XLoad { p: p.0, snap }, ety)
+                }
+                // a missing field of a table: generic lookup
+                Err(_) if o(O::GetTableKs) => {
+                    let kv = (*self.cur_proto()).k.add(kidx);
+                    let val = crate::ltable::luaH_getstr(h, tsvalue(kv));
+                    let k = self.konst(kidx)?;
+                    self.record_tget(bb, k, val, base)?
+                }
+                Err(e) => return Err(e),
+            };
             self.b.set_slot(a, v);
         } else if o(O::SetTableKs) || o(O::SetGlobal) {
             let kidx = aux as usize;
@@ -800,7 +855,15 @@ impl Recorder {
                 (((*cl).env), self.b.emit(Op::ClEnv { cl: clr }, IrType::Ptr))
             };
             let v = self.read(a, base)?;
-            let (p, _) = self.field_ref(h, t, kidx, true)?;
+            let (p, _) = match self.field_ref(h, t, kidx, true) {
+                Ok(x) => x,
+                // a new key: generic store
+                Err(_) if o(O::SetTableKs) => {
+                    let k = self.konst(kidx)?;
+                    return self.record_tset(bb, k, v, base);
+                }
+                Err(e) => return Err(e),
+            };
             self.b.emit(Op::XStore { p, v }, IrType::Nil);
             if self.b.trace.ty(v).is_gc() {
                 self.b.emit(Op::Barrier { t, v }, IrType::Nil);
@@ -833,6 +896,20 @@ impl Recorder {
             let tpl = self.b.kptr((*kv).value.gc as usize, IrType::Table);
             let v = self.b.emit(Op::DupTable { tpl }, IrType::Table);
             self.b.set_slot(a, v);
+        } else if o(O::SetList) {
+            // R(A)[aux + i] = R(B + i): one store each
+            let n = if c == 0 {
+                let top = self.top.ok_or(AbortReason::UnsupportedType("SETLIST without a known top"))?;
+                self.set_top(None);
+                top - (self.b.off + bb)
+            } else {
+                c - 1
+            };
+            for i in 0..n {
+                let k = self.b.knum((aux as usize + i) as f64);
+                let v = self.read(bb + i, base)?;
+                self.record_tset(a, k, v, base)?;
+            }
         } else if o(O::Namecall) {
             self.record_namecall(insn, aux, base)?;
         } else if o(O::GetUpval) {
@@ -1008,15 +1085,57 @@ impl Recorder {
         Ok(())
     }
 
+    /// `t[k]` for table slot `tslot` and key IR value `k` (the interpreter is
+    /// about to read it): generic lookup, typed by the value there now. A
+    /// nil result only for a table without a metatable (no __index).
+    unsafe fn record_tget(&mut self, tslot: usize, k: Ref, val: *const TValue, base: StkId) -> R<Ref> {
+        let tv = base.add(tslot);
+        if (*tv).tt != LUA_TTABLE {
+            return Err(unsupported_type("indexing a non-table"));
+        }
+        let t = self.read(tslot, base)?;
+        let ty = IrType::of_tag((*val).tt).ok_or(unsupported_type("table value type"))?;
+        if ty == IrType::Nil || !(*hvalue(tv)).metatable.is_null() && (*val).tt == LUA_TNIL {
+            let snap = self.b.snapshot();
+            self.b.emit(Op::GuardPlainTable { t, store: false, snap }, IrType::Nil);
+        }
+        let buf = Box::leak(vec![0u64; 4].into_boxed_slice()).as_mut_ptr() as usize;
+        let p = self.b.emit(Op::TGet { t, k, buf }, IrType::Ptr);
+        let snap = self.b.snapshot();
+        Ok(self.b.emit(Op::XLoad { p, snap }, ty))
+    }
+
+    /// `t[k] = v` raw for table slot `tslot` (no metatable, writable).
+    unsafe fn record_tset(&mut self, tslot: usize, k: Ref, v: Ref, base: StkId) -> R<()> {
+        let tv = base.add(tslot);
+        if (*tv).tt != LUA_TTABLE {
+            return Err(unsupported_type("indexing a non-table"));
+        }
+        let h = hvalue(tv);
+        if !(*h).metatable.is_null() || (*h).readonly != 0 {
+            return Err(unsupported_type("store into a table with a metatable"));
+        }
+        let t = self.read(tslot, base)?;
+        let snap = self.b.snapshot();
+        self.b.emit(Op::GuardPlainTable { t, store: true, snap }, IrType::Nil);
+        let buf = Box::leak(vec![0u64; 4].into_boxed_slice()).as_mut_ptr() as usize;
+        self.b.emit(Op::TSet { t, k, v, buf, snap }, IrType::Nil);
+        self.inserts = true;
+        Ok(())
+    }
+
     /// FASTCALL1/2/2K/3 of any builtin that doesn't change tables or
     /// metatables: the trace calls Luau's own fast implementation.
     unsafe fn record_builtin(&mut self, pc: u32, insn: u32, aux: u32, base: StkId) -> R<()> {
         use luau_common::bytecode::BuiltinFunction as B;
         let op = op_of(insn);
         let bfid = a_of(insn) as u8;
-        let banned = [B::Rawset, B::TableInsert, B::TableUnpack, B::SelectVararg, B::Setmetatable, B::TableClear, B::Vector];
+        let banned = [B::Rawset, B::TableUnpack, B::SelectVararg, B::Setmetatable, B::TableClear, B::Vector];
         if banned.iter().any(|&b| b as u8 == bfid) {
             return Err(AbortReason::UnsupportedOpcode(builtin_name(bfid)));
+        }
+        if bfid == B::TableInsert as u8 {
+            self.inserts = true;
         }
         let code = (*self.cur_proto()).code;
         // where the replaced CALL is (skip counts from after the FASTCALL)
@@ -1175,6 +1294,9 @@ impl Recorder {
         }
         let buf = Box::leak(vec![0u64; 8].into_boxed_slice()).as_mut_ptr() as usize;
         let snap = self.b.snapshot();
+        if bfid == luau_common::bytecode::BuiltinFunction::TableInsert as u8 {
+            self.inserts = true;
+        }
         let v = self.b.emit(Op::Builtin { bfid, args, nargs: nargs as u8, nres: if nres < 0 { MULTRET1 } else { nres as u8 }, buf, snap }, IrType::Nil);
         let next = pc + if op_of(insn) == O::CallFb as u8 { 2 } else { 1 };
         if nres != 0 {
@@ -1248,9 +1370,14 @@ impl Recorder {
     /// without as the fallback).
     fn close(&mut self) -> R<Trace> {
         let rec = std::mem::replace(&mut self.b.trace, Trace::new(TraceId(0), std::ptr::null_mut(), 0));
-        let (mut t, hoisted) = self.close_with(&rec, true)?;
+        // (a trace that may move table storage keeps every table access in
+        // the loop body)
+        let (mut t, hoisted) = self.close_with(&rec, !self.inserts)?;
+        t.inserts = self.inserts;
         if hoisted {
-            t.fallback = Some(Box::new(self.close_with(&rec, false)?.0));
+            let mut fb = self.close_with(&rec, false)?.0;
+            fb.inserts = self.inserts;
+            t.fallback = Some(Box::new(fb));
         }
         Ok(t)
     }
@@ -1267,6 +1394,7 @@ impl Recorder {
         out.end_pc = self.loop_end;
         out.loop_ref = None;
         out.side_of = Some(parent);
+        out.inserts = self.inserts;
         out.protos = self.protos.clone();
         out.stack_need = self.stack_need as u32;
         super::ir::validate(&out).map_err(AbortReason::Internal)?;
@@ -1678,6 +1806,15 @@ fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
         }
         TLen { t } => *t = rm(*t),
         TMeta { t, .. } => *t = rm(*t),
+        TGet { t, k, .. } => {
+            *t = rm(*t);
+            *k = rm(*k);
+        }
+        TSet { t, k, v, .. } => {
+            *t = rm(*t);
+            *k = rm(*k);
+            *v = rm(*v);
+        }
         HMiss { t, k, .. } => {
             *t = rm(*t);
             *k = rm(*k);
@@ -1722,7 +1859,8 @@ fn set_snapshot(op: &mut Op, s: SnapId) {
         | Builtin { snap, .. }
         | TMeta { snap, .. }
         | HMiss { snap, .. }
-        | GuardCFunc { snap, .. } => *snap = s,
+        | GuardCFunc { snap, .. }
+        | TSet { snap, .. } => *snap = s,
         _ => {}
     }
 }
@@ -1742,7 +1880,7 @@ unsafe fn builtin_of(l: *mut lua_State, fp: usize) -> Option<u8> {
         if m.is_none() {
             let mut map = HashMap::new();
             let globals = (*l).gt;
-            let banned = [B::Rawset, B::TableInsert, B::TableUnpack, B::SelectVararg, B::Setmetatable, B::TableClear, B::Vector];
+            let banned = [B::Rawset, B::TableUnpack, B::SelectVararg, B::Setmetatable, B::TableClear, B::Vector];
             for id in 1..=255u8 {
                 let Ok(b) = B::try_from(id) else { continue };
                 if banned.contains(&b) {

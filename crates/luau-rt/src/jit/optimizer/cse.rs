@@ -19,6 +19,11 @@ pub fn run(t: &mut Trace) -> bool {
 
     for i in 0..t.insts.len() {
         let inst = &t.insts[i];
+        if inst.moves_tables() {
+            // table storage may have moved: no address before is reused
+            seen.retain(|k, _| !k.contains("ARef") && !k.contains("HSlot"));
+            continue;
+        }
         if !inst.is_pure() || matches!(inst.op, Op::Nop) {
             continue;
         }

@@ -25,6 +25,9 @@ pub fn run(t: &mut Trace) -> bool {
         if !inst.is_pure() || inst.is_const() || matches!(inst.op, Op::Nop | Op::Phi { .. }) {
             continue;
         }
+        if t.inserts && matches!(inst.op, Op::ARef { .. } | Op::HSlot { .. }) {
+            continue;
+        }
         if backs.contains(&Ref(i as u32)) {
             continue;
         }

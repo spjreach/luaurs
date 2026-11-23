@@ -134,6 +134,13 @@ pub enum Op {
     HMiss { t: Ref, k: Ref, snap: SnapId },
     /// exits through `snap` unless `f` is a C function with code at `fp`
     GuardCFunc { f: Ref, fp: usize, snap: SnapId },
+    /// pointer to `t[k]` for any key (`luaH_get`; a nil object when absent),
+    /// the key passed through the scratch TValue at `buf`
+    TGet { t: Ref, k: Ref, buf: usize },
+    /// `t[k] = v` raw, inserting the key if needed (the table may be
+    /// rehashed: see `Trace::inserts`); exits through `snap` for a nil or NaN
+    /// key (the interpreter raises the error)
+    TSet { t: Ref, k: Ref, v: Ref, buf: usize, snap: SnapId },
     /// a new table (`NEWTABLE`)
     NewTable { narray: u32, nhash: u32 },
     /// a copy of template table `tpl` (`DUPTABLE`; a Table constant)
@@ -205,6 +212,8 @@ impl Inst {
             GuardPlainTable { t, .. } => vec![*t],
             FrameFunc | NewTable { .. } => vec![],
             TMeta { t, .. } => vec![*t],
+            TGet { t, k, .. } => vec![*t, *k],
+            TSet { t, k, v, .. } => vec![*t, *k, *v],
             HMiss { t, k, .. } => vec![*t, *k],
             GuardCFunc { f, .. } => vec![*f],
             Barrier { t, v } => vec![*t, *v],
@@ -226,7 +235,7 @@ impl Inst {
         use Op::*;
         match &self.op {
             SLoad { guarded: true, snap, .. } => Some(*snap),
-            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } => {
+            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } => {
                 Some(*snap)
             }
             _ => None,
@@ -242,6 +251,16 @@ impl Inst {
             KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | Add(..) | Sub(..) | Mul(..) | Div(..) | Mod(..)
                 | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | ARef { .. } | FrameFunc | ClEnv { .. } | HSlot { .. }
         )
+    }
+
+    /// Can move a table's array or node storage (adds keys).
+    pub fn moves_tables(&self) -> bool {
+        use Op::*;
+        match self.op {
+            TSet { .. } => true,
+            Builtin { bfid, .. } => bfid == luau_common::bytecode::BuiltinFunction::TableInsert as u8,
+            _ => false,
+        }
     }
 
     pub fn is_const(&self) -> bool {

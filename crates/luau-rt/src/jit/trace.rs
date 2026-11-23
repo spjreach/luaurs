@@ -83,11 +83,15 @@ pub struct Trace {
     pub exit_tries: Vec<u8>,
     /// root trace: tags of its side traces
     pub sides: Vec<u16>,
+    /// the trace may add keys to tables (TSet, table.insert): a table's
+    /// array/node storage can move, so table addresses aren't reused across
+    /// that, and nothing table-related is hoisted out of the loop
+    pub inserts: bool,
 }
 
 impl Trace {
     pub fn new(id: TraceId, proto: *mut Proto, start_pc: u32) -> Trace {
-        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new() }
+        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new(), inserts: false }
     }
 
     pub fn inst(&self, r: Ref) -> &Inst {

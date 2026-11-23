@@ -60,6 +60,7 @@ pub fn run(t: &mut Trace) -> bool {
         let op = t.insts[i].op.clone();
         match op {
             Op::Loop => known.clear(),
+            _ if t.insts[i].moves_tables() || matches!(op, Op::Builtin { .. }) => known.clear(),
             Op::XStore { p, v } => {
                 let p = resolve(&map, p);
                 let v = resolve(&map, v);
