@@ -127,7 +127,7 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
             crate::ldo::luaD_checkstack(L, n.max(1) as i32);
             base = (*L).base;
         }
-        let resume_at = |pc: u32| -> Option<u32> {
+        let resume_at = move |pc: u32| -> Option<u32> {
             if moved {
                 let ci = (*L).ci;
                 (*ci).savedpc = (*(*ci).p).code.add(pc as usize);
@@ -156,18 +156,18 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
         // loop header, then linked to the exit); exits that can't be
         // side-traced count toward the storm limit, which drops the trace
         // for a re-record.
-        let (storm, resume, frames, side) = state::with(|s| {
+        let (storm, resume, frames, side, top) = state::with(|s| {
             let max_sides = 64;
             let (nsides, root_end) = match s.traces.get(&key) {
                 Some(r) => (r.sides.len(), r.end_pc),
-                None => return (false, header, None, None),
+                None => return (false, header, None, None, None),
             };
             let recording = is_recording();
             let t = s.by_tag_mut(tag).expect("exit from an unknown trace");
             let sn = &t.snapshots[k as usize];
             let in_loop = !sn.frames.is_empty() || (sn.pc >= header && sn.pc <= root_end);
             let traceable = in_loop && sn.frames.is_empty() && sn.pc != header && t.exit_tries[k as usize] < 3 && nsides < max_sides;
-            let (pc, frames) = (sn.pc, if sn.frames.is_empty() { None } else { Some(sn.clone()) });
+            let (pc, frames, top) = (sn.pc, if sn.frames.is_empty() { None } else { Some(sn.clone()) }, sn.top);
             let mut side = None;
             // (an in-body guard resuming at the header is a while loop's
             // condition failing: the loop's normal end, like leaving it)
@@ -187,7 +187,7 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
             if count_storm {
                 root.side_exits += 1;
             }
-            (root.side_exits >= EXIT_STORM_LIMIT, pc, frames, side.map(|x| (x, root.end_pc)))
+            (root.side_exits >= EXIT_STORM_LIMIT, pc, frames, side.map(|x| (x, root.end_pc)), top)
         });
         if storm {
             let reason = trace::AbortReason::Internal("side exit storm".into());
@@ -211,7 +211,13 @@ pub unsafe fn on_backedge(L: *mut lua_State, p: *mut Proto, header: u32, base: S
         // dropped (resuming at `header` would replay the iteration).
         if let Some(sn) = frames {
             push_frames(L, base, &sn);
+            if let Some(t) = top {
+                (*L).top = base.add(t as usize);
+            }
             return Some(RESUME_FRAME);
+        }
+        if let Some(t) = top {
+            (*L).top = base.add(t as usize);
         }
         return resume_at(resume);
     }

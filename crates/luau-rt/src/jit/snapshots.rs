@@ -45,4 +45,7 @@ pub struct Snapshot {
     /// inlined call frames, outermost first (`pc` is then in the innermost
     /// frame's function)
     pub frames: Vec<SnapFrame>,
+    /// the stack top (a trace slot) between a call returning a variable
+    /// number of values and the instruction taking them (L->top on exit)
+    pub top: Option<u16>,
 }

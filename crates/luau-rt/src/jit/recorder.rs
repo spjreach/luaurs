@@ -64,10 +64,17 @@ pub struct Recorder {
     /// a builtin call just recorded: (its instruction if it has a result,
     /// the result's trace slot, the pc the interpreter must be at next). Its
     /// type is the one the interpreter produced.
-    pending: Option<(Option<Ref>, usize, u32)>,
+    pending: Option<(Option<Ref>, usize, u32, bool)>,
     /// the thread being recorded
     l: *mut lua_State,
+    /// the stack top (trace slot) after a call returning a variable number
+    /// of values, until the instruction taking them
+    top: Option<usize>,
 }
+
+/// `Op::Builtin::nres` for a call taking every result (the trace checks
+/// there is exactly one).
+pub const MULTRET1: u8 = 0xff;
 
 /// Deepest call inlining.
 const MAX_INLINE_DEPTH: usize = 6;
@@ -127,6 +134,7 @@ impl Recorder {
             side: None,
             pending: None,
             l: std::ptr::null_mut(),
+            top: None,
         }
     }
 
@@ -219,10 +227,18 @@ impl Recorder {
     /// Records the instruction at `pc` (about to execute, with the frame's
     /// stack at `base`).
     pub unsafe fn step(&mut self, pc: u32, base: StkId) -> Step {
-        if let Some((r, slot, next)) = self.pending.take() {
+        if let Some((r, slot, next, multret)) = self.pending.take() {
             if pc != next {
                 // the builtin declined: the interpreter called the function
                 return Step::Abort(AbortReason::UnsupportedType("builtin fell back"));
+            }
+            if multret {
+                // a variable number of results: one, as the trace checks
+                let n = (*self.l).top.offset_from(self.root_base.add(slot));
+                if n != 1 {
+                    return Step::Abort(AbortReason::UnsupportedType("builtin returned several results"));
+                }
+                self.set_top(Some(slot + 1));
             }
             if let Some(r) = r {
                 let tv = self.root_base.add(slot);
@@ -953,8 +969,8 @@ impl Recorder {
         let call_at = pc as usize + len + skip;
         let call = *code.add(call_at);
         let (ra, nres) = (a_of(call), c_of(call) as i32 - 1);
-        if !(0..=1).contains(&nres) {
-            return Err(unsupported_type("builtin with variable results"));
+        if nres > 1 {
+            return Err(unsupported_type("builtin with several results"));
         }
         let (cl, clr) = self.cur_closure();
         if (*(*cl).env).safeenv == 0 {
@@ -964,11 +980,10 @@ impl Recorder {
         let mut nargs = 0;
         if op == O::FastCall as u8 {
             // the CALL's own arguments, already in place
-            let n = b_of(call);
-            if n == 0 || n - 1 > 3 {
-                return Err(unsupported_type("builtin with variable or many arguments"));
+            nargs = self.call_args(ra, b_of(call))?;
+            if nargs > 3 {
+                return Err(unsupported_type("builtin with many arguments"));
             }
-            nargs = n - 1;
             for k in 0..nargs {
                 args[k] = self.read(ra + 1 + k, base)?;
             }
@@ -998,13 +1013,13 @@ impl Recorder {
         let buf = Box::leak(vec![0u64; 8].into_boxed_slice()).as_mut_ptr() as usize;
         let snap = self.b.snapshot();
         // (the result's type is filled in at the next step, from the stack)
-        let v = self.b.emit(Op::Builtin { bfid, args, nargs: nargs as u8, nres: nres as u8, buf, snap }, IrType::Nil);
+        let v = self.b.emit(Op::Builtin { bfid, args, nargs: nargs as u8, nres: if nres < 0 { MULTRET1 } else { nres as u8 }, buf, snap }, IrType::Nil);
         let next = call_at as u32 + 1;
-        if nres == 1 {
+        if nres != 0 {
             self.b.set_slot(ra, v);
-            self.pending = Some((Some(v), self.b.off + ra, next));
+            self.pending = Some((Some(v), self.b.off + ra, next, nres < 0));
         } else {
-            self.pending = Some((None, 0, next));
+            self.pending = Some((None, 0, next, false));
         }
         Ok(())
     }
@@ -1029,9 +1044,6 @@ impl Recorder {
         if (*cl).isC != 0 {
             return self.record_c_call(pc, insn, base, cl);
         }
-        if bb == 0 || c == 0 {
-            return Err(unsupported_type("call with variable arguments or results"));
-        }
         let p = Closure::proto(cl);
         if (*p).is_vararg != 0 {
             return Err(unsupported_type("call of a vararg function"));
@@ -1039,7 +1051,7 @@ impl Recorder {
         if self.funcs.len() >= MAX_INLINE_DEPTH {
             return Err(AbortReason::UnsupportedControlFlow);
         }
-        let (nargs, nres) = (bb - 1, c as i32 - 1);
+        let (nargs, nres) = (self.call_args(a, bb)?, c as i32 - 1);
         // the callee must stay a closure of this prototype (any closure:
         // its upvalues are read from it at run time)
         let f = self.read(a, base)?;
@@ -1065,6 +1077,22 @@ impl Recorder {
         Ok(())
     }
 
+    fn set_top(&mut self, top: Option<usize>) {
+        self.top = top;
+        self.b.set_top(top);
+    }
+
+    /// Arguments of a CALL with B at frame slot a: fixed, or up to the top
+    /// a call just left.
+    fn call_args(&mut self, a: usize, bb: usize) -> R<usize> {
+        if bb != 0 {
+            return Ok(bb - 1);
+        }
+        let top = self.top.ok_or(AbortReason::UnsupportedType("variable arguments without a known top"))?;
+        self.set_top(None);
+        top.checked_sub(self.b.off + a + 1).ok_or(AbortReason::Internal("stack top below the call".into()))
+    }
+
     /// CALL of a C function that is a builtin with a fast implementation
     /// (`string.sub` through a method call, `math.sin` through a local, ...).
     unsafe fn record_c_call(&mut self, pc: u32, insn: u32, base: StkId, cl: *mut Closure) -> R<()> {
@@ -1075,10 +1103,11 @@ impl Recorder {
         let Some(bfid) = builtin_of(self.l, fp) else {
             return Err(AbortReason::UnsupportedOpcode("Call (C function)"));
         };
-        if bb == 0 || bb - 1 > 3 || !(1..=2).contains(&c) {
-            return Err(unsupported_type("builtin call with variable or many arguments/results"));
+        let nargs = self.call_args(a, bb)?;
+        if nargs > 3 || c > 2 {
+            return Err(unsupported_type("builtin call with many arguments/results"));
         }
-        let (nargs, nres) = (bb - 1, c as i32 - 1);
+        let nres = c as i32 - 1;
         let f = self.read(a, base)?;
         let snap = self.b.snapshot();
         self.b.emit(Op::GuardCFunc { f, fp, snap }, IrType::Nil);
@@ -1091,13 +1120,13 @@ impl Recorder {
         }
         let buf = Box::leak(vec![0u64; 8].into_boxed_slice()).as_mut_ptr() as usize;
         let snap = self.b.snapshot();
-        let v = self.b.emit(Op::Builtin { bfid, args, nargs: nargs as u8, nres: nres as u8, buf, snap }, IrType::Nil);
+        let v = self.b.emit(Op::Builtin { bfid, args, nargs: nargs as u8, nres: if nres < 0 { MULTRET1 } else { nres as u8 }, buf, snap }, IrType::Nil);
         let next = pc + if op_of(insn) == O::CallFb as u8 { 2 } else { 1 };
-        if nres == 1 {
+        if nres != 0 {
             self.b.set_slot(a, v);
-            self.pending = Some((Some(v), self.b.off + a, next));
+            self.pending = Some((Some(v), self.b.off + a, next, nres < 0));
         } else {
-            self.pending = Some((None, 0, next));
+            self.pending = Some((None, 0, next, false));
         }
         Ok(())
     }
@@ -1108,11 +1137,16 @@ impl Recorder {
             return Err(AbortReason::UnsupportedControlFlow);
         }
         let (a, bb) = (a_of(insn), b_of(insn));
-        if bb == 0 {
-            return Err(unsupported_type("return of variable results"));
-        }
-        let nret = bb - 1;
-        let nres = self.b.frames.last().unwrap().nresults as usize;
+        let nret = if bb != 0 {
+            bb - 1
+        } else {
+            let top = self.top.ok_or(AbortReason::UnsupportedType("variable results without a known top"))?;
+            self.set_top(None);
+            top.checked_sub(self.b.off + a).ok_or(AbortReason::Internal("stack top below the results".into()))?
+        };
+        let want = self.b.frames.last().unwrap().nresults;
+        // (a caller taking every result gets exactly these, up to the top)
+        let nres = if want < 0 { nret } else { want as usize };
         let mut vals = Vec::with_capacity(nres);
         for i in 0..nres {
             vals.push(if i < nret { self.read(a + i, base)? } else { self.b.knil() });
@@ -1123,6 +1157,9 @@ impl Recorder {
         let dst = f.base as usize - 1 - self.b.off;
         for (i, v) in vals.into_iter().enumerate() {
             self.b.set_slot(dst + i, v);
+        }
+        if want < 0 {
+            self.set_top(Some(self.b.off + dst + nres));
         }
         Ok(())
     }
@@ -1170,7 +1207,7 @@ impl Recorder {
         let (header, parent) = self.side.unwrap();
         let mut out = std::mem::replace(&mut self.b.trace, Trace::new(TraceId(0), std::ptr::null_mut(), 0));
         let entries: Vec<SnapEntry> = self.b.written().into_iter().map(|(s, v)| SnapEntry { slot: s as u16, value: v }).collect();
-        out.snapshots.push(Snapshot { pc: header, entries, ref_limit: Ref(out.insts.len() as u32), frames: vec![] });
+        out.snapshots.push(Snapshot { pc: header, entries, ref_limit: Ref(out.insts.len() as u32), frames: vec![], top: None });
         out.start_pc = header;
         out.end_pc = self.loop_end;
         out.loop_ref = None;
@@ -1242,7 +1279,7 @@ impl Recorder {
         };
 
         // entry snapshot: resume at the loop header, nothing modified yet
-        out.snapshots.push(Snapshot { pc: rec.start_pc, entries: vec![], ref_limit: Ref(0), frames: vec![] });
+        out.snapshots.push(Snapshot { pc: rec.start_pc, entries: vec![], ref_limit: Ref(0), frames: vec![], top: None });
         let entry = SnapId(0);
 
         // pre-roll: slot loads. Constants stay in the body so their
@@ -1413,6 +1450,7 @@ impl Recorder {
                         entries: entries.into_iter().map(|(slot, value)| SnapEntry { slot, value }).collect(),
                         ref_limit: Ref(u32::MAX),
                         frames: old.frames.clone(),
+                        top: old.top,
                     });
                     SnapId(out.snapshots.len() as u32 - 1)
                 });
@@ -1457,6 +1495,7 @@ impl Recorder {
             entries: close_entries,
             ref_limit: Ref(out.insts.len() as u32),
             frames: vec![],
+            top: None,
         });
         // each snapshot covers the values defined before its first user
         for (i, inst) in out.insts.iter().enumerate() {

@@ -518,12 +518,18 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                     &mut a,
                     &live,
                     helpers::fastcall as usize,
-                    &[Arg::L, Arg::Imm(*bfid as u64), Arg::Imm(*nargs as u64), Arg::Imm(*nres as u64), Arg::Imm(*buf as u64)],
+                    &[Arg::L, Arg::Imm(*bfid as u64), Arg::Imm(*nargs as u64), Arg::Imm(if *nres == crate::jit::recorder::MULTRET1 { u64::MAX } else { *nres as u64 }), Arg::Imm(*buf as u64)],
                 );
-                // declined: the interpreter does it the slow way
-                a.test_rr(R::Rax, R::Rax);
-                a.jcc(Cond::L, s);
-                if *nres == 1 {
+                // declined: the interpreter does it the slow way (taking
+                // every result: exactly one, as recorded)
+                if *nres == crate::jit::recorder::MULTRET1 {
+                    a.cmp_ri(R::Rax, 1);
+                    a.jcc(Cond::NE, s);
+                } else {
+                    a.test_rr(R::Rax, R::Rax);
+                    a.jcc(Cond::L, s);
+                }
+                if *nres != 0 {
                     let tag = inst.ty.tag().ok_or("builtin result of a non-Lua type")?;
                     a.mov_ri64(R::Rcx, *buf as u64);
                     a.cmp32_mi(R::Rcx, OFF_TT, tag);

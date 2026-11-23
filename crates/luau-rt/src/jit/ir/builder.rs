@@ -30,6 +30,8 @@ pub struct IrBuilder {
     pub off: usize,
     /// inlined frames, outermost first (copied into snapshots)
     pub frames: Vec<SnapFrame>,
+    /// see `Snapshot::top`
+    top: Option<u16>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -54,6 +56,7 @@ impl IrBuilder {
             writes: 0,
             off: 0,
             frames: Vec::new(),
+            top: None,
         }
     }
 
@@ -144,6 +147,12 @@ impl IrBuilder {
         self.writes += 1;
     }
 
+    /// Sets (or clears) the stack top that snapshots carry.
+    pub fn set_top(&mut self, top: Option<usize>) {
+        self.top = top.map(|t| t as u16);
+        self.writes += 1;
+    }
+
     /// Leaves the innermost inlined frame: its slots (from its function
     /// slot up) are dead.
     pub fn pop_frame(&mut self) -> Option<SnapFrame> {
@@ -190,7 +199,7 @@ impl IrBuilder {
             .map(|(s, v)| SnapEntry { slot: s as u16, value: v.unwrap() })
             .collect();
         let id = SnapId(self.trace.snapshots.len() as u32);
-        self.trace.snapshots.push(Snapshot { pc: self.pc, entries, ref_limit: Ref(self.trace.insts.len() as u32), frames: self.frames.clone() });
+        self.trace.snapshots.push(Snapshot { pc: self.pc, entries, ref_limit: Ref(self.trace.insts.len() as u32), frames: self.frames.clone(), top: self.top });
         self.last_snap = Some((id, self.pc, self.writes));
         id
     }
