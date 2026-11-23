@@ -196,6 +196,20 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     }
     // registers handed from a dying PHI to its back value (not freed)
     let mut handed = vec![false; n];
+    // values from before the loop that the body reads as operands (the
+    // others it only names in exits: they wait in spill slots, leaving
+    // the registers to the loop)
+    let mut body_operand = vec![false; n];
+    if loop_at != usize::MAX {
+        for x in t.insts.iter().skip(loop_at + 1) {
+            for o in x.operands() {
+                body_operand[o.index()] = true;
+            }
+            if let Op::Phi { pre, .. } = x.op {
+                body_operand[pre.index()] = true;
+            }
+        }
+    }
     for (i, inst) in t.insts.iter().enumerate() {
         // values whose last use was the previous instruction are free now
         for &v in &dying[i] {
@@ -242,6 +256,13 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 if end != END {
                     dying[(end + 1).min(n)].push(i);
                 }
+                continue;
+            }
+        }
+        if loop_at != usize::MAX && i < loop_at && end == END && !body_operand[i] && !inst.is_const() {
+            if let Some(k) = (0..SPILL_SLOTS).find(|&k| !slot_busy[k] && slot_until[k].is_none_or(|u| u < i)) {
+                slot_busy[k] = true;
+                home[i] = Home::S(k as u8);
                 continue;
             }
         }

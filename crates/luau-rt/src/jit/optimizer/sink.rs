@@ -421,9 +421,14 @@ fn apply_phi(t: &mut Trace, plan: PhiPlan) {
                 pre_new.push(g);
                 Some(m.index())
             } else {
-                let mp = push(t, Op::Phi { pre: Ref(tm as u32), back: m }, IrType::Table);
-                phi_new.push(mp);
-                Some(mp)
+                // computed in the loop: assumed to be the entry table's
+                // (checked at the iteration's end, exiting with the
+                // iteration done) - what is derived from it is then
+                // invariant too
+                let last = SnapId(t.snapshots.len() as u32 - 1);
+                let g = push(t, Op::GuardSame { a: m, k: Ref(tm as u32), snap: last }, IrType::Nil);
+                body_new.push(g);
+                Some(tm)
             }
         }
     };

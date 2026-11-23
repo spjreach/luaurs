@@ -14,6 +14,7 @@ pub mod cse;
 pub mod dce;
 pub mod forwarding;
 pub mod hoist_consts;
+pub mod hoist_guards;
 pub mod licm;
 pub mod narrow;
 pub mod redundant;
@@ -65,6 +66,11 @@ pub fn optimize_checked(t: &mut Trace) -> Result<(), String> {
     hoist_consts::run(t);
     validate(t)?;
     sink::run(t);
+    validate(t)?;
+    // (sinking drops stores that kept loads in the loop)
+    if hoist_guards::run(t) {
+        validate(t)?;
+    }
     validate(t)
 }
 

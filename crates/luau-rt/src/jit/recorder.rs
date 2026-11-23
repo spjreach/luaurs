@@ -1559,13 +1559,17 @@ impl Recorder {
             let (ra, nres) = (a_of(call), c_of(call) as i32 - 1);
             let bfid = a as u8;
             let (cl, clr) = self.cur_closure();
-            if (*(*cl).env).safeenv == 0 || nres != 1 || !math1_supported(bfid) || (*base.add(bb)).tt != LUA_TNUMBER {
+            if (*(*cl).env).safeenv == 0 || !(nres == 1 || nres == -1) || !math1_supported(bfid) || (*base.add(bb)).tt != LUA_TNUMBER {
                 return self.record_builtin(pc, insn, aux, base);
             }
             self.guard_safeenv(clr);
             let x = self.read_num(bb, base)?;
             let v = self.b.emit(Op::Math1(bfid, x), IrType::Number);
             self.b.set_slot(ra, v);
+            if nres < 0 {
+                // (every result: the one)
+                self.set_top(Some(self.b.off + ra + 1));
+            }
         } else if o(O::Call) || o(O::CallFb) {
             self.record_call(pc, insn, base)?;
         } else if o(O::Return) {
@@ -1812,6 +1816,18 @@ impl Recorder {
         }
         if bfid == B::Setmetatable as u8 {
             self.mm_store_ok(Some(args[0]))?;
+        }
+        if nargs >= 1 && (nres == 1 || nres == -1) && math1_supported(bfid) && self.b.trace.ty(args[0]) == IrType::Number {
+            // sqrt / floor / ceil / abs of a number: inline (the builtin
+            // succeeds with one result and skips the CALL)
+            self.guard_safeenv(clr);
+            let v = self.b.emit(Op::Math1(bfid, args[0]), IrType::Number);
+            self.b.set_slot(ra, v);
+            if nres < 0 {
+                self.set_top(Some(self.b.off + ra + 1));
+            }
+            self.pending = Some((None, 0, call_at as u32 + 1, false));
+            return Ok(());
         }
         self.guard_safeenv(clr);
         let buf = Box::leak(vec![0u64; 8].into_boxed_slice()).as_mut_ptr() as usize;
@@ -2246,6 +2262,20 @@ impl Recorder {
         let mut args = [Ref(0); 3];
         for k in 0..nargs {
             args[k] = self.read(a + 1 + k, base)?;
+        }
+        if nargs == 1 && nres != 0 && math1_supported(bfid) && self.b.trace.ty(args[0]) == IrType::Number {
+            // sqrt / floor / ceil / abs of a number: inline (one result)
+            let v = self.b.emit(Op::Math1(bfid, args[0]), IrType::Number);
+            self.b.set_slot(a, v);
+            if nres < 0 {
+                self.set_top(Some(self.b.off + a + 1));
+            } else {
+                for k in 1..nres as usize {
+                    let nil = self.b.knil();
+                    self.b.set_slot(a + k, nil);
+                }
+            }
+            return Ok(());
         }
         let buf = Box::leak(vec![0u64; 8].into_boxed_slice()).as_mut_ptr() as usize;
         let snap = self.b.snapshot();
@@ -3135,7 +3165,7 @@ pub(crate) fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
     }
 }
 
-fn set_snapshot(op: &mut Op, s: SnapId) {
+pub(crate) fn set_snapshot(op: &mut Op, s: SnapId) {
     use Op::*;
     match op {
         SLoad { snap, .. }
