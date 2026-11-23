@@ -1316,9 +1316,25 @@ impl Recorder {
                 c - 1
             };
             for i in 0..n {
-                let k = self.b.knum((aux as usize + i) as f64);
+                let idx = aux as usize + i - 1;
                 let v = self.read(bb + i, base)?;
-                self.record_tset(a, k, v, base)?;
+                if Self::observe_array(base, a, idx, true).is_ok() {
+                    // the array part has room (a constructor's table):
+                    // stored in place
+                    let t = self.read(a, base)?;
+                    self.mm_store_ok(Some(t))?;
+                    let snap = self.b.snapshot();
+                    self.b.emit(Op::GuardPlainTable { t, store: true, snap }, IrType::Nil);
+                    let ki = self.b.ki32(idx as i32);
+                    let p = self.array_slot(t, ki)?;
+                    self.b.emit(Op::XStore { p, v }, IrType::Nil);
+                    if self.b.trace.ty(v).is_gc() {
+                        self.b.emit(Op::Barrier { t, v }, IrType::Nil);
+                    }
+                } else {
+                    let k = self.b.knum((aux as usize + i) as f64);
+                    self.record_tset(a, k, v, base)?;
+                }
             }
         } else if o(O::Not) {
             let x = self.read(bb, base)?;

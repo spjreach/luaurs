@@ -78,6 +78,14 @@ pub fn run(t: &mut Trace) -> bool {
             Op::GuardCFunc { f, fp, .. } => Some((format!("CFunc {} {}", r(f), fp), Kind::Fixed)),
             Op::ULoad { cl, idx, by_ref: false, .. } => Some((format!("UVal {} {} {:?}", r(cl), idx, ty), Kind::Fixed)),
             Op::GuardFlag { p, off, .. } => Some((format!("Flag {} {}", r(p), off), Kind::Env)),
+            // (sizes change only when storage moves; a comparison of the
+            // same values holds again)
+            Op::ASize(tb) => Some((format!("ASize {}", r(tb)), Kind::Layout)),
+            Op::ABase(tb) => Some((format!("ABase {}", r(tb)), Kind::Layout)),
+            Op::Guard { cmp, a, b, .. } => Some((format!("Guard {:?} {} {}", cmp, r(a), r(b)), Kind::Fixed)),
+            Op::GuardTruthy { a, want, .. } => Some((format!("Truthy {} {}", r(a), want), Kind::Fixed)),
+            Op::GuardSame { a, k, .. } => Some((format!("Same {} {}", r(a), r(k)), Kind::Fixed)),
+            Op::GuardDiff { a, k, .. } => Some((format!("Diff {} {}", r(a), r(k)), Kind::Fixed)),
             _ => None,
         };
         let Some((key, kind)) = key else { continue };
