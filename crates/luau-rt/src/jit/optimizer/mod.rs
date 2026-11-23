@@ -15,6 +15,8 @@ pub mod dce;
 pub mod forwarding;
 pub mod hoist_consts;
 pub mod licm;
+pub mod narrow;
+pub mod redundant;
 pub mod strength;
 pub mod util;
 
@@ -34,6 +36,8 @@ pub fn optimize_checked(t: &mut Trace) -> Result<(), String> {
         validate(t)?;
         changed |= cse::run(t);
         validate(t)?;
+        changed |= redundant::run(t);
+        validate(t)?;
         changed |= forwarding::run(t);
         validate(t)?;
         changed |= dce::run(t);
@@ -46,6 +50,17 @@ pub fn optimize_checked(t: &mut Trace) -> Result<(), String> {
         }
     }
     validate(t)?;
+    if narrow::run(t) {
+        validate(t)?;
+        // (the conversions may now be loop-invariant or common)
+        for _ in 0..3 {
+            let c = cse::run(t) | dce::run(t) | licm::run(t);
+            validate(t)?;
+            if !c {
+                break;
+            }
+        }
+    }
     hoist_consts::run(t);
     validate(t)
 }

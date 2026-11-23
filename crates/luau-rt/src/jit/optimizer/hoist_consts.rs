@@ -17,14 +17,24 @@ pub fn run(t: &mut Trace) {
     let l = loop_ref.index();
     let n = t.insts.len();
     let moved: Vec<usize> = (l + 1..n).filter(|&i| t.insts[i].is_const()).collect();
-    if moved.is_empty() {
-        return;
+    if !moved.is_empty() {
+        move_before_loop(t, &moved);
     }
-    // new order: pre-loop, the body's constants, Loop, the rest of the body
+}
+
+/// Moves instructions `moved` (after the Loop marker, their operands all
+/// defined before it) to just before it, in that order: renumbers the
+/// trace and remaps every reference.
+pub fn move_before_loop(t: &mut Trace, moved: &[usize]) {
+    let Some(loop_ref) = t.loop_ref else { return };
+    let l = loop_ref.index();
+    let n = t.insts.len();
+    let set: std::collections::HashSet<usize> = moved.iter().copied().collect();
+    // new order: pre-loop, the moved ones, Loop, the rest
     let mut order: Vec<usize> = (0..l).collect();
     order.extend(moved.iter().copied());
     order.push(l);
-    order.extend((l + 1..n).filter(|i| !t.insts[*i].is_const()));
+    order.extend((l + 1..n).filter(|i| !set.contains(i)));
     let mut new_of = vec![0u32; n];
     for (new, &old) in order.iter().enumerate() {
         new_of[old] = new as u32;

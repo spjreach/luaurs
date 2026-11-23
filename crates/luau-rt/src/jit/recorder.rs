@@ -2985,7 +2985,7 @@ pub(crate) fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *a = rm(*a);
             *b = rm(*b);
         }
-        Neg(a) | Math1(_, a) | I32ToNum(a) | ASize(a) | ABase(a) => *a = rm(*a),
+        Neg(a) | Math1(_, a) | I32ToNum(a) | ASize(a) | ABase(a) | TruncI32(a) => *a = rm(*a),
         NumToI32 { a, .. } => *a = rm(*a),
         ARef { t, idx } => {
             *t = rm(*t);

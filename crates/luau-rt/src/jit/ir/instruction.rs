@@ -108,6 +108,9 @@ pub enum Op {
     /// f64 -> I32, exits unless exact (array indexing by a number)
     NumToI32 { a: Ref, snap: SnapId },
     I32ToNum(Ref),
+    /// an integer-valued number as an I32, truncating (no check: see
+    /// `optimizer::narrow`)
+    TruncI32(Ref),
     AddI32(Ref, Ref),
 
     // ---- tables ---------------------------------------------------------
@@ -272,7 +275,7 @@ impl Inst {
             Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) | Mod(a, b) | Pow(a, b) | IDiv(a, b) | AddI32(a, b) => {
                 vec![*a, *b]
             }
-            Neg(a) | Math1(_, a) | I32ToNum(a) | ASize(a) | VNeg(a) | ABase(a) => vec![*a],
+            Neg(a) | Math1(_, a) | I32ToNum(a) | ASize(a) | VNeg(a) | ABase(a) | TruncI32(a) => vec![*a],
             VArith { a, b, .. } | GuardVecEq { a, b, .. } => vec![*a, *b],
             VGet { v, .. } => vec![*v],
             VargLoad { idx, .. } => vec![*idx],
@@ -328,7 +331,7 @@ impl Inst {
         matches!(
             self.op,
             KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | Add(..) | Sub(..) | Mul(..) | Div(..) | Mod(..)
-                | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | ARef { .. } | ABase(_) | FrameFunc | ClEnv { .. } | HSlot { .. } | Not(_) | LudToI32(_) | I32ToLud(_)
+                | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | ARef { .. } | ABase(_) | TruncI32(_) | FrameFunc | ClEnv { .. } | HSlot { .. } | Not(_) | LudToI32(_) | I32ToLud(_)
                 | VArith { .. } | VNeg(_) | VGet { .. } | VMake { .. }
         )
     }

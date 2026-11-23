@@ -55,6 +55,7 @@ pub fn map_op(op: &Op, map: &[Ref]) -> Op {
         Op::ASize(a) => Op::ASize(r(*a)),
         Op::ARef { t, idx } => Op::ARef { t: r(*t), idx: r(*idx) },
         Op::ABase(t) => Op::ABase(r(*t)),
+        Op::TruncI32(a) => Op::TruncI32(r(*a)),
         Op::XLoad { p, snap } => Op::XLoad { p: r(*p), snap: *snap },
         Op::XStore { p, v } => Op::XStore { p: r(*p), v: r(*v) },
         Op::GuardPlainTable { t, store, snap } => Op::GuardPlainTable { t: r(*t), store: *store, snap: *snap },

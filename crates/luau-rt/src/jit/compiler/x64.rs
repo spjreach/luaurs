@@ -61,7 +61,7 @@ const TEMP_G: [R; 2] = [R::R10, R::R11];
 const TEMP_X: [X; 2] = [X(14), X(15)];
 /// spill slots (8 bytes each) every trace's native frame has, below the
 /// saved registers; side traces run in their root's frame, so it's fixed
-const SPILL_SLOTS: usize = 64;
+const SPILL_SLOTS: usize = 256;
 const SPILL_BYTES: i32 = SPILL_SLOTS as i32 * 16;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -980,6 +980,11 @@ pub unsafe fn compile(t: &Trace, link_to: Option<usize>) -> Result<Code, String>
                     a.ucomisd(X(0), x);
                     a.jcc(Cond::NE, stub(*snap));
                     a.jcc(Cond::P, stub(*snap));
+                }
+            }
+            Op::TruncI32(x) => {
+                if let Home::G(d) = dst {
+                    a.cvttsd2si_x(d, f(*x)?);
                 }
             }
             Op::I32ToNum(x) => {
