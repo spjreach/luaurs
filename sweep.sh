@@ -20,13 +20,14 @@ fi
 pass=0; fail=0; failed=()
 for f in tests/conformance/*.luau; do
   name=$(basename "$f" .luau)
-  ( if [ "$PLATFORM" != Darwin ]; then ulimit -v 1500000 2>/dev/null || true; fi
+  ( if [ "$PLATFORM" != Darwin ]; then ulimit -v ${VMEM_KB:-4000000} 2>/dev/null || true; fi
     "$TIMEOUT_BIN" ${TO:-60} "$BIN" "$f" >"/tmp/out_$name.txt" 2>&1 )
   code=$?
   if [ $code -eq 0 ]; then
     echo "PASS $name"; pass=$((pass+1))
   else
     echo "FAIL $name (exit $code)"; fail=$((fail+1)); failed+=("$name")
+    tail -n 5 "/tmp/out_$name.txt" | sed 's/^/    | /'
   fi
 done
 echo "=== $pass passed, $fail failed ==="
