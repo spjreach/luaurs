@@ -52,7 +52,7 @@ pub fn optimize_checked(t: &mut Trace) -> Result<(), String> {
         }
     }
     validate(t)?;
-    if narrow::run(t) {
+    if narrow::run(t) | narrow::int_induction(t) {
         validate(t)?;
         // (the conversions may now be loop-invariant or common)
         for _ in 0..3 {

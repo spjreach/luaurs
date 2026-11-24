@@ -112,6 +112,8 @@ pub enum Op {
     /// `optimizer::narrow`)
     TruncI32(Ref),
     AddI32(Ref, Ref),
+    /// bitwise and of I32s
+    AndI32(Ref, Ref),
 
     // ---- tables ---------------------------------------------------------
     /// the table's array size (`sizearray`, I32)
@@ -275,7 +277,7 @@ impl Inst {
             GuardTruthy { a, .. } => vec![*a],
             GuardSame { a, k, .. } | GuardDiff { a, k, .. } => vec![*a, *k],
             StrCmp { a, b } => vec![*a, *b],
-            Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) | Mod(a, b) | Pow(a, b) | IDiv(a, b) | AddI32(a, b) => {
+            Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) | Mod(a, b) | Pow(a, b) | IDiv(a, b) | AddI32(a, b) | AndI32(a, b) => {
                 vec![*a, *b]
             }
             Neg(a) | Math1(_, a) | I32ToNum(a) | ASize(a) | VNeg(a) | ABase(a) | TruncI32(a) => vec![*a],
@@ -334,7 +336,7 @@ impl Inst {
         matches!(
             self.op,
             KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | Add(..) | Sub(..) | Mul(..) | Div(..) | Mod(..)
-                | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | ARef { .. } | ABase(_) | TruncI32(_) | FrameFunc | ClEnv { .. } | HSlot { .. } | Not(_) | LudToI32(_) | I32ToLud(_)
+                | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | AndI32(..) | ARef { .. } | ABase(_) | TruncI32(_) | FrameFunc | ClEnv { .. } | HSlot { .. } | Not(_) | LudToI32(_) | I32ToLud(_)
                 | VArith { .. } | VNeg(_) | VGet { .. } | VMake { .. }
         )
     }

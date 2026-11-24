@@ -105,6 +105,38 @@ pub fn run(t: &mut Trace) -> bool {
             }
         }
     }
+    // (y + a) + b of I32 constants: y + (a + b) - wrapping either way -,
+    // or y itself when they cancel (index + 1 - 1)
+    let kconst = |t: &Trace, r: Ref| match t.inst(r).op {
+        Op::KI32(c) => Some(c),
+        _ => None,
+    };
+    for i in 0..t.insts.len() {
+        let Op::AddI32(x, k2) = t.insts[i].op else { continue };
+        let (x, k2) = (resolve(&map, x), resolve(&map, k2));
+        let Some(b) = kconst(t, k2) else { continue };
+        let Op::AddI32(y, k1) = t.insts[x.index()].op else { continue };
+        let (y, k1) = (resolve(&map, y), resolve(&map, k1));
+        let Some(a) = kconst(t, k1) else { continue };
+        let sum = a.wrapping_add(b);
+        if backs.contains(&Ref(i as u32)) {
+            continue;
+        }
+        if sum == 0 {
+            if loop_at.is_some_and(|l| i > l && y.index() < l) {
+                // (keep values computed in the body there)
+                continue;
+            }
+            map[i] = y;
+            t.insts[i].op = Op::Nop;
+            changed = true;
+        } else if let Some(k) = (0..t.insts.len()).find(|&j| matches!(t.insts[j].op, Op::KI32(c) if c == sum) && loop_at.is_none_or(|l| j < l || i > l)) {
+            if k < i {
+                t.insts[i].op = Op::AddI32(y, Ref(k as u32));
+                changed = true;
+            }
+        }
+    }
     // setmetatable's result is its table
     for i in 0..t.insts.len() {
         if let Op::Builtin { bfid, args, nargs, .. } = t.insts[i].op {

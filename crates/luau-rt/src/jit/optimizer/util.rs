@@ -52,6 +52,7 @@ pub fn map_op(op: &Op, map: &[Ref]) -> Op {
         Op::NumToI32 { a, snap } => Op::NumToI32 { a: r(*a), snap: *snap },
         Op::I32ToNum(a) => Op::I32ToNum(r(*a)),
         Op::AddI32(a, b) => Op::AddI32(r(*a), r(*b)),
+        Op::AndI32(a, b) => Op::AndI32(r(*a), r(*b)),
         Op::ASize(a) => Op::ASize(r(*a)),
         Op::ARef { t, idx } => Op::ARef { t: r(*t), idx: r(*idx) },
         Op::ABase(t) => Op::ABase(r(*t)),

@@ -122,6 +122,35 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             last[v] = at;
         }
     };
+    // conversions only exits read (no instruction uses them) are done in
+    // the exit code, not on every iteration: exits need their operand
+    let mut operand_use = vec![false; n];
+    for x in &t.insts {
+        for o in x.operands() {
+            operand_use[o.index()] = true;
+        }
+    }
+    let deferred: Vec<bool> = (0..n).map(|i| matches!(t.insts[i].op, Op::I32ToNum(_)) && !operand_use[i]).collect();
+    // I32 constants used only by integer adds / ands: immediates, no
+    // register
+    let mut imm_only = vec![true; n];
+    for x in &t.insts {
+        let imm_user = matches!(x.op, Op::AddI32(..) | Op::AndI32(..));
+        for o in x.operands() {
+            if !imm_user {
+                imm_only[o.index()] = false;
+            }
+        }
+    }
+    for (i, f) in imm_only.iter_mut().enumerate() {
+        *f = *f && matches!(t.insts[i].op, Op::KI32(_));
+    }
+    let exit_need = |v: Ref| -> Ref {
+        match t.insts[v.index()].op {
+            Op::I32ToNum(x) if deferred[v.index()] => x,
+            _ => v,
+        }
+    };
     // the loop's interrupt exit resumes at the header with every slot the
     // iteration wrote. The recorder appends that snapshot last; using the
     // last snapshot (not the last *guard*) keeps the restore complete.
@@ -161,18 +190,18 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
         }
         if let Some(s) = inst.snapshot() {
             for e in &t.snapshots[s.0 as usize].entries {
-                touch(e.value, i, &mut last, &mut used);
+                touch(exit_need(e.value), i, &mut last, &mut used);
             }
             for &v in &sink_vals[s.0 as usize] {
-                touch(v, i, &mut last, &mut used);
+                touch(exit_need(v), i, &mut last, &mut used);
             }
         }
     }
     for e in &t.snapshots[back_snap.0 as usize].entries {
-        touch(e.value, END, &mut last, &mut used);
+        touch(exit_need(e.value), END, &mut last, &mut used);
     }
     for &v in &sink_vals[back_snap.0 as usize] {
-        touch(v, END, &mut last, &mut used);
+        touch(exit_need(v), END, &mut last, &mut used);
     }
 
     // ---- allocation -----------------------------------------------------
@@ -234,7 +263,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             }
             active.retain(|&w| w != v);
         }
-        if matches!(inst.op, Op::Nop | Op::Loop) {
+        if matches!(inst.op, Op::Nop | Op::Loop) || deferred[i] || imm_only[i] {
             continue;
         }
         let defines = !matches!(
@@ -312,7 +341,9 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     // traces spill above the root's slots), the PHIs reload from their
     // stack slots.
     let mut saves: Vec<(usize, u8)> = Vec::new();
-    let mut phi_loads: Vec<(usize, u16)> = Vec::new();
+    // (PHI, its slot, whether it is a counter's I32 twin: the slot's
+    // number converted)
+    let mut phi_loads: Vec<(usize, u16, bool)> = Vec::new();
     let mut body_entry_ok = false;
     let mut reserved = spill_base;
     for h in &home {
@@ -335,7 +366,11 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
         for (j, x) in t.insts.iter().enumerate().skip(loop_at + 1) {
             match x.op {
                 Op::Phi { pre, .. } => match t.inst(pre).op {
-                    Op::SLoad { slot, .. } if x.ty.tag().is_some() => phi_loads.push((j, slot)),
+                    Op::SLoad { slot, .. } if x.ty.tag().is_some() => phi_loads.push((j, slot, false)),
+                    Op::NumToI32 { a: src, .. } if x.ty == IrType::I32 => match t.inst(src).op {
+                        Op::SLoad { slot, .. } => phi_loads.push((j, slot, true)),
+                        _ => body_entry_ok = false,
+                    },
                     _ => body_entry_ok = false,
                 },
                 Op::Nop => {}
@@ -416,6 +451,9 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     }
 
     for (i, inst) in t.insts.iter().enumerate() {
+        if deferred[i] {
+            continue;
+        }
         // spilled operands go to the temp registers for this instruction
         // (stores and builtin arguments take values from anywhere)
         let mut over: Vec<(usize, Home)> = Vec::new();
@@ -649,10 +687,22 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             }
             Op::Mod(x, y) | Op::IDiv(x, y) => {
                 if let Home::F(d) = dst {
+                    // (a power-of-two divisor: multiply by its reciprocal -
+                    // the same exact scaling, one rounding)
+                    let recip = match t.inst(*y).op {
+                        Op::KNum(v) => exact_reciprocal(v),
+                        _ => None,
+                    };
                     let (x, y) = (f(*x)?, f(*y)?);
                     // q = floor(x / y)
-                    a.movapd(X(0), x);
-                    a.sd_rr(0x5e, X(0), y);
+                    if let Some(r) = recip {
+                        a.mov_ri64(R::Rax, r.to_bits());
+                        a.movq_xr(X(0), R::Rax);
+                        a.sd_rr(0x59, X(0), x);
+                    } else {
+                        a.movapd(X(0), x);
+                        a.sd_rr(0x5e, X(0), y);
+                    }
                     a.roundsd(X(0), X(0), 1);
                     if matches!(inst.op, Op::Mod(..)) {
                         // x - q * y
@@ -1118,6 +1168,26 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                     a.cvtsi2sd(d, g(*x)?);
                 }
             }
+            Op::AndI32(x, y) | Op::AddI32(x, y) if imm_only[x.index()] || imm_only[y.index()] => {
+                // (a constant operand: an immediate)
+                if let Home::G(d) = dst {
+                    let (v, k) = if imm_only[y.index()] { (*x, *y) } else { (*y, *x) };
+                    let Op::KI32(c) = t.inst(k).op else { return Err("immediate of a non-constant".into()) };
+                    a.mov_rr32(d, g(v)?);
+                    a.alu32_ri(if matches!(inst.op, Op::AndI32(..)) { 4 } else { 0 }, d, c);
+                }
+            }
+            Op::AndI32(x, y) => {
+                if let Home::G(d) = dst {
+                    let (x, y) = (g(*x)?, g(*y)?);
+                    if d == y {
+                        a.alu32_rr(0x21, d, x);
+                    } else {
+                        a.mov_rr32(d, x);
+                        a.alu32_rr(0x21, d, y);
+                    }
+                }
+            }
             Op::AddI32(x, y) => {
                 if let Home::G(d) = dst {
                     let (x, y) = (g(*x)?, g(*y)?);
@@ -1269,9 +1339,26 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 _ => {}
             }
         }
-        for &(j, slot) in &phi_loads {
+        for &(j, slot, twin) in &phi_loads {
             let ty = t.insts[j].ty;
             let disp = slot as i32 * TV;
+            if twin {
+                // the counter's number, converted (exactly, or exit)
+                a.cmp32_mi(R::R13, disp + OFF_TT, LUA_TNUMBER);
+                a.jcc(Cond::NE, stubs[0]);
+                a.movsd_load(X(0), R::R13, disp);
+                a.cvttsd2si_x(R::Rax, X(0));
+                a.cvtsi2sd(X(1), R::Rax);
+                a.ucomisd(X(1), X(0));
+                a.jcc(Cond::NE, stubs[0]);
+                a.jcc(Cond::P, stubs[0]);
+                match home[j] {
+                    Home::G(r) => a.mov_rr32(r, R::Rax),
+                    Home::S(s2) => a.store(R::Rsp, spill_off(s2), R::Rax),
+                    _ => {}
+                }
+                continue;
+            }
             a.cmp32_mi(R::R13, disp + OFF_TT, ty.tag().unwrap());
             // (another type: the interpreter runs the iteration)
             a.jcc(Cond::NE, stubs[0]);
@@ -1348,6 +1435,17 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
         return Err("assembler: unresolved label".into());
     }
     Ok(Code { bytes: a.code, reentry, body_entry, reserved: reserved as u32 })
+}
+
+/// 1/v when v is a power of two whose reciprocal is a normal double.
+fn exact_reciprocal(v: f64) -> Option<f64> {
+    let b = v.to_bits();
+    let exp = (b >> 52) & 0x7ff;
+    if b & ((1u64 << 52) - 1) == 0 && (1..=2045).contains(&exp) {
+        Some(f64::from_bits((b & (1u64 << 63)) | ((2046 - exp) << 52)))
+    } else {
+        None
+    }
 }
 
 /// The CPU has AVX (three-operand scalar arithmetic: no copies).
@@ -1428,6 +1526,18 @@ fn store_value(a: &mut Asm, home: &[Home], t: &Trace, v: Ref, base: R, disp: i32
             a.store(base, disp, R::Rax);
         }
         (Home::None, Op::Sunk) => return Err(format!("sunk table {} stored outside an exit", v.0)),
+        (Home::None, Op::I32ToNum(x)) => {
+            // (a conversion done only where it is stored)
+            match home[x.index()] {
+                Home::G(r) => a.cvtsi2sd(X(0), r),
+                Home::S(s) => {
+                    a.load(R::Rax, R::Rsp, spill_off(s));
+                    a.cvtsi2sd(X(0), R::Rax);
+                }
+                h => return Err(format!("converted value {} has no home {:?}", x.0, h)),
+            }
+            a.movsd_store(base, disp, X(0));
+        }
         (Home::None, _) if ty == IrType::Nil => {}
         (h, op) => return Err(format!("value {} ({:?}) has no home {:?}", v.0, op, h)),
     }
