@@ -157,7 +157,31 @@ pub fn int_induction(t: &mut Trace) -> bool {
     for (p, start, step, limit) in counters {
         // which conversions it would serve
         let users: Vec<usize> = (l + 1..t.insts.len()).filter(|&j| matches!(t.insts[j].op, Op::TruncI32(a) if int_expr(t, a, p, 0).is_some())).collect();
-        if users.is_empty() {
+        // the step's sign (FORNLOOP guards it before the loop): the loop's
+        // own test can then run on the twin
+        let zero_k = |r: Ref| matches!(t.inst(r).op, Op::KNum(z) if z == 0.0);
+        let sign = (0..l).find_map(|j| match t.insts[j].op {
+            Op::Guard { cmp: Cmp::Lt, a, b, .. } if zero_k(a) && b == step => Some(true),
+            Op::Guard { cmp: Cmp::Lt, a, b, .. } if a == step && zero_k(b) => Some(false),
+            _ => None,
+        });
+        let back = match t.insts[p].op {
+            Op::Phi { back, .. } => back,
+            _ => continue,
+        };
+        let loop_guard = (l + 1..n).find(|&j| match t.insts[j].op {
+            Op::Guard { cmp: Cmp::Le, a, b, .. } => (sign == Some(true) && a == back && b == limit) || (sign == Some(false) && a == limit && b == back),
+            _ => false,
+        });
+        // (not in loops with data-dependent branches: iterations through
+        // side traces hand the counter back in its stack slot, and the
+        // conversions both ways would sit on that path)
+        let branchy = (l + 1..n).any(|j| match t.insts[j].op {
+            Op::Guard { cmp, a, b, .. } => Some(j) != loop_guard && cmp != Cmp::ULt && (t.ty(a) == IrType::Number || t.ty(b) == IrType::Number),
+            _ => false,
+        });
+        let control = sign.is_some() && loop_guard.is_some() && !branchy && std::env::var_os("LUAU_TRACE_NOICTL").is_none();
+        if users.is_empty() && !control {
             continue;
         }
         let mut pre_new = Vec::new();
@@ -199,7 +223,7 @@ pub fn int_induction(t: &mut Trace) -> bool {
                 repl.push((u, r));
             }
         }
-        if repl.is_empty() {
+        if repl.is_empty() && !control {
             continue;
         }
         // the float values themselves (in slots, read by exits): the
@@ -219,12 +243,44 @@ pub fn int_induction(t: &mut Trace) -> bool {
         for &(a, c) in &floats {
             map[a.index()] = Ref(c as u32);
         }
+        // the loop's test on the twin: i <= limit is i <= floor(limit) for
+        // an integer i (>= / ceil going down); the counter's float values
+        // are the twin's converted (the float counter then dies)
+        let mut after_back: Vec<usize> = Vec::new();
+        if control {
+            use luau_common::bytecode::BuiltinFunction as B;
+            let up = sign == Some(true);
+            let lf = push(t, Op::Math1(if up { B::MathFloor as u8 } else { B::MathCeil as u8 }, limit), IrType::Number);
+            let ilim = push(t, Op::NumToI32 { a: Ref(lf as u32), snap }, IrType::I32);
+            pre_new.extend([lf, ilim]);
+            let g = loop_guard.unwrap();
+            if let Op::Guard { snap: gs, .. } = t.insts[g].op {
+                t.insts[g].op = if up {
+                    Op::Guard { cmp: Cmp::Le, a: Ref(ib as u32), b: Ref(ilim as u32), snap: gs }
+                } else {
+                    Op::Guard { cmp: Cmp::Le, a: Ref(ilim as u32), b: Ref(ib as u32), snap: gs }
+                };
+            }
+            let fp = push(t, Op::I32ToNum(Ref(ip as u32)), IrType::Number);
+            head_new.push(fp);
+            let fb = push(t, Op::I32ToNum(Ref(ib as u32)), IrType::Number);
+            body_new.retain(|&x| x != ib);
+            after_back.extend([ib, fb]);
+            map.resize(t.insts.len(), Ref(0));
+            for (k, m) in map.iter_mut().enumerate() {
+                if k >= n && m.0 == 0 {
+                    *m = Ref(k as u32);
+                }
+            }
+            map[p] = Ref(fp as u32);
+            map[back.index()] = Ref(fb as u32);
+        }
         changed = true;
         super::util::rewrite(t, &map);
         // order: pre-loop, new pre-loop, Loop, PHIs, the twin, its uses,
         // body, its back value
         let total = t.insts.len();
-        let orig: Vec<usize> = (0..total).filter(|i| !pre_new.contains(i) && !head_new.contains(i) && !body_new.contains(i) && *i != ip).collect();
+        let orig: Vec<usize> = (0..total).filter(|i| !pre_new.contains(i) && !head_new.contains(i) && !body_new.contains(i) && !after_back.contains(i) && *i != ip).collect();
         let mut order: Vec<usize> = orig.iter().copied().filter(|&i| i < l).collect();
         order.extend(pre_new.iter().copied());
         order.push(l);
@@ -233,7 +289,14 @@ pub fn int_induction(t: &mut Trace) -> bool {
         order.extend(body[..lead].iter().copied());
         order.push(ip);
         order.extend(head_new.iter().copied());
-        order.extend(body[lead..].iter().copied());
+        for &i in &body[lead..] {
+            order.push(i);
+            if i == back.index() {
+                // (right after the float increment: exits from here on
+                // name its value)
+                order.extend(after_back.iter().copied());
+            }
+        }
         order.extend(body_new.iter().copied());
         super::hoist_consts::reorder(t, &order);
         // (one counter per pass: indices moved)

@@ -1386,9 +1386,15 @@ impl Recorder {
                 self.b.off = saved;
             } else {
                 self.ustores = true;
-                let buf = Box::leak(vec![0u64; 2].into_boxed_slice()).as_mut_ptr() as usize;
                 let snap = self.b.snapshot();
-                self.b.emit(Op::UStore { cl: clr, idx: bb as u8, v, buf, snap }, IrType::Nil);
+                if self.b.trace.ty(v).is_gc() {
+                    // (the helper does the write barrier)
+                    let buf = Box::leak(vec![0u64; 2].into_boxed_slice()).as_mut_ptr() as usize;
+                    self.b.emit(Op::UStore { cl: clr, idx: bb as u8, v, buf, snap }, IrType::Nil);
+                } else {
+                    let p = self.b.emit(Op::UPtr { cl: clr, idx: bb as u8, stack: STACK_WINDOW as u16, snap }, IrType::Ptr);
+                    self.b.emit(Op::XStore { p, v }, IrType::Nil);
+                }
             }
         } else if o(O::PrepVarargs) {
             // (an inlined vararg callee's first instruction: its frame
@@ -1555,7 +1561,14 @@ impl Recorder {
             } else {
                 let ty = IrType::of_tag((*val).tt).ok_or(unsupported_type("upvalue type"))?;
                 let snap = self.b.snapshot();
-                let v = self.b.emit(Op::ULoad { cl: clr, idx: bb as u8, by_ref, stack: STACK_WINDOW as u16, snap }, ty);
+                let v = if by_ref {
+                    // through the upvalue's value pointer (shared with
+                    // stores: forwarding sees them)
+                    let p = self.b.emit(Op::UPtr { cl: clr, idx: bb as u8, stack: STACK_WINDOW as u16, snap }, IrType::Ptr);
+                    self.b.emit(Op::XLoad { p, snap }, ty)
+                } else {
+                    self.b.emit(Op::ULoad { cl: clr, idx: bb as u8, by_ref, stack: STACK_WINDOW as u16, snap }, ty)
+                };
                 self.b.set_slot(a, v);
             }
         } else if o(O::GetImport) {
@@ -3113,7 +3126,7 @@ pub(crate) fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *v = rm(*v);
         }
         GuardPlainTable { t, .. } => *t = rm(*t),
-        ULoad { cl, .. } | ClEnv { cl } | GuardUvSlot { cl, .. } => *cl = rm(*cl),
+        ULoad { cl, .. } | ClEnv { cl } | GuardUvSlot { cl, .. } | UPtr { cl, .. } => *cl = rm(*cl),
         HRef { t, k, .. } => {
             *t = rm(*t);
             *k = rm(*k);
@@ -3209,6 +3222,7 @@ pub(crate) fn set_snapshot(op: &mut Op, s: SnapId) {
         | VargLoad { snap, .. }
         | CloseUpvals { snap, .. }
         | CallC { snap, .. }
+        | UPtr { snap, .. }
         | GuardTop { snap, .. }
         | UStore { snap, .. } => *snap = s,
         _ => {}

@@ -36,6 +36,8 @@ enum Kind {
     Env,
     /// never changes
     Fixed,
+    /// an upvalue's value pointer (changes when upvalues close)
+    Upval,
 }
 
 pub fn run(t: &mut Trace) -> bool {
@@ -59,8 +61,10 @@ pub fn run(t: &mut Trace) -> bool {
         let layout = t.insts[i].moves_tables() || matches!(op, Op::Builtin { bfid, .. } if bfid == B::Rawset as u8);
         let meta = is_call || matches!(op, Op::Builtin { bfid, .. } if bfid == B::Setmetatable as u8);
         let nil_store = matches!(op, Op::XStore { v, .. } if t.ty(resolve(&map, v)) == IrType::Nil) || layout;
-        if layout || meta || nil_store || is_call {
+        let closes = is_call || matches!(op, Op::CloseUpvals { .. });
+        if layout || meta || nil_store || closes {
             seen.retain(|_, &mut (_, k)| match k {
+                Kind::Upval => !closes,
                 Kind::Layout => !layout,
                 Kind::Value => !(layout || nil_store),
                 Kind::Meta => !(meta || layout),
@@ -78,6 +82,7 @@ pub fn run(t: &mut Trace) -> bool {
             Op::GuardCFunc { f, fp, .. } => Some((format!("CFunc {} {}", r(f), fp), Kind::Fixed)),
             Op::ULoad { cl, idx, by_ref: false, .. } => Some((format!("UVal {} {} {:?}", r(cl), idx, ty), Kind::Fixed)),
             Op::GuardFlag { p, off, .. } => Some((format!("Flag {} {}", r(p), off), Kind::Env)),
+            Op::UPtr { cl, idx, stack, .. } => Some((format!("UPtr {} {} {}", r(cl), idx, stack), Kind::Upval)),
             // (sizes change only when storage moves; a comparison of the
             // same values holds again)
             Op::ASize(tb) => Some((format!("ASize {}", r(tb)), Kind::Layout)),

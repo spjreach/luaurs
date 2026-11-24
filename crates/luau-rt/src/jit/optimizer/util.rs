@@ -107,6 +107,7 @@ pub fn map_op(op: &Op, map: &[Ref]) -> Op {
         Op::ULoad { cl, idx, by_ref, stack, snap } => Op::ULoad { cl: r(*cl), idx: *idx, by_ref: *by_ref, stack: *stack, snap: *snap },
         Op::GuardUvSlot { cl, idx, slot, snap } => Op::GuardUvSlot { cl: r(*cl), idx: *idx, slot: *slot, snap: *snap },
         Op::ClEnv { cl } => Op::ClEnv { cl: r(*cl) },
+        Op::UPtr { cl, idx, stack, snap } => Op::UPtr { cl: r(*cl), idx: *idx, stack: *stack, snap: *snap },
         Op::GuardProto { f, p, snap } => Op::GuardProto { f: r(*f), p: r(*p), snap: *snap },
         Op::GuardFlag { p, off, snap } => Op::GuardFlag { p: r(*p), off: *off, snap: *snap },
         Op::Loop => Op::Loop,

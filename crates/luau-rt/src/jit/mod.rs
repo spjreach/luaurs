@@ -541,8 +541,15 @@ fn root_facts(t: &mut trace::Trace) {
     for x in &t.insts[l + 1..] {
         match x.op {
             Op::Phi { pre, .. } => {
-                if let Op::SLoad { slot, .. } = t.inst(pre).op {
-                    phis.push(slot);
+                match t.inst(pre).op {
+                    Op::SLoad { slot, .. } => phis.push(slot),
+                    // (a loop counter's integer twin: its slot)
+                    Op::NumToI32 { a, .. } => {
+                        if let Op::SLoad { slot, .. } = t.inst(a).op {
+                            phis.push(slot);
+                        }
+                    }
+                    _ => {}
                 }
             }
             Op::Nop => {}

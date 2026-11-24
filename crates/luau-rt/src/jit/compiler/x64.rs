@@ -1136,6 +1136,26 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 a.jcc(Cond::NE, s);
                 load_value(&mut a, dst, inst.ty, R::Rcx, 0)?;
             }
+            Op::UPtr { cl, idx, stack, snap } => {
+                let s = stub(*snap);
+                let disp = OFF_CL_UPREFS + *idx as i32 * TV;
+                a.mov_rr(R::Rcx, g(*cl)?);
+                a.cmp32_mi(R::Rcx, disp + OFF_TT, LUA_TUPVAL as i32);
+                a.jcc(Cond::NE, s);
+                a.load(R::Rcx, R::Rcx, disp);
+                a.load(R::Rcx, R::Rcx, OFF_UV_V);
+                // not open on a slot the trace may hold in a register
+                let ok = a.label();
+                a.cmp_rr(R::Rcx, R::R13);
+                a.jcc(Cond::B, ok);
+                a.lea(R::Rax, R::R13, *stack as i32 * TV);
+                a.cmp_rr(R::Rcx, R::Rax);
+                a.jcc(Cond::B, s);
+                a.bind(ok);
+                if let Home::G(d) = dst {
+                    a.mov_rr(d, R::Rcx);
+                }
+            }
             Op::GuardFlag { p, off, snap } => {
                 a.cmp8_mi(g(*p)?, *off, 0);
                 a.jcc(Cond::E, stub(*snap));
