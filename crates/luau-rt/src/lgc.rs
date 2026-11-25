@@ -610,6 +610,7 @@ unsafe fn shrinkbuffersfull(L: *mut lua_State) {
 
 /// `luaC_freeall`: frees every collectable object (state shutdown).
 pub unsafe fn luaC_freeall(L: *mut lua_State) {
+    GC_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let g = (*L).global;
     crate::lmem::luaM_visitgco(L, &mut |page, o| {
         (*g).freepage = page;
@@ -695,7 +696,13 @@ unsafe fn clearupvals(L: *mut lua_State) -> usize {
     work
 }
 
+/// Counts atomic phases (and state shutdowns) of every state: an object
+/// can only be freed by a sweep after one, so a pointer seen alive with
+/// the count unchanged is still alive (caches of interned strings use it).
+pub static GC_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 unsafe fn atomic(L: *mut lua_State) -> usize {
+    GC_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let g = (*L).global;
     let mut work = 0;
     work += remarkupvals(g);

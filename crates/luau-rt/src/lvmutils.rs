@@ -393,10 +393,54 @@ pub unsafe fn luaV_equalval(L: *mut lua_State, t1: *const TValue, t2: *const TVa
     (!l_isfalse((*L).top)) as i32
 }
 
+/// The run of strings and numbers ending at `top - 1` (at most `total`)
+/// joined in a stack buffer, numbers formatted straight into it (no
+/// interned string per number), the result in its first slot: how many
+/// operands it took (None: does not fit, nothing done).
+#[inline]
+unsafe fn concat_direct(L: *mut lua_State, top: StkId, total: i32) -> Option<i32> {
+    let mut n = 1;
+    while n < total {
+        let o = top.sub(n as usize + 1);
+        if !(ttisstring(o) || ttisnumber(o)) {
+            break;
+        }
+        n += 1;
+    }
+    let mut buf = std::mem::MaybeUninit::<[u8; LUA_BUFFERSIZE]>::uninit();
+    let bp = buf.as_mut_ptr() as *mut u8;
+    let mut off = 0usize;
+    let mut i = n;
+    while i > 0 {
+        let o = top.sub(i as usize);
+        let mut nb = crate::lnumutils::NumBuf::new();
+        let s: &[u8] = if ttisstring(o) { sbytes(tsvalue(o)) } else { crate::lnumutils::luai_num2buf(&mut nb, nvalue(o)) };
+        if s.len() > LUA_BUFFERSIZE - off {
+            return None;
+        }
+        std::ptr::copy_nonoverlapping(s.as_ptr(), bp.add(off), s.len());
+        off += s.len();
+        i -= 1;
+    }
+    setsvalue(top.sub(n as usize), luaS_newlstr(L, std::slice::from_raw_parts(bp, off)));
+    Some(n)
+}
+
 pub unsafe fn luaV_concat(L: *mut lua_State, mut total: i32, mut last: i32) {
     loop {
         let top = (*L).base.add(last as usize + 1);
         let mut n = 2;
+        let strnum = |o: StkId| ttisstring(o) || ttisnumber(o);
+        if strnum(top.sub(2)) && strnum(top.sub(1)) && !(ttisstring(top.sub(1)) && (*tsvalue(top.sub(1))).len == 0) {
+            if let Some(k) = concat_direct(L, top, total) {
+                total -= k - 1;
+                last -= k - 1;
+                if total <= 1 {
+                    break;
+                }
+                continue;
+            }
+        }
         if !(ttisstring(top.sub(2)) || ttisnumber(top.sub(2))) || !tostring(L, top.sub(1)) {
             if !call_binTM(L, top.sub(2), top.sub(1), top.sub(2), TM_CONCAT) {
                 luaG_concaterror(L, top.sub(2), top.sub(1));

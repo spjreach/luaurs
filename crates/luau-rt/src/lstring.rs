@@ -177,7 +177,9 @@ pub unsafe fn luaS_newlstr(L: *mut lua_State, s: &[u8]) -> *mut TString {
     let saltedh = salthash(h, (*g).strt.saltmult, (*g).strt.saltadd);
     let mut el = *(*g).strt.hash.add(tobucket(saltedh, (*g).strt.hashshift));
     while !el.is_null() {
-        if (*el).len as usize == s.len() && TString::bytes(el) == s {
+        // (the stored hash first: most other strings in the bucket differ
+        // there, no byte compare)
+        if (*el).hash == h && (*el).len as usize == s.len() && TString::bytes(el) == s {
             if isdead(g, el as *mut GCObject) {
                 changewhite(el as *mut GCObject);
             }

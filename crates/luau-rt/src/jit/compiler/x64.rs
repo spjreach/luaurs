@@ -821,7 +821,10 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 }
                 let live = live_across(i);
                 let (ra, b, c) = (*ra - *off, *b - *off, *c - *off);
-                call_out(&mut a, &live, helpers::concat as usize, &[Arg::L, Arg::Imm(ra as u64), Arg::Imm(b as u64), Arg::Imm(c as u64), Arg::Imm(*savedpc as u64), Arg::Imm(*frames as u64)]);
+                // (two operands: a per-site cache of results, see
+                // `helpers::concat`)
+                let cache = if c == b + 1 { Box::leak(Box::new(helpers::ConcatCache::new())) as *mut _ as u64 } else { 0 };
+                call_out(&mut a, &live, helpers::concat as usize, &[Arg::L, Arg::Imm(ra as u64 | (b as u64) << 16 | (c as u64) << 32), Arg::Imm(*savedpc as u64), Arg::Imm(*frames as u64), Arg::Imm(cache)]);
                 a.load(R::R13, R::R12, OFF_BASE);
             }
             Op::UStore { cl, idx, v, buf, snap } => {
@@ -1951,13 +1954,56 @@ mod helpers {
         crate::lmathlib::luai_numpow(a, b)
     }
 
+    /// Results of a two-operand CONCAT site: (operand values, their tags,
+    /// the result string), direct-mapped. Owns nothing: an entry counts
+    /// only while `GC_EPOCH` is the one it was filled in (the operand and
+    /// result strings, alive then, are still alive and at the same
+    /// addresses; numbers are keyed by their bits).
+    #[repr(C)]
+    pub struct ConcatCache {
+        e: [[u64; 4]; 256],
+    }
+
+    impl ConcatCache {
+        pub fn new() -> Self {
+            ConcatCache { e: [[0; 4]; 256] }
+        }
+    }
+
     /// CONCAT on the trace frame's slots b..c into a.
-    pub unsafe extern "sysv64" fn concat(L: *mut lua_State, a: i64, b: i64, c: i64, savedpc: *const u32, frames: *const Vec<crate::jit::snapshots::SnapFrame>) {
+    /// (`abc`: a | b << 16 | c << 32)
+    pub unsafe extern "sysv64" fn concat(L: *mut lua_State, abc: u64, savedpc: *const u32, frames: *const Vec<crate::jit::snapshots::SnapFrame>, cache: *mut ConcatCache) {
+        let (a, b, c) = ((abc & 0xffff) as i64, ((abc >> 16) & 0xffff) as i64, (abc >> 32) as i64);
+        let mut slot = None;
+        if !cache.is_null() {
+            // (strings and numbers only: never metamethods or errors)
+            let base = (*L).base;
+            let (x, y) = (base.add(b as usize), base.add(c as usize));
+            let sn = |tt: i32| tt == LUA_TSTRING || tt == LUA_TNUMBER;
+            if sn((*x).tt) && sn((*y).tt) {
+                let kx = std::ptr::read(x as *const u64);
+                let ky = std::ptr::read(y as *const u64);
+                let epoch = crate::lgc::GC_EPOCH.load(std::sync::atomic::Ordering::Relaxed);
+                let meta = (epoch << 16) | (((*x).tt as u64) << 8) | (*y).tt as u64;
+                let h = ((kx ^ ky.rotate_left(29)).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 56) as usize;
+                let e = &mut (*cache).e[h];
+                if e[0] == kx && e[1] == ky && e[2] == meta {
+                    setsvalue(base.add(a as usize), e[3] as *mut TString);
+                    return;
+                }
+                slot = Some((h, kx, ky, meta));
+            }
+        }
         let ci0 = push_virtual(L, frames);
         (*(*L).ci).savedpc = savedpc;
         crate::lvmutils::luaV_concat(L, (c - b + 1) as i32, c as i32);
         let base = (*L).base;
         setobj(base.add(a as usize), base.add(b as usize));
+        if let Some((h, kx, ky, meta)) = slot {
+            // (the epoch read before: a collection during the concat
+            // leaves an entry that never matches)
+            (*cache).e[h] = [kx, ky, meta, tsvalue(base.add(b as usize)) as u64];
+        }
         pop_virtual(L, ci0);
     }
 

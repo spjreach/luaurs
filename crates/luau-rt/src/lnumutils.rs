@@ -427,6 +427,17 @@ pub fn luai_num2str<S: NumSink>(out: &mut S, n: f64) {
         out.push(b'0');
         return;
     }
+    // integers below 2^53: their digits (doubles there are at most 1
+    // apart, so no shorter digit string rounds to the same value - the
+    // shortest representation, zeros padded, is the integer itself)
+    if (1023..1023 + 53).contains(&exponent) {
+        let shift = 1075 - exponent;
+        let m = fraction | (1u64 << 52);
+        if m & ((1u64 << shift) - 1) == 0 {
+            luai_int2str(out, (m >> shift) as i64);
+            return;
+        }
+    }
     let (s, k) = schubfach(exponent, fraction);
     let mut decbuf = [0u8; 40];
     let decend = 20;
@@ -482,22 +493,35 @@ pub fn luai_num2str<S: NumSink>(out: &mut S, n: f64) {
 
 /// `luai_int2str`.
 pub fn luai_int2str<S: NumSink>(out: &mut S, l: i64) {
-    let mut tmp = [0u8; 24];
-    let mut i = tmp.len();
+    const PAIRS: &[u8; 200] = b"00010203040506070809101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899";
+    // (only `i..` is written and read: not zero-filled)
+    let mut tmp = std::mem::MaybeUninit::<[u8; 24]>::uninit();
+    let p = tmp.as_mut_ptr() as *mut u8;
+    let mut i = 24usize;
     let mut v = l.unsigned_abs();
-    loop {
-        i -= 1;
-        tmp[i] = b'0' + (v % 10) as u8;
-        v /= 10;
-        if v == 0 {
-            break;
+    unsafe {
+        while v >= 100 {
+            let d = (v % 100) as usize * 2;
+            v /= 100;
+            i -= 2;
+            *p.add(i) = PAIRS[d];
+            *p.add(i + 1) = PAIRS[d + 1];
         }
+        if v >= 10 {
+            let d = v as usize * 2;
+            i -= 2;
+            *p.add(i) = PAIRS[d];
+            *p.add(i + 1) = PAIRS[d + 1];
+        } else {
+            i -= 1;
+            *p.add(i) = b'0' + v as u8;
+        }
+        if l < 0 {
+            i -= 1;
+            *p.add(i) = b'-';
+        }
+        out.extend_from_slice(std::slice::from_raw_parts(p.add(i), 24 - i));
     }
-    if l < 0 {
-        i -= 1;
-        tmp[i] = b'-';
-    }
-    out.extend_from_slice(&tmp[i..]);
 }
 
 // ---------------------------------------------------------------------------
