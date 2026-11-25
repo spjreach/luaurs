@@ -593,6 +593,54 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 let p = g(*p)?;
                 store_value(&mut a, &home, t, *v, p, 0)?;
             }
+            Op::Select { cmp, a: x, b: y, t: tv, f: fv } => {
+                // (a native branch: predicted like the interpreter's)
+                if let Home::F(d) = dst {
+                    let (x, y, tv, fv) = (f(*x)?, f(*y)?, f(*tv)?, f(*fv)?);
+                    let no = a.label();
+                    let done = a.label();
+                    match cmp {
+                        Cmp::Lt => {
+                            a.ucomisd(y, x);
+                            a.jcc(Cond::BE, no);
+                        }
+                        Cmp::Le => {
+                            a.ucomisd(y, x);
+                            a.jcc(Cond::B, no);
+                        }
+                        Cmp::Nlt => {
+                            a.ucomisd(y, x);
+                            a.jcc(Cond::A, no);
+                        }
+                        Cmp::Nle => {
+                            a.ucomisd(y, x);
+                            a.jcc(Cond::AE, no);
+                        }
+                        Cmp::Eq => {
+                            a.ucomisd(x, y);
+                            a.jcc(Cond::NE, no);
+                            a.jcc(Cond::P, no);
+                        }
+                        Cmp::Ne => {
+                            let yes = a.label();
+                            a.ucomisd(x, y);
+                            a.jcc(Cond::P, yes);
+                            a.jcc(Cond::E, no);
+                            a.bind(yes);
+                        }
+                        Cmp::ULt => return Err("unsigned select of numbers".into()),
+                    }
+                    if d != tv {
+                        a.movapd(d, tv);
+                    }
+                    a.jmp(done);
+                    a.bind(no);
+                    if d != fv {
+                        a.movapd(d, fv);
+                    }
+                    a.bind(done);
+                }
+            }
             Op::Guard { cmp, a: x, b: y, snap } => {
                 let s = stub(*snap);
                 let (tx, ty) = (t.ty(*x), t.ty(*y));

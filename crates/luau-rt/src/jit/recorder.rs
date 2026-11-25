@@ -26,6 +26,9 @@ use super::snapshots::{SnapEntry, SnapFrame, Snapshot};
 use super::trace::{AbortReason, Trace, TraceId};
 use crate::lobject::*;
 use luau_common::bytecode::{get_op_length, Opcode as O};
+
+/// Instructions an if-converted branch may span (both arms, nested ones).
+const IFCONV_MAX: u32 = 24;
 use std::collections::{BTreeMap, HashMap};
 
 pub enum Step {
@@ -112,6 +115,9 @@ pub struct Recorder {
     /// where the other direction goes (set at the next step, which shows
     /// the direction taken): a failed comparison has done nothing else
     cmp_fix: Option<(u32, u32, Vec<SnapId>)>,
+    /// an if-converted branch: its arms run in the interpreter unrecorded
+    /// until this pc (where they join)
+    skip_to: Option<u32>,
 }
 
 /// `Snapshot::top` of an exit that keeps the L->top the trace left (after
@@ -200,6 +206,7 @@ impl Recorder {
             builtin_call: None,
             deferred_call: None,
             cmp_fix: None,
+            skip_to: None,
         };
         // snapshot 0: the entry (a trace that doesn't loop exits there from
         // its entry checks)
@@ -337,6 +344,13 @@ impl Recorder {
     /// Records the instruction at `pc` (about to execute, with the frame's
     /// stack at `base`).
     pub unsafe fn step(&mut self, pc: u32, base: StkId) -> Step {
+        if let Some(j) = self.skip_to {
+            if pc != j {
+                // (an if-converted arm: its effect is in the trace already)
+                return Step::Continue;
+            }
+            self.skip_to = None;
+        }
         if let Some((fall, jump, snaps)) = self.cmp_fix.take() {
             let other = if pc == jump { Some(fall) } else if pc == fall { Some(jump) } else { None };
             if let Some(o) = other {
@@ -833,6 +847,9 @@ impl Recorder {
             } else if ta != LUA_TNUMBER || tb != LUA_TNUMBER {
                 return Err(unsupported_type("comparison of non-numbers"));
             } else {
+                if self.if_convert(pc, base)? {
+                    return Ok(());
+                }
                 let (va, vb) = ((*base.add(a)).value.n, (*base.add(rb)).value.n);
                 let x = self.read(a, base)?;
                 let y = self.read(rb, base)?;
@@ -851,6 +868,9 @@ impl Recorder {
         } else if o(O::JumpXEqKN) {
             if (*base.add(a)).tt != LUA_TNUMBER {
                 return Err(unsupported_type("comparison of a non-number"));
+            }
+            if self.if_convert(pc, base)? {
+                return Ok(());
             }
             let k = self.knum((aux & 0xffffff) as usize)?;
             let kval = match self.b.trace.insts[k.index()].op {
@@ -2668,6 +2688,205 @@ impl Recorder {
         Ok(out)
     }
 
+    /// If-conversion: the numeric comparison jump at `pc` starting a short
+    /// forward branch (if / else / elseif) whose arms only move numbers
+    /// and do arithmetic on them is recorded as both arms, every slot they
+    /// write merged with a `Select` on the comparison - no guard, so no
+    /// exit whichever way it goes. The interpreter then runs the arm the
+    /// value takes unrecorded up to the join (`skip_to`). Returns false
+    /// (nothing emitted) when the branch isn't one of those.
+    unsafe fn if_convert(&mut self, pc: u32, base: StkId) -> R<bool> {
+        if self.b.forced.is_some() || std::env::var_os("LUAU_TRACE_NOIFCONV").is_some() {
+            return Ok(false);
+        }
+        // a dry run first: shape and types, nothing emitted
+        let mut budget = IFCONV_MAX;
+        let Some(join) = self.ifc_branch(pc, base, &mut HashMap::new(), None, &mut budget)? else {
+            return Ok(false);
+        };
+        let mut env: HashMap<usize, Ref> = HashMap::new();
+        let mut budget = IFCONV_MAX;
+        let mut out = Vec::new();
+        let j2 = self.ifc_branch(pc, base, &mut env, Some(&mut out), &mut budget)?;
+        debug_assert_eq!(j2, Some(join));
+        let mut slots: Vec<usize> = env.keys().copied().collect();
+        slots.sort_unstable();
+        for s in slots {
+            self.b.set_slot(s, env[&s]);
+        }
+        self.cmp_fix = None;
+        self.skip_to = Some(join);
+        Ok(true)
+    }
+
+    /// One conditional jump at `pc` (see `if_convert`): merges its arms
+    /// into `env` (slot -> value; `emit` None: a dry run, values are
+    /// placeholders), returning where they join (None: not convertible).
+    unsafe fn ifc_branch(&mut self, pc: u32, base: StkId, env: &mut HashMap<usize, Ref>, mut emit: Option<&mut Vec<()>>, budget: &mut u32) -> R<Option<u32>> {
+        let code = (*self.cur_proto()).code;
+        let insn = *code.add(pc as usize);
+        let aux = *code.add(pc as usize + 1);
+        let op = op_of(insn);
+        let o = |x: O| op == x as u8;
+        let fall = pc + op_len(op) as u32;
+        let target = (pc as i64 + 1 + d_of(insn) as i64) as u32;
+        if target <= fall {
+            return Ok(None);
+        }
+        // the comparison: (cmp that makes the jump go, a, b)
+        let a = a_of(insn);
+        let dry = emit.is_none();
+        let (cmp, x, y) = if o(O::JumpXEqKN) {
+            let kidx = (aux & 0xffffff) as usize;
+            let kv = (*self.cur_proto()).k.add(kidx);
+            if (*kv).tt != LUA_TNUMBER {
+                return Ok(None);
+            }
+            let not = aux >> 31 != 0;
+            let Some(xv) = self.ifc_num(a, base, env, dry)? else { return Ok(None) };
+            let k = if dry { Ref(0) } else { self.knum(kidx)? };
+            (if not { Cmp::Ne } else { Cmp::Eq }, xv, k)
+        } else {
+            let rb = aux as usize;
+            let Some(xv) = self.ifc_num(a, base, env, dry)? else { return Ok(None) };
+            let Some(yv) = self.ifc_num(rb, base, env, dry)? else { return Ok(None) };
+            let cmp = if o(O::JumpIfEq) {
+                Cmp::Eq
+            } else if o(O::JumpIfNotEq) {
+                Cmp::Ne
+            } else if o(O::JumpIfLe) {
+                Cmp::Le
+            } else if o(O::JumpIfNotLe) {
+                Cmp::Nle
+            } else if o(O::JumpIfLt) {
+                Cmp::Lt
+            } else if o(O::JumpIfNotLt) {
+                Cmp::Nlt
+            } else {
+                return Ok(None);
+            };
+            (cmp, xv, yv)
+        };
+        // the fall-through arm runs to the target; ending in a jump past
+        // it, the target starts the other arm
+        let mut fenv = env.clone();
+        let Some(fend) = self.ifc_arm(fall, target, base, &mut fenv, emit.as_deref_mut(), budget)? else { return Ok(None) };
+        let mut tenv = env.clone();
+        let join = match fend {
+            Some(j) => {
+                if j <= target {
+                    return Ok(None);
+                }
+                match self.ifc_arm(target, j, base, &mut tenv, emit.as_deref_mut(), budget)? {
+                    Some(None) => j,
+                    _ => return Ok(None),
+                }
+            }
+            None => target,
+        };
+        // merge: taken -> tenv, not taken -> fenv
+        let mut slots: Vec<usize> = fenv.keys().chain(tenv.keys()).copied().collect();
+        slots.sort_unstable();
+        slots.dedup();
+        for s in slots {
+            let (tv, fv) = (tenv.get(&s).copied(), fenv.get(&s).copied());
+            if tv.is_some() && tv == fv {
+                env.insert(s, tv.unwrap());
+                continue;
+            }
+            // (a slot one arm leaves alone: its value before)
+            let Some(tv) = (match tv { Some(v) => Some(v), None => self.ifc_num(s, base, env, dry)? }) else { return Ok(None) };
+            let Some(fv) = (match fv { Some(v) => Some(v), None => self.ifc_num(s, base, env, dry)? }) else { return Ok(None) };
+            let v = if dry { Ref(0) } else { self.b.emit(Op::Select { cmp, a: x, b: y, t: tv, f: fv }, IrType::Number) };
+            env.insert(s, v);
+        }
+        Ok(Some(join))
+    }
+
+    /// Straight-line arm `pc..stop` into `env`: Some(Some(j)) when it ends
+    /// with a jump forward to `j`, Some(None) when it runs into `stop`,
+    /// None when it does something else.
+    unsafe fn ifc_arm(&mut self, mut pc: u32, stop: u32, base: StkId, env: &mut HashMap<usize, Ref>, mut emit: Option<&mut Vec<()>>, budget: &mut u32) -> R<Option<Option<u32>>> {
+        let code = (*self.cur_proto()).code;
+        let dry = emit.is_none();
+        while pc != stop {
+            if pc > stop || *budget == 0 {
+                return Ok(None);
+            }
+            *budget -= 1;
+            let insn = *code.add(pc as usize);
+            let op = op_of(insn);
+            let o = |x: O| op == x as u8;
+            let len = op_len(op) as u32;
+            let (a, bb, c) = (a_of(insn), b_of(insn), c_of(insn));
+            let kn = |me: &mut Self, k: usize| -> R<Option<Ref>> {
+                let kv = (*me.cur_proto()).k.add(k);
+                if (*kv).tt != LUA_TNUMBER {
+                    return Ok(None);
+                }
+                Ok(Some(if dry { Ref(0) } else { me.knum(k)? }))
+            };
+            let v = if o(O::Jump) {
+                let j = (pc as i64 + 1 + d_of(insn) as i64) as u32;
+                // (only as the arm's last instruction, forward)
+                return Ok(if pc + len == stop && j > stop { Some(Some(j)) } else { None });
+            } else if o(O::JumpIfEq) || o(O::JumpIfNotEq) || o(O::JumpIfLe) || o(O::JumpIfNotLe) || o(O::JumpIfLt) || o(O::JumpIfNotLt) || o(O::JumpXEqKN) {
+                // a nested branch, merged in place
+                match self.ifc_branch(pc, base, env, emit.as_deref_mut(), budget)? {
+                    Some(j) if j <= stop => {
+                        pc = j;
+                        continue;
+                    }
+                    _ => return Ok(None),
+                }
+            } else if o(O::Move) {
+                match self.ifc_num(bb, base, env, dry)? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                }
+            } else if o(O::LoadN) {
+                if dry { Ref(0) } else { self.b.knum(d_of(insn) as f64) }
+            } else if o(O::LoadK) {
+                match kn(self, d_of(insn) as usize)? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                }
+            } else if o(O::Add) || o(O::Sub) || o(O::Mul) || o(O::Div) || o(O::Mod) || o(O::IDiv) {
+                let (Some(x), Some(y)) = (self.ifc_num(bb, base, env, dry)?, self.ifc_num(c, base, env, dry)?) else { return Ok(None) };
+                if dry { Ref(0) } else { self.arith(op, x, y) }
+            } else if o(O::AddK) || o(O::SubK) || o(O::MulK) || o(O::DivK) || o(O::ModK) || o(O::IDivK) {
+                let (Some(x), Some(y)) = (self.ifc_num(bb, base, env, dry)?, kn(self, c)?) else { return Ok(None) };
+                if dry { Ref(0) } else { self.arith(op, x, y) }
+            } else if o(O::SubRk) || o(O::DivRk) {
+                let (Some(x), Some(y)) = (kn(self, bb)?, self.ifc_num(c, base, env, dry)?) else { return Ok(None) };
+                if dry { Ref(0) } else { self.arith(op, x, y) }
+            } else if o(O::Minus) {
+                let Some(x) = self.ifc_num(bb, base, env, dry)? else { return Ok(None) };
+                if dry { Ref(0) } else { self.b.emit(Op::Neg(x), IrType::Number) }
+            } else {
+                return Ok(None);
+            };
+            env.insert(a, v);
+            pc += len;
+        }
+        Ok(Some(None))
+    }
+
+    /// Slot `r` as a number at an if-converted branch: its value in the
+    /// arm so far, else the one it has now (None: not a number).
+    unsafe fn ifc_num(&mut self, r: usize, base: StkId, env: &HashMap<usize, Ref>, dry: bool) -> R<Option<Ref>> {
+        if let Some(&v) = env.get(&r) {
+            return Ok(Some(v));
+        }
+        if (*base.add(r)).tt != LUA_TNUMBER {
+            return Ok(None);
+        }
+        if dry {
+            return Ok(Some(Ref(0)));
+        }
+        Ok(Some(self.read(r, base)?))
+    }
+
     /// The snapshot of a conditional jump's comparison guard: its own (see
     /// `cmp_fix`), unless inside a metamethod (exits re-run that).
     fn cmp_snapshot(&mut self) -> SnapId {
@@ -3100,6 +3319,12 @@ pub(crate) fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
         Guard { a, b, .. } => {
             *a = rm(*a);
             *b = rm(*b);
+        }
+        Select { a, b, t, f, .. } => {
+            *a = rm(*a);
+            *b = rm(*b);
+            *t = rm(*t);
+            *f = rm(*f);
         }
         GuardTruthy { a, .. } => *a = rm(*a),
         GuardSame { a, k, .. } | GuardDiff { a, k, .. } => {

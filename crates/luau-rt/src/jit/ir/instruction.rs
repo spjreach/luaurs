@@ -67,6 +67,9 @@ pub enum Op {
     // ---- guards ---------------------------------------------------------
     /// exits through `snap` unless `cmp(a, b)` holds (numbers or I32s)
     Guard { cmp: Cmp, a: Ref, b: Ref, snap: SnapId },
+    /// numbers: `t` when `a cmp b` holds (NaN: it doesn't), else `f` (a
+    /// branch of the loop body if-converted, see `Recorder::if_convert`)
+    Select { cmp: Cmp, a: Ref, b: Ref, t: Ref, f: Ref },
     /// exits unless `a` is truthy (`want == true`) / falsy
     GuardTruthy { a: Ref, want: bool, snap: SnapId },
     /// exits unless `a` (a GC object) is the object `k`
@@ -278,6 +281,7 @@ impl Inst {
         match &self.op {
             KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop => vec![],
             Guard { a, b, .. } => vec![*a, *b],
+            Select { a, b, t, f, .. } => vec![*a, *b, *t, *f],
             GuardTruthy { a, .. } => vec![*a],
             GuardSame { a, k, .. } | GuardDiff { a, k, .. } => vec![*a, *k],
             StrCmp { a, b } => vec![*a, *b],
@@ -341,7 +345,7 @@ impl Inst {
             self.op,
             KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | Add(..) | Sub(..) | Mul(..) | Div(..) | Mod(..)
                 | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | AndI32(..) | ARef { .. } | ABase(_) | TruncI32(_) | FrameFunc | ClEnv { .. } | HSlot { .. } | Not(_) | LudToI32(_) | I32ToLud(_)
-                | VArith { .. } | VNeg(_) | VGet { .. } | VMake { .. }
+                | VArith { .. } | VNeg(_) | VGet { .. } | VMake { .. } | Select { .. }
         )
     }
 

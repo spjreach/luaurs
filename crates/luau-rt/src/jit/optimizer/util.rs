@@ -36,6 +36,7 @@ pub fn map_op(op: &Op, map: &[Ref]) -> Op {
         Op::KI32(n) => Op::KI32(*n),
         Op::SLoad { slot, guarded, snap } => Op::SLoad { slot: *slot, guarded: *guarded, snap: *snap },
         Op::Guard { cmp, a, b, snap } => Op::Guard { cmp: *cmp, a: r(*a), b: r(*b), snap: *snap },
+        Op::Select { cmp, a, b, t, f } => Op::Select { cmp: *cmp, a: r(*a), b: r(*b), t: r(*t), f: r(*f) },
         Op::GuardTruthy { a, want, snap } => Op::GuardTruthy { a: r(*a), want: *want, snap: *snap },
         Op::GuardSame { a, k, snap } => Op::GuardSame { a: r(*a), k: r(*k), snap: *snap },
         Op::GuardDiff { a, k, snap } => Op::GuardDiff { a: r(*a), k: r(*k), snap: *snap },
