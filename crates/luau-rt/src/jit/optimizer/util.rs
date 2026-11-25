@@ -37,7 +37,7 @@ pub fn map_op(op: &Op, map: &[Ref]) -> Op {
         Op::KI64(n) => Op::KI64(*n),
         Op::SLoad { slot, guarded, snap } => Op::SLoad { slot: *slot, guarded: *guarded, snap: *snap },
         Op::Guard { cmp, a, b, snap } => Op::Guard { cmp: *cmp, a: r(*a), b: r(*b), snap: *snap },
-        Op::NumToI64 { a, snap } => Op::NumToI64 { a: r(*a), snap: *snap },
+        Op::NumToI64 { a, lim, snap } => Op::NumToI64 { a: r(*a), lim: *lim, snap: *snap },
         Op::I32ToI64(a) => Op::I32ToI64(r(*a)),
         Op::NegI64(a) => Op::NegI64(r(*a)),
         Op::I64ToNum(a) => Op::I64ToNum(r(*a)),

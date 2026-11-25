@@ -334,6 +334,16 @@ pub fn int_mod_phi(t: &mut Trace) -> bool {
         if t.insts[p].ty != IrType::Number || pre.index() >= l || back.index() <= l {
             continue;
         }
+        if let Some((e, guards)) = accumulator(t, p, pre, back, l) {
+            let mut nodes = Vec::new();
+            if mod_bound(t, e, p, f64::INFINITY, l, &mut nodes, 0).is_none_or(|b| b >= EXACT) {
+                continue;
+            }
+            nodes.push(back.index());
+            let pre_guards = guards(t);
+            convert_mod_phi(t, p, pre, back, e, None, pre_guards, &nodes);
+            return true;
+        }
         let Op::Mod(e, k) = t.insts[back.index()].op else { continue };
         let Op::KNum(c) = t.inst(k).op else { continue };
         if !(2.0..2147483648.0).contains(&c) || c.fract() != 0.0 {
@@ -344,7 +354,7 @@ pub fn int_mod_phi(t: &mut Trace) -> bool {
         if b >= EXACT {
             continue;
         }
-        convert_mod_phi(t, p, pre, back, e, c as i64, &nodes);
+        convert_mod_phi(t, p, pre, back, e, Some(c as i64), Vec::new(), &nodes);
         return true;
     }
     false
@@ -376,23 +386,157 @@ fn mod_bound(t: &Trace, v: Ref, p: usize, c: f64, l: usize, nodes: &mut Vec<usiz
     Some(b)
 }
 
-fn convert_mod_phi(t: &mut Trace, p: usize, pre: Ref, back: Ref, e: Ref, c: i64, nodes: &[usize]) {
+/// An integer accumulator: PHI `p` with back value `p + e` / `e + p` /
+/// `p - e`, `e` linear in the loop counter (a * i + b, integer constants)
+/// of a loop whose test runs on the counter's I32 twin. Returns `e` and a
+/// builder of the pre-loop guards proving every partial sum stays below
+/// 2^52: |pre| < 2^51 and, for s = |start| and s = |limit|, the sum of at
+/// most 2s + 1 terms each at most A s + B (A = |a|, B = |b|) - at most
+/// (3A + 2B) s^2 + A + 3B - below 2^51 (checked on s^2: no abs needed).
+#[allow(clippy::type_complexity)]
+fn accumulator(t: &Trace, p: usize, pre: Ref, back: Ref, l: usize) -> Option<(Ref, Box<dyn Fn(&mut Trace) -> Vec<usize>>)> {
+    let e = match t.insts[back.index()].op {
+        Op::Add(a, b) if a.index() == p => b,
+        Op::Add(a, b) if b.index() == p => a,
+        Op::Sub(a, b) if a.index() == p => b,
+        _ => return None,
+    };
+    // e = a * i + b
+    fn lin(t: &Trace, v: Ref, ip: &mut Option<usize>, depth: u32) -> Option<(f64, f64)> {
+        if depth > 6 {
+            return None;
+        }
+        let k = |r: Ref| match t.inst(r).op {
+            Op::KNum(c) if c.fract() == 0.0 && c.abs() < 65536.0 => Some(c),
+            _ => None,
+        };
+        Some(match t.inst(v).op {
+            Op::KNum(c) if c.fract() == 0.0 && c.abs() < 65536.0 => (0.0, c),
+            Op::I32ToNum(w) if matches!(t.inst(w).op, Op::Phi { .. }) => {
+                if ip.is_some_and(|x| x != w.index()) {
+                    return None;
+                }
+                *ip = Some(w.index());
+                (1.0, 0.0)
+            }
+            Op::Mul(x, y) if k(y).is_some() => {
+                let (a, b) = lin(t, x, ip, depth + 1)?;
+                (a * k(y)?, b * k(y)?)
+            }
+            Op::Mul(y, x) if k(y).is_some() => {
+                let (a, b) = lin(t, x, ip, depth + 1)?;
+                (a * k(y)?, b * k(y)?)
+            }
+            Op::Add(x, y) => {
+                let (a1, b1) = lin(t, x, ip, depth + 1)?;
+                let (a2, b2) = lin(t, y, ip, depth + 1)?;
+                (a1 + a2, b1 + b2)
+            }
+            Op::Sub(x, y) => {
+                let (a1, b1) = lin(t, x, ip, depth + 1)?;
+                let (a2, b2) = lin(t, y, ip, depth + 1)?;
+                (a1 - a2, b1 - b2)
+            }
+            Op::Neg(x) => {
+                let (a, b) = lin(t, x, ip, depth + 1)?;
+                (-a, -b)
+            }
+            _ => return None,
+        })
+    }
+    let mut ipo = None;
+    let (ca, cb) = lin(t, e, &mut ipo, 0)?;
+    let (ca, cb) = (ca.abs(), cb.abs());
+    if ca > 65536.0 || cb > 65536.0 * 65536.0 {
+        return None;
+    }
+    // the counter: its twin's start and the loop test's limit
+    let ip = match ipo {
+        Some(ip) => ip,
+        // (a constant step: the loop's counter bounds the trip count)
+        None => (l + 1..t.insts.len()).take_while(|&j| matches!(t.insts[j].op, Op::Phi { .. } | Op::Nop)).find(|&j| t.insts[j].ty == IrType::I32)?,
+    };
+    let Op::Phi { pre: ipre, back: ib } = t.insts[ip].op else { return None };
+    let Op::NumToI32 { a: start, .. } = t.inst(ipre).op else { return None };
+    let limit = (l + 1..t.insts.len()).find_map(|j| match t.insts[j].op {
+        Op::Guard { cmp: Cmp::Le, a, b, .. } if a == ib || b == ib => {
+            let lim = if a == ib { b } else { a };
+            match t.inst(lim).op {
+                Op::NumToI32 { a: f, .. } => match t.inst(f).op {
+                    Op::Math1(_, x) => Some(x),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+        _ => None,
+    })?;
+    if start.index() >= l || limit.index() >= l {
+        return None;
+    }
+    let coef = 3.0 * ca + 2.0 * cb;
+    let cst = ca + 3.0 * cb;
+    let half = 2251799813685248.0; // 2^51
+    Some((
+        e,
+        Box::new(move |t: &mut Trace| {
+            let push = |t: &mut Trace, op: Op, ty: IrType| -> usize {
+                t.insts.push(Inst { op, ty });
+                t.insts.len() - 1
+            };
+            let snap = SnapId(0);
+            let mut out = Vec::new();
+            let khi = push(t, Op::KNum(half), IrType::Number);
+            let klo = push(t, Op::KNum(-half), IrType::Number);
+            let kc = push(t, Op::KNum(coef), IrType::Number);
+            let kd = push(t, Op::KNum(cst), IrType::Number);
+            out.extend([khi, klo, kc, kd]);
+            for g in [
+                Op::Guard { cmp: Cmp::Lt, a: pre, b: Ref(khi as u32), snap },
+                Op::Guard { cmp: Cmp::Lt, a: Ref(klo as u32), b: pre, snap },
+            ] {
+                out.push(push(t, g, IrType::Nil));
+            }
+            for s in [start, limit] {
+                let sq = push(t, Op::Mul(s, s), IrType::Number);
+                let m = push(t, Op::Mul(Ref(sq as u32), Ref(kc as u32)), IrType::Number);
+                let v = push(t, Op::Add(Ref(m as u32), Ref(kd as u32)), IrType::Number);
+                let g = push(t, Op::Guard { cmp: Cmp::Lt, a: Ref(v as u32), b: Ref(khi as u32), snap }, IrType::Nil);
+                out.extend([sq, m, v, g]);
+            }
+            out
+        }),
+    ))
+}
+
+/// `c` Some: the modulus PHI (see `int_mod_phi`); None: an accumulator
+/// whose back value is the last of `nodes`, `pre_guards` its pre-loop
+/// checks (see `accumulator`).
+#[allow(clippy::too_many_arguments)]
+fn convert_mod_phi(t: &mut Trace, p: usize, pre: Ref, back: Ref, e: Ref, c: Option<i64>, pre_guards: Vec<usize>, nodes: &[usize]) {
     use std::collections::HashMap;
     let l = t.loop_ref.unwrap().index();
-    let n = t.insts.len();
+    // (the instructions before this conversion: the guards were just added)
+    let n = t.insts.len() - pre_guards.len();
+    debug_assert!(pre_guards.iter().all(|&g| g >= n));
     let push = |t: &mut Trace, op: Op, ty: IrType| -> usize {
         t.insts.push(Inst { op, ty });
         t.insts.len() - 1
     };
     let snap = SnapId(0);
-    // before the loop: |pre| < c, an integer
-    let mut pre_new = Vec::new();
-    let khi = push(t, Op::KNum(c as f64), IrType::Number);
-    let klo = push(t, Op::KNum(-(c as f64)), IrType::Number);
-    let g1 = push(t, Op::Guard { cmp: Cmp::Lt, a: pre, b: Ref(khi as u32), snap }, IrType::Nil);
-    let g2 = push(t, Op::Guard { cmp: Cmp::Lt, a: Ref(klo as u32), b: pre, snap }, IrType::Nil);
-    let x0 = push(t, Op::NumToI64 { a: pre, snap }, IrType::I64);
-    pre_new.extend([khi, klo, g1, g2, x0]);
+    // before the loop: (modulus) |pre| < c, an integer
+    let mut pre_new = pre_guards;
+    if let Some(c) = c {
+        let khi = push(t, Op::KNum(c as f64), IrType::Number);
+        let klo = push(t, Op::KNum(-(c as f64)), IrType::Number);
+        let g1 = push(t, Op::Guard { cmp: Cmp::Lt, a: pre, b: Ref(khi as u32), snap }, IrType::Nil);
+        let g2 = push(t, Op::Guard { cmp: Cmp::Lt, a: Ref(klo as u32), b: pre, snap }, IrType::Nil);
+        pre_new.extend([khi, klo, g1, g2]);
+    }
+    // (also the bound body re-entry checks)
+    let lim = c.unwrap_or(2251799813685248); // c / 2^51
+    let x0 = push(t, Op::NumToI64 { a: pre, lim, snap }, IrType::I64);
+    pre_new.push(x0);
     let xp = push(t, Op::Phi { pre: Ref(x0 as u32), back: Ref(x0 as u32) }, IrType::I64);
     // new instructions placed after an original one
     let mut after: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -427,18 +571,27 @@ fn convert_mod_phi(t: &mut Trace, p: usize, pre: Ref, back: Ref, e: Ref, c: i64,
         int_of.insert(v, Ref(r as u32));
         convs.push((v, Ref(cv as u32)));
     }
-    let ei = operand(t, e, &int_of, &mut pre_new);
-    let ri = push(t, Op::ModI64K(ei, c), IrType::I64);
-    let rv = push(t, Op::I64ToNum(Ref(ri as u32)), IrType::Number);
-    after.entry(back.index()).or_default().extend([ri, rv]);
+    let (ri, rv) = match c {
+        Some(c) => {
+            let ei = operand(t, e, &int_of, &mut pre_new);
+            let ri = push(t, Op::ModI64K(ei, c), IrType::I64);
+            let rv = push(t, Op::I64ToNum(Ref(ri as u32)), IrType::Number);
+            after.entry(back.index()).or_default().extend([ri, rv]);
+            (Ref(ri as u32), Some(rv))
+        }
+        // (the back value is one of the nodes)
+        None => (int_of[&back.index()], None),
+    };
     if let Op::Phi { back: b, .. } = &mut t.insts[xp].op {
-        *b = Ref(ri as u32);
+        *b = ri;
     }
     let pv = push(t, Op::I64ToNum(Ref(xp as u32)), IrType::Number);
     // every use of the floats: the integers converted
     let mut map: Vec<Ref> = (0..t.insts.len() as u32).map(Ref).collect();
     map[p] = Ref(pv as u32);
-    map[back.index()] = Ref(rv as u32);
+    if let Some(rv) = rv {
+        map[back.index()] = Ref(rv as u32);
+    }
     for &(v, cv) in &convs {
         map[v] = cv;
     }

@@ -583,17 +583,10 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                     a.mov_ri64(r, *v as u64);
                 }
             }
-            Op::NumToI64 { a: x, snap } => {
-                // exact: converting back gives the same bits (not -0, NaN,
-                // out of range)
+            Op::NumToI64 { a: x, lim, snap } => {
                 let x = f(*x)?;
                 let d = if let Home::G(d) = dst { d } else { R::Rax };
-                a.cvttsd2si64_x(d, x);
-                a.cvtsi2sd64(X(0), d);
-                a.movq_rx(R::Rcx, X(0));
-                a.movq_rx(R::Rdx, x);
-                a.cmp_rr(R::Rcx, R::Rdx);
-                a.jcc(Cond::NE, stub(*snap));
+                num_to_i64(&mut a, d, x, *lim, stub(*snap));
             }
             Op::I32ToI64(x) => {
                 if let Home::G(d) = dst {
@@ -1551,16 +1544,14 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             let ty = t.insts[j].ty;
             let disp = slot as i32 * TV;
             if twin && ty == IrType::I64 {
-                // the number, converted (exactly - bit for bit - or exit)
+                // the number, converted as on entry (exactly, in bounds, or
+                // the interpreter runs the iteration)
+                let Op::Phi { pre, .. } = t.insts[j].op else { return Err("I64 PHI".into()) };
+                let Op::NumToI64 { lim, .. } = t.inst(pre).op else { return Err("I64 PHI entry".into()) };
                 a.cmp32_mi(R::R13, disp + OFF_TT, LUA_TNUMBER);
                 a.jcc(Cond::NE, stubs[0]);
-                a.movsd_load(X(0), R::R13, disp);
-                a.cvttsd2si64_x(R::Rax, X(0));
-                a.cvtsi2sd64(X(1), R::Rax);
-                a.movq_rx(R::Rcx, X(1));
-                a.movq_rx(R::Rdx, X(0));
-                a.cmp_rr(R::Rcx, R::Rdx);
-                a.jcc(Cond::NE, stubs[0]);
+                a.movsd_load(X(1), R::R13, disp);
+                num_to_i64(&mut a, R::Rax, X(1), lim, stubs[0]);
                 match home[j] {
                     Home::G(r) => a.mov_rr(r, R::Rax),
                     Home::S(s2) => a.store(R::Rsp, spill_off(s2), R::Rax),
@@ -2409,4 +2400,22 @@ fn magic_s64(k: i64) -> Option<(i64, u32)> {
         }
     }
     Some((m, s))
+}
+
+/// `d` = the number in `x` as an i64; jumps to `fail` unless it is exactly
+/// one (bit for bit: not -0, NaN, out of range) with |d| < lim. Uses rcx,
+/// rdx, xmm0.
+fn num_to_i64(a: &mut Asm, d: R, x: X, lim: i64, fail: Label) {
+    a.cvttsd2si64_x(d, x);
+    a.cvtsi2sd64(X(0), d);
+    a.movq_rx(R::Rcx, X(0));
+    a.movq_rx(R::Rdx, x);
+    a.cmp_rr(R::Rcx, R::Rdx);
+    a.jcc(Cond::NE, fail);
+    a.mov_ri64(R::Rcx, lim as u64);
+    a.cmp_rr(d, R::Rcx);
+    a.jcc(Cond::GE, fail);
+    a.mov_ri64(R::Rcx, lim.wrapping_neg() as u64);
+    a.cmp_rr(d, R::Rcx);
+    a.jcc(Cond::LE, fail);
 }

@@ -70,8 +70,9 @@ pub enum Op {
     // ---- 64-bit machine integers (I64) ----------------------------------
     KI64(i64),
     /// the number `a` as an I64; exits through `snap` unless it is exactly
-    /// one (not -0, NaN or out of range)
-    NumToI64 { a: Ref, snap: SnapId },
+    /// one (not -0 or NaN) below `lim` in magnitude. (A loop PHI's entry:
+    /// body re-entry checks the same.)
+    NumToI64 { a: Ref, lim: i64, snap: SnapId },
     I32ToI64(Ref),
     AddI64(Ref, Ref),
     SubI64(Ref, Ref),
