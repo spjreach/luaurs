@@ -11,3 +11,22 @@ local function side(n) local x = 0 for i = 1, n do x = x + i if t[i % 64 + 1] ==
 print(side(30000))
 local function side2(n) local x = 0 for i = 1, n do x = x + i if t[i % 64 + 1] == nil then x = x * 1.5 x = x .. "" x = tonumber(x) end end return x end
 print(side2(30000))
+-- nested forms
+local function n1(n, x0) local x = x0 for i = 1, n do x = (x + i) + 1 end return x end
+local function n2(n, x0) local x = x0 for i = 1, n do x = x - i - 2 + i * 4 end return x end
+local function n3(n, x0) local x = x0 for i = n, 1, -3 do x = 7 - (i - x) end return x end
+local function bad1(n, x0) local x = x0 for i = 1, n do x = x + x - i end return x end
+local function bad2(n, x0) local x = x0 for i = 1, 60 do x = 2 * x + i end return x end
+local function bad3(n, x0) local x = x0 for i = 1, n do x = -x + i end return x end
+print(n1(30000, 0), n1(30000, 2^51 - 5), n2(30000, -3), n3(30000, 1), n3(30000, 0.25))
+print(bad1(40, 1), bad2(0, 3), bad3(30001, 5))
+-- upvalue accumulators
+local function mk() local c = 0 return function(s) c = c + s + 1 return c end, function() return c end end
+local inc, get = mk()
+local function drive(n) local x = 0 for i = 1, n do x = inc(i) end return x end
+print(drive(30000), get())
+local inc2, get2 = mk()
+local function drive2(n) local x = 0 for i = 1, n do x = inc2(i) if i == 25000 then inc2(0.5) end end return x end
+print(drive2(30000), get2())
+local co = coroutine.wrap(function() local inc3, get3 = mk() for k = 1, 3 do drive(1) for i = 1, 20000 do inc3(i) end coroutine.yield(get3()) end end)
+print(co(), co(), co())

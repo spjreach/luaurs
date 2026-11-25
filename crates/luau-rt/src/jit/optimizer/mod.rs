@@ -70,6 +70,12 @@ pub fn optimize_checked(t: &mut Trace) -> Result<(), String> {
     // (sinking drops stores that kept loads in the loop)
     if hoist_guards::run(t) {
         validate(t)?;
+        // (loop values carried in memory become PHIs there: integers too)
+        if narrow::int_mod_phi(t) {
+            validate(t)?;
+            let _ = cse::run(t) | dce::run(t);
+            validate(t)?;
+        }
     }
     validate(t)
 }

@@ -334,14 +334,9 @@ pub fn int_mod_phi(t: &mut Trace) -> bool {
         if t.insts[p].ty != IrType::Number || pre.index() >= l || back.index() <= l {
             continue;
         }
-        if let Some((e, guards)) = accumulator(t, p, pre, back, l) {
-            let mut nodes = Vec::new();
-            if mod_bound(t, e, p, f64::INFINITY, l, &mut nodes, 0).is_none_or(|b| b >= EXACT) {
-                continue;
-            }
-            nodes.push(back.index());
+        if let Some((nodes, guards)) = accumulator(t, p, pre, back, l) {
             let pre_guards = guards(t);
-            convert_mod_phi(t, p, pre, back, e, None, pre_guards, &nodes);
+            convert_mod_phi(t, p, pre, back, back, None, pre_guards, &nodes);
             return true;
         }
         let Op::Mod(e, k) = t.insts[back.index()].op else { continue };
@@ -394,59 +389,75 @@ fn mod_bound(t: &Trace, v: Ref, p: usize, c: f64, l: usize, nodes: &mut Vec<usiz
 /// most 2s + 1 terms each at most A s + B (A = |a|, B = |b|) - at most
 /// (3A + 2B) s^2 + A + 3B - below 2^51 (checked on s^2: no abs needed).
 #[allow(clippy::type_complexity)]
-fn accumulator(t: &Trace, p: usize, pre: Ref, back: Ref, l: usize) -> Option<(Ref, Box<dyn Fn(&mut Trace) -> Vec<usize>>)> {
-    let e = match t.insts[back.index()].op {
-        Op::Add(a, b) if a.index() == p => b,
-        Op::Add(a, b) if b.index() == p => a,
-        Op::Sub(a, b) if a.index() == p => b,
-        _ => return None,
-    };
-    // e = a * i + b
-    fn lin(t: &Trace, v: Ref, ip: &mut Option<usize>, depth: u32) -> Option<(f64, f64)> {
-        if depth > 6 {
-            return None;
-        }
-        let k = |r: Ref| match t.inst(r).op {
-            Op::KNum(c) if c.fract() == 0.0 && c.abs() < 65536.0 => Some(c),
-            _ => None,
-        };
-        Some(match t.inst(v).op {
-            Op::KNum(c) if c.fract() == 0.0 && c.abs() < 65536.0 => (0.0, c),
-            Op::I32ToNum(w) if matches!(t.inst(w).op, Op::Phi { .. }) => {
-                if ip.is_some_and(|x| x != w.index()) {
-                    return None;
-                }
-                *ip = Some(w.index());
-                (1.0, 0.0)
-            }
-            Op::Mul(x, y) if k(y).is_some() => {
-                let (a, b) = lin(t, x, ip, depth + 1)?;
-                (a * k(y)?, b * k(y)?)
-            }
-            Op::Mul(y, x) if k(y).is_some() => {
-                let (a, b) = lin(t, x, ip, depth + 1)?;
-                (a * k(y)?, b * k(y)?)
-            }
-            Op::Add(x, y) => {
-                let (a1, b1) = lin(t, x, ip, depth + 1)?;
-                let (a2, b2) = lin(t, y, ip, depth + 1)?;
-                (a1 + a2, b1 + b2)
-            }
-            Op::Sub(x, y) => {
-                let (a1, b1) = lin(t, x, ip, depth + 1)?;
-                let (a2, b2) = lin(t, y, ip, depth + 1)?;
-                (a1 - a2, b1 - b2)
-            }
-            Op::Neg(x) => {
-                let (a, b) = lin(t, x, ip, depth + 1)?;
-                (-a, -b)
-            }
-            _ => return None,
-        })
+fn accumulator(t: &Trace, p: usize, pre: Ref, back: Ref, l: usize) -> Option<(Vec<usize>, Box<dyn Fn(&mut Trace) -> Vec<usize>>)> {
+    // the back value: + - tree of the PHI (once, added) and terms linear
+    // in the counter; per iteration the terms add at most A s + B
+    struct W<'a> {
+        t: &'a Trace,
+        p: usize,
+        l: usize,
+        ip: Option<usize>,
+        nodes: Vec<usize>,
+        pcount: u32,
     }
-    let mut ipo = None;
-    let (ca, cb) = lin(t, e, &mut ipo, 0)?;
-    let (ca, cb) = (ca.abs(), cb.abs());
+    impl W<'_> {
+        /// (coefficient of the PHI, sum of |counter coefficients|, sum
+        /// of |constants|) of `v` with sign `sg`
+        fn walk(&mut self, v: Ref, sg: f64, depth: u32) -> Option<(f64, f64, f64)> {
+            if depth > 10 {
+                return None;
+            }
+            if v.index() == self.p {
+                self.pcount += 1;
+                return Some((sg, 0.0, 0.0));
+            }
+            let t = self.t;
+            let k = |r: Ref| match t.inst(r).op {
+                Op::KNum(c) if c.fract() == 0.0 && c.abs() < 65536.0 => Some(c),
+                _ => None,
+            };
+            let r = match t.inst(v).op {
+                Op::KNum(c) if c.fract() == 0.0 && c.abs() < 65536.0 => return Some((0.0, 0.0, c.abs())),
+                Op::I32ToNum(w) if matches!(t.inst(w).op, Op::Phi { .. }) => {
+                    if self.ip.is_some_and(|x| x != w.index()) {
+                        return None;
+                    }
+                    self.ip = Some(w.index());
+                    (0.0, 1.0, 0.0)
+                }
+                Op::Add(x, y) | Op::Sub(x, y) => {
+                    let s2 = if matches!(t.inst(v).op, Op::Sub(..)) { -sg } else { sg };
+                    let (p1, a1, b1) = self.walk(x, sg, depth + 1)?;
+                    let (p2, a2, b2) = self.walk(y, s2, depth + 1)?;
+                    (p1 + p2, a1 + a2, b1 + b2)
+                }
+                Op::Neg(x) => self.walk(x, -sg, depth + 1)?,
+                Op::Mul(x, y) | Op::Mul(y, x) if k(y).is_some() => {
+                    let before = self.pcount;
+                    let (pc, a, b) = self.walk(x, sg, depth + 1)?;
+                    if self.pcount != before || pc != 0.0 {
+                        return None;
+                    }
+                    let c = k(y)?.abs();
+                    (0.0, a * c, b * c)
+                }
+                _ => return None,
+            };
+            if v.index() <= self.l {
+                return None;
+            }
+            if !self.nodes.contains(&v.index()) {
+                self.nodes.push(v.index());
+            }
+            Some(r)
+        }
+    }
+    let mut w = W { t, p, l, ip: None, nodes: Vec::new(), pcount: 0 };
+    let (pc, ca, cb) = w.walk(back, 1.0, 0)?;
+    if pc != 1.0 || w.pcount != 1 || w.nodes.last() != Some(&back.index()) {
+        return None;
+    }
+    let (ipo, nodes) = (w.ip, w.nodes);
     if ca > 65536.0 || cb > 65536.0 * 65536.0 {
         return None;
     }
@@ -478,7 +489,7 @@ fn accumulator(t: &Trace, p: usize, pre: Ref, back: Ref, l: usize) -> Option<(Re
     let cst = ca + 3.0 * cb;
     let half = 2251799813685248.0; // 2^51
     Some((
-        e,
+        nodes,
         Box::new(move |t: &mut Trace| {
             let push = |t: &mut Trace, op: Op, ty: IrType| -> usize {
                 t.insts.push(Inst { op, ty });
