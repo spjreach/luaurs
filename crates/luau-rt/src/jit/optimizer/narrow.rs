@@ -305,6 +305,176 @@ pub fn int_induction(t: &mut Trace) -> bool {
     changed
 }
 
+/// Doubles hold every integer below this exactly.
+const EXACT: f64 = 4503599627370496.0; // 2^52
+
+/// Integer loop values kept by a modulus: a Number PHI whose back value is
+/// `e % c` (c an integer constant, 2 <= c < 2^31) and whose `e` is built
+/// from the PHI, integer constants, converted I32s, + - * and negation,
+/// with every intermediate below 2^52 in magnitude given |PHI| < c, is
+/// computed with 64-bit integers: those doubles are exact integers, so
+/// float + - * are the integer ones, and `a - floor(a / c) * c` (Lua's %)
+/// is the integer remainder rounded down. The entry value is checked to
+/// be an integer (not -0) below c in magnitude before the loop; the float
+/// values (for exits, other users) are the integers converted.
+pub fn int_mod_phi(t: &mut Trace) -> bool {
+    if std::env::var_os("LUAU_TRACE_NOMODPHI").is_some() {
+        return false;
+    }
+    let Some(loop_ref) = t.loop_ref else { return false };
+    let l = loop_ref.index();
+    let n = t.insts.len();
+    for p in l + 1..n {
+        let Op::Phi { pre, back } = t.insts[p].op else {
+            if matches!(t.insts[p].op, Op::Nop) {
+                continue;
+            }
+            break;
+        };
+        if t.insts[p].ty != IrType::Number || pre.index() >= l || back.index() <= l {
+            continue;
+        }
+        let Op::Mod(e, k) = t.insts[back.index()].op else { continue };
+        let Op::KNum(c) = t.inst(k).op else { continue };
+        if !(2.0..2147483648.0).contains(&c) || c.fract() != 0.0 {
+            continue;
+        }
+        let mut nodes = Vec::new();
+        let Some(b) = mod_bound(t, e, p, c, l, &mut nodes, 0) else { continue };
+        if b >= EXACT {
+            continue;
+        }
+        convert_mod_phi(t, p, pre, back, e, c as i64, &nodes);
+        return true;
+    }
+    false
+}
+
+/// Magnitude bound of `v` (see `int_mod_phi`), its body nodes into
+/// `nodes` (operands first).
+fn mod_bound(t: &Trace, v: Ref, p: usize, c: f64, l: usize, nodes: &mut Vec<usize>, depth: u32) -> Option<f64> {
+    if depth > 10 {
+        return None;
+    }
+    if v.index() == p {
+        return Some(c);
+    }
+    let b = match t.inst(v).op {
+        Op::KNum(k) if k.fract() == 0.0 && k.abs() <= 2147483648.0 => return Some(k.abs()),
+        Op::I32ToNum(_) => 2147483648.0,
+        Op::Add(a, b2) | Op::Sub(a, b2) => mod_bound(t, a, p, c, l, nodes, depth + 1)? + mod_bound(t, b2, p, c, l, nodes, depth + 1)?,
+        Op::Mul(a, b2) => mod_bound(t, a, p, c, l, nodes, depth + 1)? * mod_bound(t, b2, p, c, l, nodes, depth + 1)?,
+        Op::Neg(a) => mod_bound(t, a, p, c, l, nodes, depth + 1)?,
+        _ => return None,
+    };
+    if v.index() <= l || b >= EXACT {
+        return None;
+    }
+    if !nodes.contains(&v.index()) {
+        nodes.push(v.index());
+    }
+    Some(b)
+}
+
+fn convert_mod_phi(t: &mut Trace, p: usize, pre: Ref, back: Ref, e: Ref, c: i64, nodes: &[usize]) {
+    use std::collections::HashMap;
+    let l = t.loop_ref.unwrap().index();
+    let n = t.insts.len();
+    let push = |t: &mut Trace, op: Op, ty: IrType| -> usize {
+        t.insts.push(Inst { op, ty });
+        t.insts.len() - 1
+    };
+    let snap = SnapId(0);
+    // before the loop: |pre| < c, an integer
+    let mut pre_new = Vec::new();
+    let khi = push(t, Op::KNum(c as f64), IrType::Number);
+    let klo = push(t, Op::KNum(-(c as f64)), IrType::Number);
+    let g1 = push(t, Op::Guard { cmp: Cmp::Lt, a: pre, b: Ref(khi as u32), snap }, IrType::Nil);
+    let g2 = push(t, Op::Guard { cmp: Cmp::Lt, a: Ref(klo as u32), b: pre, snap }, IrType::Nil);
+    let x0 = push(t, Op::NumToI64 { a: pre, snap }, IrType::I64);
+    pre_new.extend([khi, klo, g1, g2, x0]);
+    let xp = push(t, Op::Phi { pre: Ref(x0 as u32), back: Ref(x0 as u32) }, IrType::I64);
+    // new instructions placed after an original one
+    let mut after: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut int_of: HashMap<usize, Ref> = HashMap::new();
+    int_of.insert(p, Ref(xp as u32));
+    let mut operand = |t: &mut Trace, v: Ref, int_of: &HashMap<usize, Ref>, pre_new: &mut Vec<usize>| -> Ref {
+        if let Some(&r) = int_of.get(&v.index()) {
+            return r;
+        }
+        match t.inst(v).op {
+            Op::KNum(k) => {
+                let r = push(t, Op::KI64(k as i64), IrType::I64);
+                pre_new.push(r);
+                Ref(r as u32)
+            }
+            _ => unreachable!("operand without an integer twin"),
+        }
+    };
+    let mut convs: Vec<(usize, Ref)> = Vec::new();
+    for &v in nodes {
+        let op = match t.insts[v].op {
+            Op::I32ToNum(w) => Op::I32ToI64(w),
+            Op::Add(a, b) => Op::AddI64(operand(t, a, &int_of, &mut pre_new), operand(t, b, &int_of, &mut pre_new)),
+            Op::Sub(a, b) => Op::SubI64(operand(t, a, &int_of, &mut pre_new), operand(t, b, &int_of, &mut pre_new)),
+            Op::Mul(a, b) => Op::MulI64(operand(t, a, &int_of, &mut pre_new), operand(t, b, &int_of, &mut pre_new)),
+            Op::Neg(a) => Op::NegI64(operand(t, a, &int_of, &mut pre_new)),
+            _ => unreachable!(),
+        };
+        let r = push(t, op, IrType::I64);
+        let cv = push(t, Op::I64ToNum(Ref(r as u32)), IrType::Number);
+        after.entry(v).or_default().extend([r, cv]);
+        int_of.insert(v, Ref(r as u32));
+        convs.push((v, Ref(cv as u32)));
+    }
+    let ei = operand(t, e, &int_of, &mut pre_new);
+    let ri = push(t, Op::ModI64K(ei, c), IrType::I64);
+    let rv = push(t, Op::I64ToNum(Ref(ri as u32)), IrType::Number);
+    after.entry(back.index()).or_default().extend([ri, rv]);
+    if let Op::Phi { back: b, .. } = &mut t.insts[xp].op {
+        *b = Ref(ri as u32);
+    }
+    let pv = push(t, Op::I64ToNum(Ref(xp as u32)), IrType::Number);
+    // every use of the floats: the integers converted
+    let mut map: Vec<Ref> = (0..t.insts.len() as u32).map(Ref).collect();
+    map[p] = Ref(pv as u32);
+    map[back.index()] = Ref(rv as u32);
+    for &(v, cv) in &convs {
+        map[v] = cv;
+    }
+    t.insts[p].op = Op::Nop;
+    t.insts[back.index()].op = Op::Nop;
+    for &(v, _) in &convs {
+        t.insts[v].op = Op::Nop;
+    }
+    super::util::rewrite(t, &map);
+    // order: pre-loop, new pre-loop, Loop, PHIs, the new PHI and its
+    // conversion, body with each new instruction after its float one
+    let last_phi = (l + 1..n).take_while(|&j| matches!(t.insts[j].op, Op::Phi { .. } | Op::Nop)).last().unwrap_or(l);
+    let mut order = Vec::with_capacity(t.insts.len());
+    for j in 0..n {
+        if j == l {
+            order.extend(pre_new.iter().copied());
+        }
+        order.push(j);
+        if j == last_phi {
+            order.push(xp);
+            order.push(pv);
+        }
+        if let Some(v) = after.get(&j) {
+            order.extend(v.iter().copied());
+        }
+    }
+    // (the PHIs together at the loop head: new instructions anchored to
+    // ones among them go after them all)
+    let at = order.iter().position(|&j| j == l).unwrap() + 1;
+    let (phis, rest): (Vec<usize>, Vec<usize>) = order[at..].iter().partition(|&&j| matches!(t.insts[j].op, Op::Phi { .. }));
+    order.truncate(at);
+    order.extend(phis);
+    order.extend(rest);
+    super::hoist_consts::reorder(t, &order);
+}
+
 /// Bound on the magnitude of `v` as an integer expression of counter
 /// `p` (None: not one, or possibly out of i32).
 fn int_expr(t: &Trace, v: Ref, p: usize, depth: u32) -> Option<f64> {

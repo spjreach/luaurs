@@ -28,6 +28,10 @@ pub fn validate(t: &Trace) -> Result<(), String> {
             }
             Op::Phi { pre, back } => {
                 let Some(l) = loop_at else { return Err(format!("{}: Phi before Loop", i)) };
+                // (the backend takes the PHIs as one block at the loop head)
+                if t.insts[l + 1..i].iter().any(|x| !matches!(x.op, Op::Phi { .. } | Op::Nop)) {
+                    return Err(format!("{}: Phi after a body instruction", i));
+                }
                 if pre.index() >= l {
                     return Err(format!("{}: Phi pre {} not before the loop", i, pre.0));
                 }

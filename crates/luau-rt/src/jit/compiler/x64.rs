@@ -130,12 +130,12 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             operand_use[o.index()] = true;
         }
     }
-    let deferred: Vec<bool> = (0..n).map(|i| matches!(t.insts[i].op, Op::I32ToNum(_)) && !operand_use[i]).collect();
+    let deferred: Vec<bool> = (0..n).map(|i| matches!(t.insts[i].op, Op::I32ToNum(_) | Op::I64ToNum(_)) && !operand_use[i]).collect();
     // I32 constants used only by integer adds / ands: immediates, no
     // register
     let mut imm_only = vec![true; n];
     for x in &t.insts {
-        let imm_user = matches!(x.op, Op::AddI32(..) | Op::AndI32(..));
+        let imm_user = matches!(x.op, Op::AddI32(..) | Op::AndI32(..) | Op::AddI64(..) | Op::SubI64(..) | Op::MulI64(..));
         for o in x.operands() {
             if !imm_user {
                 imm_only[o.index()] = false;
@@ -143,7 +143,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
         }
     }
     for (i, f) in imm_only.iter_mut().enumerate() {
-        *f = *f && matches!(t.insts[i].op, Op::KI32(_));
+        *f = *f && (matches!(t.insts[i].op, Op::KI32(_)) || matches!(t.insts[i].op, Op::KI64(k) if i32::try_from(k).is_ok()));
     }
     // and integer + constant values only those conversions read: added in
     // the exit code too (an index + 1 kept for exits)
@@ -180,6 +180,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 Op::AddI32(y, _) if deferred_add[x.index()] => y,
                 _ => x,
             },
+            Op::I64ToNum(x) if deferred[v.index()] => x,
             _ => v,
         }
     };
@@ -403,6 +404,10 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                         Op::SLoad { slot, .. } => phi_loads.push((j, slot, true)),
                         _ => body_entry_ok = false,
                     },
+                    Op::NumToI64 { a: src, .. } if x.ty == IrType::I64 => match t.inst(src).op {
+                        Op::SLoad { slot, .. } => phi_loads.push((j, slot, true)),
+                        _ => body_entry_ok = false,
+                    },
                     _ => body_entry_ok = false,
                 },
                 Op::Nop => {}
@@ -571,6 +576,102 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             Op::KI32(v) => {
                 if let Home::G(r) = dst {
                     a.mov_ri(r, *v as u32 as u64);
+                }
+            }
+            Op::KI64(v) => {
+                if let Home::G(r) = dst {
+                    a.mov_ri64(r, *v as u64);
+                }
+            }
+            Op::NumToI64 { a: x, snap } => {
+                // exact: converting back gives the same bits (not -0, NaN,
+                // out of range)
+                let x = f(*x)?;
+                let d = if let Home::G(d) = dst { d } else { R::Rax };
+                a.cvttsd2si64_x(d, x);
+                a.cvtsi2sd64(X(0), d);
+                a.movq_rx(R::Rcx, X(0));
+                a.movq_rx(R::Rdx, x);
+                a.cmp_rr(R::Rcx, R::Rdx);
+                a.jcc(Cond::NE, stub(*snap));
+            }
+            Op::I32ToI64(x) => {
+                if let Home::G(d) = dst {
+                    a.movsxd(d, g(*x)?);
+                }
+            }
+            Op::I64ToNum(x) => {
+                if let Home::F(d) = dst {
+                    a.cvtsi2sd64(d, g(*x)?);
+                }
+            }
+            Op::NegI64(x) => {
+                if let Home::G(d) = dst {
+                    let x = g(*x)?;
+                    if d != x {
+                        a.mov_rr(d, x);
+                    }
+                    a.unary64(3, d);
+                }
+            }
+            Op::AddI64(x, y) | Op::SubI64(x, y) | Op::MulI64(x, y) => {
+                if let Home::G(d) = dst {
+                    let kv = |r: Ref| if imm_only[r.index()] { if let Op::KI64(k) = t.inst(r).op { Some(k as i32) } else { None } } else { None };
+                    let sub = matches!(inst.op, Op::SubI64(..));
+                    let mul = matches!(inst.op, Op::MulI64(..));
+                    // (commutative ones with the constant first: swapped)
+                    let (x, y) = if !sub && kv(*x).is_some() { (*y, *x) } else { (*x, *y) };
+                    if kv(x).is_some() {
+                        return Err("I64 op with a constant first operand".into());
+                    }
+                    let xr = g(x)?;
+                    if let Some(c) = kv(y) {
+                        if mul {
+                            a.imul64_rri(d, xr, c);
+                        } else {
+                            if d != xr {
+                                a.mov_rr(d, xr);
+                            }
+                            a.alu64_ri(if sub { 5 } else { 0 }, d, c);
+                        }
+                    } else {
+                        let yr = g(y)?;
+                        // in rcx: d may be either operand
+                        a.mov_rr(R::Rcx, xr);
+                        if mul {
+                            a.imul64_rr(R::Rcx, yr);
+                        } else {
+                            a.alu64_rr(if sub { 0x29 } else { 0x01 }, R::Rcx, yr);
+                        }
+                        a.mov_rr(d, R::Rcx);
+                    }
+                }
+            }
+            Op::ModI64K(x, k) => {
+                if let Home::G(d) = dst {
+                    let (m, s) = magic_s64(*k).ok_or("no division magic")?;
+                    let xr = g(*x)?;
+                    // q = x / k rounded toward zero (Hacker's Delight 10-1)
+                    a.mov_ri64(R::Rax, m as u64);
+                    a.unary64(5, xr); // rdx:rax = rax * x
+                    if m < 0 {
+                        a.add_rr(R::Rdx, xr);
+                    }
+                    if s > 0 {
+                        a.sar_ri(R::Rdx, s as u8);
+                    }
+                    a.mov_rr(R::Rax, xr);
+                    a.shr_ri(R::Rax, 63);
+                    a.add_rr(R::Rdx, R::Rax);
+                    // r = x - q * k, then + k when negative (rounded down)
+                    a.imul64_rri(R::Rdx, R::Rdx, *k as i32);
+                    a.mov_rr(R::Rcx, xr);
+                    a.sub_rr(R::Rcx, R::Rdx);
+                    a.mov_rr(R::Rax, R::Rcx);
+                    a.sar_ri(R::Rax, 63);
+                    a.alu64_ri(4, R::Rax, *k as i32);
+                    a.add_rr(R::Rcx, R::Rax);
+                    a.mov_rr(d, R::Rcx);
                 }
             }
             Op::SLoad { slot, guarded, snap } => {
@@ -1449,6 +1550,24 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
         for &(j, slot, twin) in &phi_loads {
             let ty = t.insts[j].ty;
             let disp = slot as i32 * TV;
+            if twin && ty == IrType::I64 {
+                // the number, converted (exactly - bit for bit - or exit)
+                a.cmp32_mi(R::R13, disp + OFF_TT, LUA_TNUMBER);
+                a.jcc(Cond::NE, stubs[0]);
+                a.movsd_load(X(0), R::R13, disp);
+                a.cvttsd2si64_x(R::Rax, X(0));
+                a.cvtsi2sd64(X(1), R::Rax);
+                a.movq_rx(R::Rcx, X(1));
+                a.movq_rx(R::Rdx, X(0));
+                a.cmp_rr(R::Rcx, R::Rdx);
+                a.jcc(Cond::NE, stubs[0]);
+                match home[j] {
+                    Home::G(r) => a.mov_rr(r, R::Rax),
+                    Home::S(s2) => a.store(R::Rsp, spill_off(s2), R::Rax),
+                    _ => {}
+                }
+                continue;
+            }
             if twin {
                 // the counter's number, converted (exactly, or exit)
                 a.cmp32_mi(R::R13, disp + OFF_TT, LUA_TNUMBER);
@@ -1644,6 +1763,18 @@ fn store_value(a: &mut Asm, home: &[Home], t: &Trace, v: Ref, base: R, disp: i32
             }
             a.alu32_ri(0, R::Rax, c);
             a.cvtsi2sd(X(0), R::Rax);
+            a.movsd_store(base, disp, X(0));
+        }
+        (Home::None, Op::I64ToNum(x)) => {
+            // (a conversion done only where it is stored)
+            match home[x.index()] {
+                Home::G(r) => a.cvtsi2sd64(X(0), r),
+                Home::S(s) => {
+                    a.load(R::Rax, R::Rsp, spill_off(s));
+                    a.cvtsi2sd64(X(0), R::Rax);
+                }
+                h => return Err(format!("converted value {} has no home {:?}", x.0, h)),
+            }
             a.movsd_store(base, disp, X(0));
         }
         (Home::None, Op::I32ToNum(x)) => {
@@ -2218,4 +2349,64 @@ mod helpers {
     pub unsafe extern "sysv64" fn dup_table(L: *mut lua_State, tpl: *mut LuaTable) -> *mut LuaTable {
         crate::ltable::luaH_clone(L, tpl)
     }
+}
+
+/// Signed division magic for `k` (2 <= k < 2^31): (m, s) with
+/// trunc(n / k) = ((mulhi(m, n) [+ n when m < 0]) >> s) + (n < 0), checked
+/// on sample values (None: don't use it).
+fn magic_s64(k: i64) -> Option<(i64, u32)> {
+    if !(2..(1 << 31)).contains(&k) {
+        return None;
+    }
+    // Hacker's Delight, figure 10-1 (64-bit)
+    let two63: u64 = 1 << 63;
+    let ad = k as u64;
+    let tt = two63;
+    let anc = tt - 1 - tt % ad;
+    let mut p: u32 = 63;
+    let mut q1 = two63 / anc;
+    let mut r1 = two63 - q1 * anc;
+    let mut q2 = two63 / ad;
+    let mut r2 = two63 - q2 * ad;
+    loop {
+        p += 1;
+        q1 = q1.wrapping_mul(2);
+        r1 = r1.wrapping_mul(2);
+        if r1 >= anc {
+            q1 = q1.wrapping_add(1);
+            r1 = r1.wrapping_sub(anc);
+        }
+        q2 = q2.wrapping_mul(2);
+        r2 = r2.wrapping_mul(2);
+        if r2 >= ad {
+            q2 = q2.wrapping_add(1);
+            r2 = r2.wrapping_sub(ad);
+        }
+        let delta = ad - r2;
+        if !(q1 < delta || (q1 == delta && r1 == 0)) || p >= 127 {
+            break;
+        }
+    }
+    let m = q2.wrapping_add(1) as i64;
+    let s = p - 64;
+    let div = |n: i64| -> i64 {
+        let mut q = ((m as i128 * n as i128) >> 64) as i64;
+        if m < 0 {
+            q = q.wrapping_add(n);
+        }
+        q >>= s;
+        q + ((n as u64) >> 63) as i64
+    };
+    let lim: i64 = 1 << 52;
+    let mut samples = vec![0, 1, -1, k, -k, k - 1, -(k - 1), k + 1, -(k + 1), lim - 1, -(lim - 1)];
+    for j in 1..64i64 {
+        let v = (lim - 1) / 64 * j + j * 7919;
+        samples.extend([v, -v, v / k * k, v / k * k - 1, -(v / k * k), -(v / k * k) + 1]);
+    }
+    for n in samples {
+        if n.abs() < lim && div(n) != n / k {
+            return None;
+        }
+    }
+    Some((m, s))
 }

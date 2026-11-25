@@ -29,6 +29,9 @@ pub enum IrType {
     Ptr,
     /// a 32-bit machine integer (array indices, lengths): never stored
     I32,
+    /// a 64-bit machine integer (integer-valued numbers computed exactly,
+    /// see `optimizer::narrow::int_mod_phi`): never stored
+    I64,
     /// a boxed TValue of unknown type
     Any,
 }
@@ -49,7 +52,7 @@ impl IrType {
             IrType::Userdata => LUA_TUSERDATA,
             IrType::Buffer => LUA_TBUFFER,
             IrType::Thread => LUA_TTHREAD,
-            IrType::Ptr | IrType::I32 | IrType::Any => return None,
+            IrType::Ptr | IrType::I32 | IrType::I64 | IrType::Any => return None,
         })
     }
 

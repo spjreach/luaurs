@@ -3320,6 +3320,11 @@ pub(crate) fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *a = rm(*a);
             *b = rm(*b);
         }
+        NumToI64 { a, .. } | I32ToI64(a) | NegI64(a) | ModI64K(a, _) | I64ToNum(a) => *a = rm(*a),
+        AddI64(a, b) | SubI64(a, b) | MulI64(a, b) => {
+            *a = rm(*a);
+            *b = rm(*b);
+        }
         Select { a, b, t, f, .. } => {
             *a = rm(*a);
             *b = rm(*b);
@@ -3399,7 +3404,7 @@ pub(crate) fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *pre = rm(*pre);
             *back = rm(*back);
         }
-        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop | FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } | GuardTop { .. } | Sunk => {}
+        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | KI64(_) | SLoad { .. } | Loop | Nop | FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } | GuardTop { .. } | Sunk => {}
         UStore { cl, v, .. } => {
             *cl = rm(*cl);
             *v = rm(*v);
@@ -3447,6 +3452,7 @@ pub(crate) fn set_snapshot(op: &mut Op, s: SnapId) {
         | VargLoad { snap, .. }
         | CloseUpvals { snap, .. }
         | CallC { snap, .. }
+        | NumToI64 { snap, .. }
         | UPtr { snap, .. }
         | GuardTop { snap, .. }
         | UStore { snap, .. } => *snap = s,

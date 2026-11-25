@@ -308,6 +308,19 @@ impl Asm {
         self.modrm_rr(5, r as u8);
         self.byte(imm);
     }
+    /// sar r64, imm8
+    pub fn sar_ri(&mut self, r: R, imm: u8) {
+        self.rex(true, 0, 0, r as u8, false);
+        self.byte(0xc1);
+        self.modrm_rr(7, r as u8);
+        self.byte(imm);
+    }
+    /// movsxd dst, src32 (sign-extends)
+    pub fn movsxd(&mut self, dst: R, src: R) {
+        self.rex(true, dst as u8, 0, src as u8, false);
+        self.byte(0x63);
+        self.modrm_rr(dst as u8, src as u8);
+    }
     pub fn shl_ri(&mut self, r: R, imm: u8) {
         self.rex(true, 0, 0, r as u8, false);
         self.byte(0xc1);

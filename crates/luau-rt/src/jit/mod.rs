@@ -544,7 +544,7 @@ fn root_facts(t: &mut trace::Trace) {
                 match t.inst(pre).op {
                     Op::SLoad { slot, .. } => phis.push(slot),
                     // (a loop counter's integer twin: its slot)
-                    Op::NumToI32 { a, .. } => {
+                    Op::NumToI32 { a, .. } | Op::NumToI64 { a, .. } => {
                         if let Op::SLoad { slot, .. } = t.inst(a).op {
                             phis.push(slot);
                         }

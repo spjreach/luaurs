@@ -67,6 +67,19 @@ pub enum Op {
     // ---- guards ---------------------------------------------------------
     /// exits through `snap` unless `cmp(a, b)` holds (numbers or I32s)
     Guard { cmp: Cmp, a: Ref, b: Ref, snap: SnapId },
+    // ---- 64-bit machine integers (I64) ----------------------------------
+    KI64(i64),
+    /// the number `a` as an I64; exits through `snap` unless it is exactly
+    /// one (not -0, NaN or out of range)
+    NumToI64 { a: Ref, snap: SnapId },
+    I32ToI64(Ref),
+    AddI64(Ref, Ref),
+    SubI64(Ref, Ref),
+    MulI64(Ref, Ref),
+    NegI64(Ref),
+    /// `a` mod `k` rounded down (k >= 2): Lua's % on integers
+    ModI64K(Ref, i64),
+    I64ToNum(Ref),
     /// numbers: `t` when `a cmp b` holds (NaN: it doesn't), else `f` (a
     /// branch of the loop body if-converted, see `Recorder::if_convert`)
     Select { cmp: Cmp, a: Ref, b: Ref, t: Ref, f: Ref },
@@ -279,8 +292,11 @@ impl Inst {
     pub fn operands(&self) -> Vec<Ref> {
         use Op::*;
         match &self.op {
-            KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | SLoad { .. } | Loop | Nop => vec![],
+            KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | KI64(_) | SLoad { .. } | Loop | Nop => vec![],
             Guard { a, b, .. } => vec![*a, *b],
+            NumToI64 { a, .. } => vec![*a],
+            I32ToI64(a) | NegI64(a) | ModI64K(a, _) | I64ToNum(a) => vec![*a],
+            AddI64(a, b) | SubI64(a, b) | MulI64(a, b) => vec![*a, *b],
             Select { a, b, t, f, .. } => vec![*a, *b, *t, *f],
             GuardTruthy { a, .. } => vec![*a],
             GuardSame { a, k, .. } | GuardDiff { a, k, .. } => vec![*a, *k],
@@ -330,7 +346,7 @@ impl Inst {
         use Op::*;
         match &self.op {
             SLoad { guarded: true, snap, .. } => Some(*snap),
-            Guard { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } | GuardVecEq { snap, .. } | VargLoad { snap, .. } | CloseUpvals { snap, .. } | CallC { snap, .. } | UPtr { snap, .. } | GuardTop { snap, .. } => {
+            Guard { snap, .. } | NumToI64 { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } | GuardVecEq { snap, .. } | VargLoad { snap, .. } | CloseUpvals { snap, .. } | CallC { snap, .. } | UPtr { snap, .. } | GuardTop { snap, .. } => {
                 Some(*snap)
             }
             _ => None,
@@ -346,6 +362,7 @@ impl Inst {
             KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | Add(..) | Sub(..) | Mul(..) | Div(..) | Mod(..)
                 | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | AndI32(..) | ARef { .. } | ABase(_) | TruncI32(_) | FrameFunc | ClEnv { .. } | HSlot { .. } | Not(_) | LudToI32(_) | I32ToLud(_)
                 | VArith { .. } | VNeg(_) | VGet { .. } | VMake { .. } | Select { .. }
+                | KI64(_) | I32ToI64(_) | AddI64(..) | SubI64(..) | MulI64(..) | NegI64(_) | ModI64K(..) | I64ToNum(_)
         )
     }
 
@@ -362,6 +379,6 @@ impl Inst {
 
     pub fn is_const(&self) -> bool {
         use Op::*;
-        matches!(self.op, KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_))
+        matches!(self.op, KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | KI64(_))
     }
 }
