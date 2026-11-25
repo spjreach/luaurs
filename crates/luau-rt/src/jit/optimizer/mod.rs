@@ -56,7 +56,7 @@ pub fn optimize_checked(t: &mut Trace) -> Result<(), String> {
         validate(t)?;
         // (the conversions may now be loop-invariant or common)
         for _ in 0..3 {
-            let c = cse::run(t) | dce::run(t) | licm::run(t);
+            let c = cse::run(t) | redundant::run(t) | dce::run(t) | licm::run(t);
             validate(t)?;
             if !c {
                 break;

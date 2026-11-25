@@ -145,9 +145,41 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     for (i, f) in imm_only.iter_mut().enumerate() {
         *f = *f && matches!(t.insts[i].op, Op::KI32(_));
     }
+    // and integer + constant values only those conversions read: added in
+    // the exit code too (an index + 1 kept for exits)
+    let mut other_use = vec![false; n];
+    for (i, x) in t.insts.iter().enumerate() {
+        if deferred[i] {
+            continue;
+        }
+        for o in x.operands() {
+            other_use[o.index()] = true;
+        }
+    }
+    for s in &t.snapshots {
+        for e in &s.entries {
+            if !deferred[e.value.index()] {
+                other_use[e.value.index()] = true;
+            }
+        }
+    }
+    for sk in &t.sinks {
+        let vals = sk.states.iter().flat_map(|st| st.fields.iter().map(|f| f.1).chain(st.meta)).chain(sk.entry.into_iter().flat_map(|(x, y)| [x, y]));
+        for o in vals {
+            if !deferred[o.index()] {
+                other_use[o.index()] = true;
+            }
+        }
+    }
+    let deferred_add: Vec<bool> = (0..n)
+        .map(|i| !other_use[i] && operand_use[i] && matches!(t.insts[i].op, Op::AddI32(y, k) if imm_only[k.index()] && !imm_only[y.index()]))
+        .collect();
     let exit_need = |v: Ref| -> Ref {
         match t.insts[v.index()].op {
-            Op::I32ToNum(x) if deferred[v.index()] => x,
+            Op::I32ToNum(x) if deferred[v.index()] => match t.insts[x.index()].op {
+                Op::AddI32(y, _) if deferred_add[x.index()] => y,
+                _ => x,
+            },
             _ => v,
         }
     };
@@ -263,7 +295,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             }
             active.retain(|&w| w != v);
         }
-        if matches!(inst.op, Op::Nop | Op::Loop) || deferred[i] || imm_only[i] {
+        if matches!(inst.op, Op::Nop | Op::Loop) || deferred[i] || imm_only[i] || deferred_add[i] {
             continue;
         }
         let defines = !matches!(
@@ -451,7 +483,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     }
 
     for (i, inst) in t.insts.iter().enumerate() {
-        if deferred[i] {
+        if deferred[i] || deferred_add[i] {
             continue;
         }
         // spilled operands go to the temp registers for this instruction
@@ -1196,7 +1228,9 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 if let Home::G(d) = dst {
                     let (v, k) = if imm_only[y.index()] { (*x, *y) } else { (*y, *x) };
                     let Op::KI32(c) = t.inst(k).op else { return Err("immediate of a non-constant".into()) };
-                    a.mov_rr32(d, g(v)?);
+                    if d != g(v)? {
+                        a.mov_rr32(d, g(v)?);
+                    }
                     a.alu32_ri(if matches!(inst.op, Op::AndI32(..)) { 4 } else { 0 }, d, c);
                 }
             }
@@ -1217,7 +1251,9 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                     if d == y {
                         a.alu32_rr(0x01, d, x);
                     } else {
-                        a.mov_rr32(d, x);
+                        if d != x {
+                            a.mov_rr32(d, x);
+                        }
                         a.alu32_rr(0x01, d, y);
                     }
                 }
@@ -1549,6 +1585,19 @@ fn store_value(a: &mut Asm, home: &[Home], t: &Trace, v: Ref, base: R, disp: i32
             a.store(base, disp, R::Rax);
         }
         (Home::None, Op::Sunk) => return Err(format!("sunk table {} stored outside an exit", v.0)),
+        (Home::None, Op::I32ToNum(x)) if matches!((home[x.index()], &t.inst(*x).op), (Home::None, Op::AddI32(..))) => {
+            // (an integer + constant, then the conversion: only here)
+            let Op::AddI32(y, k) = t.inst(*x).op else { unreachable!() };
+            let Op::KI32(c) = t.inst(k).op else { return Err("deferred add of a non-constant".into()) };
+            match home[y.index()] {
+                Home::G(r) => a.mov_rr32(R::Rax, r),
+                Home::S(s) => a.load(R::Rax, R::Rsp, spill_off(s)),
+                h => return Err(format!("added value {} has no home {:?}", y.0, h)),
+            }
+            a.alu32_ri(0, R::Rax, c);
+            a.cvtsi2sd(X(0), R::Rax);
+            a.movsd_store(base, disp, X(0));
+        }
         (Home::None, Op::I32ToNum(x)) => {
             // (a conversion done only where it is stored)
             match home[x.index()] {
