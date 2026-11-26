@@ -106,6 +106,37 @@ pub fn run(t: &mut Trace) -> bool {
     true
 }
 
+/// The snapshot integer conversions' entry checks exit through: the
+/// trace's entry snapshot, a copy marked in `int_snaps`.
+/// `level`: what a failure turns off (see `Trace::no_int`).
+fn int_snap(t: &mut Trace, level: u8) -> SnapId {
+    if let Some(&(k, _)) = t.int_snaps.iter().find(|x| x.1 == level) {
+        return SnapId(k);
+    }
+    // (the last snapshot stays last: the back edge's, which the backend
+    // and linking take as the last one - the copy goes in its place, it
+    // moves to the end)
+    let s = t.snapshots[0].clone();
+    t.snapshots.push(s);
+    let last = t.snapshots.len() - 1;
+    let k = last - 1;
+    t.snapshots.swap(k, last);
+    for x in &mut t.insts {
+        if x.snapshot() == Some(SnapId(k as u32)) {
+            crate::jit::recorder::set_snapshot(&mut x.op, SnapId(last as u32));
+        }
+    }
+    for sk in &mut t.sinks {
+        for st in &mut sk.states {
+            if st.snap == k as u32 {
+                st.snap = last as u32;
+            }
+        }
+    }
+    t.int_snaps.push((k as u32, level));
+    SnapId(k as u32)
+}
+
 /// Bound on a loop counter's magnitude for its I32 twin (start and limit
 /// are checked to be below it: with a step below 2^16, the counter and a
 /// few small constants added to it stay inside i32).
@@ -121,6 +152,9 @@ const STEP_BOUND: i32 = 65536;
 /// then computed on the twin with integer instructions, provably the same
 /// values.
 pub fn int_induction(t: &mut Trace) -> bool {
+    if t.no_int >= 2 {
+        return false;
+    }
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *OFF.get_or_init(|| std::env::var_os("LUAU_TRACE_NOINTIND").is_some()) {
         return false;
@@ -190,7 +224,7 @@ pub fn int_induction(t: &mut Trace) -> bool {
             t.insts.push(Inst { op, ty });
             t.insts.len() - 1
         };
-        let snap = SnapId(0);
+        let snap = int_snap(t, 2);
         let khi = push(t, Op::KNum(IND_BOUND), IrType::Number);
         let klo = push(t, Op::KNum(-IND_BOUND), IrType::Number);
         let shi = push(t, Op::KI32(STEP_BOUND), IrType::I32);
@@ -318,7 +352,7 @@ const EXACT: f64 = 4503599627370496.0; // 2^52
 /// be an integer (not -0) below c in magnitude before the loop; the float
 /// values (for exits, other users) are the integers converted.
 pub fn int_mod_phi(t: &mut Trace) -> bool {
-    if std::env::var_os("LUAU_TRACE_NOMODPHI").is_some() {
+    if t.no_int >= 1 || std::env::var_os("LUAU_TRACE_NOMODPHI").is_some() {
         return false;
     }
     let Some(loop_ref) = t.loop_ref else { return false };
@@ -334,9 +368,9 @@ pub fn int_mod_phi(t: &mut Trace) -> bool {
         if t.insts[p].ty != IrType::Number || pre.index() >= l || back.index() <= l {
             continue;
         }
-        if let Some((nodes, guards)) = accumulator(t, p, pre, back, l) {
+        if let Some((nodes, m, guards)) = accumulator(t, p, pre, back, l) {
             let pre_guards = guards(t);
-            convert_mod_phi(t, p, pre, back, back, None, pre_guards, &nodes);
+            convert_mod_phi(t, p, pre, back, back, None, m, pre_guards, &nodes);
             return true;
         }
         let Op::Mod(e, k) = t.insts[back.index()].op else { continue };
@@ -349,7 +383,7 @@ pub fn int_mod_phi(t: &mut Trace) -> bool {
         if b >= EXACT {
             continue;
         }
-        convert_mod_phi(t, p, pre, back, e, Some(c as i64), Vec::new(), &nodes);
+        convert_mod_phi(t, p, pre, back, e, Some(c as i64), 0, Vec::new(), &nodes);
         return true;
     }
     false
@@ -385,11 +419,13 @@ fn mod_bound(t: &Trace, v: Ref, p: usize, c: f64, l: usize, nodes: &mut Vec<usiz
 /// `p - e`, `e` linear in the loop counter (a * i + b, integer constants)
 /// of a loop whose test runs on the counter's I32 twin. Returns `e` and a
 /// builder of the pre-loop guards proving every partial sum stays below
-/// 2^52: |pre| < 2^51 and, for s = |start| and s = |limit|, the sum of at
-/// most 2s + 1 terms each at most A s + B (A = |a|, B = |b|) - at most
-/// (3A + 2B) s^2 + A + 3B - below 2^51 (checked on s^2: no abs needed).
+/// 2^52 (2^(52 - m) at scale m): |pre| < half that and, for s = start and
+/// s = limit, (|limit - start| + 1) (A |s| + B) - at most that many terms,
+/// each at most A |s| + B (A, B: the sums of the counter coefficients' and
+/// constants' magnitudes) - below half too. A failed check re-records the
+/// loop without integers (`int_snap`).
 #[allow(clippy::type_complexity)]
-fn accumulator(t: &Trace, p: usize, pre: Ref, back: Ref, l: usize) -> Option<(Vec<usize>, Box<dyn Fn(&mut Trace) -> Vec<usize>>)> {
+fn accumulator(t: &Trace, p: usize, pre: Ref, back: Ref, l: usize) -> Option<(Vec<usize>, u32, Box<dyn Fn(&mut Trace) -> Vec<usize>>)> {
     // the back value: + - tree of the PHI (once, added) and terms linear
     // in the counter; per iteration the terms add at most A s + B
     struct W<'a> {
@@ -399,6 +435,8 @@ fn accumulator(t: &Trace, p: usize, pre: Ref, back: Ref, l: usize) -> Option<(Ve
         ip: Option<usize>,
         nodes: Vec<usize>,
         pcount: u32,
+        /// the largest binary-fraction scale of a term (see `scale_of`)
+        m: u32,
     }
     impl W<'_> {
         /// (coefficient of the PHI, sum of |counter coefficients|, sum
@@ -413,11 +451,14 @@ fn accumulator(t: &Trace, p: usize, pre: Ref, back: Ref, l: usize) -> Option<(Ve
             }
             let t = self.t;
             let k = |r: Ref| match t.inst(r).op {
-                Op::KNum(c) if c.fract() == 0.0 && c.abs() < 65536.0 => Some(c),
+                Op::KNum(c) if c.abs() < 65536.0 && const_scale(c).is_some() => Some(c),
                 _ => None,
             };
             let r = match t.inst(v).op {
-                Op::KNum(c) if c.fract() == 0.0 && c.abs() < 65536.0 => return Some((0.0, 0.0, c.abs())),
+                Op::KNum(c) if c.abs() < 65536.0 && const_scale(c).is_some() => {
+                    self.m = self.m.max(const_scale(c)?);
+                    return Some((0.0, 0.0, c.abs()));
+                }
                 Op::I32ToNum(w) if matches!(t.inst(w).op, Op::Phi { .. }) => {
                     if self.ip.is_some_and(|x| x != w.index()) {
                         return None;
@@ -452,9 +493,20 @@ fn accumulator(t: &Trace, p: usize, pre: Ref, back: Ref, l: usize) -> Option<(Ve
             Some(r)
         }
     }
-    let mut w = W { t, p, l, ip: None, nodes: Vec::new(), pcount: 0 };
+    let mut w = W { t, p, l, ip: None, nodes: Vec::new(), pcount: 0, m: 0 };
     let (pc, ca, cb) = w.walk(back, 1.0, 0)?;
     if pc != 1.0 || w.pcount != 1 || w.nodes.last() != Some(&back.index()) {
+        return None;
+    }
+    // the scale the sum is carried at (products add their operands')
+    let m = scale_of(t, back, p, 0, &mut std::collections::HashMap::new())?;
+    if m > 10 {
+        return None;
+    }
+    let _ = w.m;
+    // every term exact as a double (and as an integer at scale m): below
+    // 2^52 times 2^m in magnitude, the counter below 2^31
+    if (ca * 2147483648.0 + cb) * (2f64).powi(m as i32) >= EXACT {
         return None;
     }
     let (ipo, nodes) = (w.ip, w.nodes);
@@ -485,46 +537,84 @@ fn accumulator(t: &Trace, p: usize, pre: Ref, back: Ref, l: usize) -> Option<(Ve
     if start.index() >= l || limit.index() >= l {
         return None;
     }
-    let coef = 3.0 * ca + 2.0 * cb;
-    let cst = ca + 3.0 * cb;
-    let half = 2251799813685248.0; // 2^51
+    // (doubles hold multiples of 2^-m exactly below 2^(53 - m))
+    let half = (2f64).powi(51 - m as i32);
     Some((
         nodes,
+        m,
         Box::new(move |t: &mut Trace| {
             let push = |t: &mut Trace, op: Op, ty: IrType| -> usize {
                 t.insts.push(Inst { op, ty });
                 t.insts.len() - 1
             };
-            let snap = SnapId(0);
+            let snap = int_snap(t, 1);
             let mut out = Vec::new();
             let khi = push(t, Op::KNum(half), IrType::Number);
             let klo = push(t, Op::KNum(-half), IrType::Number);
-            let kc = push(t, Op::KNum(coef), IrType::Number);
-            let kd = push(t, Op::KNum(cst), IrType::Number);
-            out.extend([khi, klo, kc, kd]);
+            let ka = push(t, Op::KNum(ca), IrType::Number);
+            let kb = push(t, Op::KNum(cb), IrType::Number);
+            let k1 = push(t, Op::KNum(1.0), IrType::Number);
+            out.extend([khi, klo, ka, kb, k1]);
             for g in [
                 Op::Guard { cmp: Cmp::Lt, a: pre, b: Ref(khi as u32), snap },
                 Op::Guard { cmp: Cmp::Lt, a: Ref(klo as u32), b: pre, snap },
             ] {
                 out.push(push(t, g, IrType::Nil));
             }
+            // at most |limit - start| + 1 terms (|step| >= 1), each at most
+            // A |s| + B for s = start and s = limit (the counter between)
+            let abs = luau_common::bytecode::BuiltinFunction::MathAbs as u8;
+            let d = push(t, Op::Sub(limit, start), IrType::Number);
+            let ad = push(t, Op::Math1(abs, Ref(d as u32)), IrType::Number);
+            let n = push(t, Op::Add(Ref(ad as u32), Ref(k1 as u32)), IrType::Number);
+            out.extend([d, ad, n]);
             for s in [start, limit] {
-                let sq = push(t, Op::Mul(s, s), IrType::Number);
-                let m = push(t, Op::Mul(Ref(sq as u32), Ref(kc as u32)), IrType::Number);
-                let v = push(t, Op::Add(Ref(m as u32), Ref(kd as u32)), IrType::Number);
-                let g = push(t, Op::Guard { cmp: Cmp::Lt, a: Ref(v as u32), b: Ref(khi as u32), snap }, IrType::Nil);
-                out.extend([sq, m, v, g]);
+                let a_s = push(t, Op::Math1(abs, s), IrType::Number);
+                let m = push(t, Op::Mul(Ref(a_s as u32), Ref(ka as u32)), IrType::Number);
+                let term = push(t, Op::Add(Ref(m as u32), Ref(kb as u32)), IrType::Number);
+                let tot = push(t, Op::Mul(Ref(n as u32), Ref(term as u32)), IrType::Number);
+                let g = push(t, Op::Guard { cmp: Cmp::Lt, a: Ref(tot as u32), b: Ref(khi as u32), snap }, IrType::Nil);
+                out.extend([a_s, m, term, tot, g]);
             }
             out
         }),
     ))
 }
 
+/// The smallest e (at most 10) with c * 2^e an integer: c is a binary
+/// fraction (None: it isn't one).
+fn const_scale(c: f64) -> Option<u32> {
+    (0..=10).find(|&e| (c * (1u32 << e) as f64).fract() == 0.0)
+}
+
+/// The scale `v` is carried at as an integer (`v * 2^scale`): constants
+/// their own, the counter 0, the PHI `pm` (given; 0 to find the others'
+/// maximum), sums the larger of their operands', products the sum.
+fn scale_of(t: &Trace, v: Ref, p: usize, pm: u32, memo: &mut std::collections::HashMap<usize, u32>) -> Option<u32> {
+    if v.index() == p {
+        return Some(pm);
+    }
+    if let Some(&s) = memo.get(&v.index()) {
+        return Some(s);
+    }
+    let s = match t.inst(v).op {
+        Op::KNum(c) => const_scale(c)?,
+        Op::I32ToNum(_) => 0,
+        Op::Add(a, b) | Op::Sub(a, b) => scale_of(t, a, p, pm, memo)?.max(scale_of(t, b, p, pm, memo)?),
+        Op::Mul(a, b) => scale_of(t, a, p, pm, memo)? + scale_of(t, b, p, pm, memo)?,
+        Op::Neg(a) => scale_of(t, a, p, pm, memo)?,
+        _ => return None,
+    };
+    memo.insert(v.index(), s);
+    Some(s)
+}
+
 /// `c` Some: the modulus PHI (see `int_mod_phi`); None: an accumulator
 /// whose back value is the last of `nodes`, `pre_guards` its pre-loop
 /// checks (see `accumulator`).
 #[allow(clippy::too_many_arguments)]
-fn convert_mod_phi(t: &mut Trace, p: usize, pre: Ref, back: Ref, e: Ref, c: Option<i64>, pre_guards: Vec<usize>, nodes: &[usize]) {
+/// `m`: the scale the PHI is carried at (see `scale_of`).
+fn convert_mod_phi(t: &mut Trace, p: usize, pre: Ref, back: Ref, e: Ref, c: Option<i64>, m: u32, pre_guards: Vec<usize>, nodes: &[usize]) {
     use std::collections::HashMap;
     let l = t.loop_ref.unwrap().index();
     // (the instructions before this conversion: the guards were just added)
@@ -534,7 +624,7 @@ fn convert_mod_phi(t: &mut Trace, p: usize, pre: Ref, back: Ref, e: Ref, c: Opti
         t.insts.push(Inst { op, ty });
         t.insts.len() - 1
     };
-    let snap = SnapId(0);
+    let snap = int_snap(t, 1);
     // before the loop: (modulus) |pre| < c, an integer
     let mut pre_new = pre_guards;
     if let Some(c) = c {
@@ -546,57 +636,89 @@ fn convert_mod_phi(t: &mut Trace, p: usize, pre: Ref, back: Ref, e: Ref, c: Opti
     }
     // (also the bound body re-entry checks)
     let lim = c.unwrap_or(2251799813685248); // c / 2^51
-    let x0 = push(t, Op::NumToI64 { a: pre, lim, snap }, IrType::I64);
+    let x0 = push(t, Op::NumToI64 { a: pre, lim, shift: m as u8, snap }, IrType::I64);
     pre_new.push(x0);
     let xp = push(t, Op::Phi { pre: Ref(x0 as u32), back: Ref(x0 as u32) }, IrType::I64);
     // new instructions placed after an original one
     let mut after: HashMap<usize, Vec<usize>> = HashMap::new();
-    let mut int_of: HashMap<usize, Ref> = HashMap::new();
-    int_of.insert(p, Ref(xp as u32));
-    let mut operand = |t: &mut Trace, v: Ref, int_of: &HashMap<usize, Ref>, pre_new: &mut Vec<usize>| -> Ref {
+    // each value as an integer: (its I64, its scale - the I64 is the
+    // value times 2^scale)
+    let mut int_of: HashMap<usize, (Ref, u32)> = HashMap::new();
+    int_of.insert(p, (Ref(xp as u32), m));
+    let operand = |t: &mut Trace, v: Ref, int_of: &HashMap<usize, (Ref, u32)>, pre_new: &mut Vec<usize>| -> (Ref, u32) {
         if let Some(&r) = int_of.get(&v.index()) {
             return r;
         }
         match t.inst(v).op {
             Op::KNum(k) => {
-                let r = push(t, Op::KI64(k as i64), IrType::I64);
+                let s = const_scale(k).expect("binary fraction");
+                let r = push(t, Op::KI64((k * (1u32 << s) as f64) as i64), IrType::I64);
                 pre_new.push(r);
-                Ref(r as u32)
+                (Ref(r as u32), s)
             }
             _ => unreachable!("operand without an integer twin"),
         }
     };
+    // (r at scale `from` to scale `to`: times 2^(to - from))
+    let align = |t: &mut Trace, (r, from): (Ref, u32), to: u32, pre_new: &mut Vec<usize>, here: &mut Vec<usize>| -> Ref {
+        if from == to {
+            return r;
+        }
+        let k = push(t, Op::KI64(1i64 << (to - from)), IrType::I64);
+        pre_new.push(k);
+        let x = push(t, Op::MulI64(r, Ref(k as u32)), IrType::I64);
+        here.push(x);
+        Ref(x as u32)
+    };
     let mut convs: Vec<(usize, Ref)> = Vec::new();
     for &v in nodes {
-        let op = match t.insts[v].op {
-            Op::I32ToNum(w) => Op::I32ToI64(w),
-            Op::Add(a, b) => Op::AddI64(operand(t, a, &int_of, &mut pre_new), operand(t, b, &int_of, &mut pre_new)),
-            Op::Sub(a, b) => Op::SubI64(operand(t, a, &int_of, &mut pre_new), operand(t, b, &int_of, &mut pre_new)),
-            Op::Mul(a, b) => Op::MulI64(operand(t, a, &int_of, &mut pre_new), operand(t, b, &int_of, &mut pre_new)),
-            Op::Neg(a) => Op::NegI64(operand(t, a, &int_of, &mut pre_new)),
+        let mut here = Vec::new();
+        let (op, s) = match t.insts[v].op {
+            Op::I32ToNum(w) => (Op::I32ToI64(w), 0),
+            Op::Add(a, b) | Op::Sub(a, b) => {
+                let (x, y) = (operand(t, a, &int_of, &mut pre_new), operand(t, b, &int_of, &mut pre_new));
+                let s = x.1.max(y.1);
+                let (x, y) = (align(t, x, s, &mut pre_new, &mut here), align(t, y, s, &mut pre_new, &mut here));
+                (if matches!(t.insts[v].op, Op::Add(..)) { Op::AddI64(x, y) } else { Op::SubI64(x, y) }, s)
+            }
+            Op::Mul(a, b) => {
+                let (x, y) = (operand(t, a, &int_of, &mut pre_new), operand(t, b, &int_of, &mut pre_new));
+                (Op::MulI64(x.0, y.0), x.1 + y.1)
+            }
+            Op::Neg(a) => {
+                let x = operand(t, a, &int_of, &mut pre_new);
+                (Op::NegI64(x.0), x.1)
+            }
             _ => unreachable!(),
         };
         let r = push(t, op, IrType::I64);
-        let cv = push(t, Op::I64ToNum(Ref(r as u32)), IrType::Number);
-        after.entry(v).or_default().extend([r, cv]);
-        int_of.insert(v, Ref(r as u32));
+        here.push(r);
+        let cv = push(t, Op::I64ToNum(Ref(r as u32), s as u8), IrType::Number);
+        here.push(cv);
+        after.entry(v).or_default().extend(here);
+        int_of.insert(v, (Ref(r as u32), s));
         convs.push((v, Ref(cv as u32)));
     }
     let (ri, rv) = match c {
         Some(c) => {
-            let ei = operand(t, e, &int_of, &mut pre_new);
+            let ei = operand(t, e, &int_of, &mut pre_new).0;
             let ri = push(t, Op::ModI64K(ei, c), IrType::I64);
-            let rv = push(t, Op::I64ToNum(Ref(ri as u32)), IrType::Number);
+            let rv = push(t, Op::I64ToNum(Ref(ri as u32), 0), IrType::Number);
             after.entry(back.index()).or_default().extend([ri, rv]);
             (Ref(ri as u32), Some(rv))
         }
-        // (the back value is one of the nodes)
-        None => (int_of[&back.index()], None),
+        // (the back value is one of the nodes, at the PHI's scale: the
+        // largest)
+        None => {
+            debug_assert_eq!(int_of[&back.index()].1, m);
+            (int_of[&back.index()].0, None)
+        }
     };
     if let Op::Phi { back: b, .. } = &mut t.insts[xp].op {
         *b = ri;
     }
-    let pv = push(t, Op::I64ToNum(Ref(xp as u32)), IrType::Number);
+    let pv = push(t, Op::I64ToNum(Ref(xp as u32), m as u8), IrType::Number);
+    let pvs = vec![pv];
     // every use of the floats: the integers converted
     let mut map: Vec<Ref> = (0..t.insts.len() as u32).map(Ref).collect();
     map[p] = Ref(pv as u32);
@@ -623,7 +745,7 @@ fn convert_mod_phi(t: &mut Trace, p: usize, pre: Ref, back: Ref, e: Ref, c: Opti
         order.push(j);
         if j == last_phi {
             order.push(xp);
-            order.push(pv);
+            order.extend(pvs.iter().copied());
         }
         if let Some(v) = after.get(&j) {
             order.extend(v.iter().copied());

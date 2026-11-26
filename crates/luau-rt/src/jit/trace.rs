@@ -112,6 +112,12 @@ pub struct Trace {
     pub inserts: bool,
     /// cycles trace runs took before exits counted in `side_exits`
     pub storm_cycles: u64,
+    /// snapshots of the integer conversions' entry checks, with the level
+    /// an exit through one sets for the loop (see `JitState::no_int`)
+    pub int_snaps: Vec<(u32, u8)>,
+    /// integer conversions left out for this loop (they failed): 1 the
+    /// 64-bit ones, 2 all
+    pub no_int: u8,
     /// per snapshot: resume pc | FAST_EXIT when an exit through it needs no
     /// bookkeeping (leaves the loop, or ends it at the header: no frames,
     /// no stack top) - native code's cached entry handles those itself
@@ -156,7 +162,7 @@ pub const FAST_EXIT: u32 = 0x8000_0000;
 
 impl Trace {
     pub fn new(id: TraceId, proto: *mut Proto, start_pc: u32) -> Trace {
-        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, varargs: None, sinks: Vec::new(), link: None, link_cell: 0, root_key: (0, 0), spill_base: 0, reads: Vec::new(), phi_slots: Vec::new(), layout_hoisted: false, mem_hoisted: false, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new(), inserts: false, storm_cycles: 0, exit_pcs: Box::new([]), exit_seen: std::ptr::null_mut() }
+        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, varargs: None, sinks: Vec::new(), link: None, link_cell: 0, root_key: (0, 0), spill_base: 0, reads: Vec::new(), phi_slots: Vec::new(), layout_hoisted: false, mem_hoisted: false, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new(), inserts: false, storm_cycles: 0, int_snaps: Vec::new(), no_int: 0, exit_pcs: Box::new([]), exit_seen: std::ptr::null_mut() }
     }
 
     pub fn inst(&self, r: Ref) -> &Inst {

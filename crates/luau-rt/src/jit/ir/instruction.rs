@@ -69,10 +69,10 @@ pub enum Op {
     Guard { cmp: Cmp, a: Ref, b: Ref, snap: SnapId },
     // ---- 64-bit machine integers (I64) ----------------------------------
     KI64(i64),
-    /// the number `a` as an I64; exits through `snap` unless it is exactly
-    /// one (not -0 or NaN) below `lim` in magnitude. (A loop PHI's entry:
-    /// body re-entry checks the same.)
-    NumToI64 { a: Ref, lim: i64, snap: SnapId },
+    /// the number `a * 2^shift` as an I64; exits through `snap` unless it
+    /// is exactly one (not -0 or NaN) below `lim` in magnitude. (A loop
+    /// PHI's entry: body re-entry checks the same.)
+    NumToI64 { a: Ref, lim: i64, shift: u8, snap: SnapId },
     I32ToI64(Ref),
     AddI64(Ref, Ref),
     SubI64(Ref, Ref),
@@ -80,7 +80,8 @@ pub enum Op {
     NegI64(Ref),
     /// `a` mod `k` rounded down (k >= 2): Lua's % on integers
     ModI64K(Ref, i64),
-    I64ToNum(Ref),
+    /// the I64 as a number, times 2^-shift (exact: a power of two)
+    I64ToNum(Ref, u8),
     /// numbers: `t` when `a cmp b` holds (NaN: it doesn't), else `f` (a
     /// branch of the loop body if-converted, see `Recorder::if_convert`)
     Select { cmp: Cmp, a: Ref, b: Ref, t: Ref, f: Ref },
@@ -296,7 +297,7 @@ impl Inst {
             KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | KI64(_) | SLoad { .. } | Loop | Nop => vec![],
             Guard { a, b, .. } => vec![*a, *b],
             NumToI64 { a, .. } => vec![*a],
-            I32ToI64(a) | NegI64(a) | ModI64K(a, _) | I64ToNum(a) => vec![*a],
+            I32ToI64(a) | NegI64(a) | ModI64K(a, _) | I64ToNum(a, _) => vec![*a],
             AddI64(a, b) | SubI64(a, b) | MulI64(a, b) => vec![*a, *b],
             Select { a, b, t, f, .. } => vec![*a, *b, *t, *f],
             GuardTruthy { a, .. } => vec![*a],
@@ -363,7 +364,7 @@ impl Inst {
             KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | Add(..) | Sub(..) | Mul(..) | Div(..) | Mod(..)
                 | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | AndI32(..) | ARef { .. } | ABase(_) | TruncI32(_) | FrameFunc | ClEnv { .. } | HSlot { .. } | Not(_) | LudToI32(_) | I32ToLud(_)
                 | VArith { .. } | VNeg(_) | VGet { .. } | VMake { .. } | Select { .. }
-                | KI64(_) | I32ToI64(_) | AddI64(..) | SubI64(..) | MulI64(..) | NegI64(_) | ModI64K(..) | I64ToNum(_)
+                | KI64(_) | I32ToI64(_) | AddI64(..) | SubI64(..) | MulI64(..) | NegI64(_) | ModI64K(..) | I64ToNum(..)
         )
     }
 

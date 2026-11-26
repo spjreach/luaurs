@@ -130,7 +130,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             operand_use[o.index()] = true;
         }
     }
-    let deferred: Vec<bool> = (0..n).map(|i| matches!(t.insts[i].op, Op::I32ToNum(_) | Op::I64ToNum(_)) && !operand_use[i]).collect();
+    let deferred: Vec<bool> = (0..n).map(|i| matches!(t.insts[i].op, Op::I32ToNum(_) | Op::I64ToNum(..)) && !operand_use[i]).collect();
     // I32 constants used only by integer adds / ands: immediates, no
     // register
     let mut imm_only = vec![true; n];
@@ -180,7 +180,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 Op::AddI32(y, _) if deferred_add[x.index()] => y,
                 _ => x,
             },
-            Op::I64ToNum(x) if deferred[v.index()] => x,
+            Op::I64ToNum(x, _) if deferred[v.index()] => x,
             _ => v,
         }
     };
@@ -583,19 +583,23 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                     a.mov_ri64(r, *v as u64);
                 }
             }
-            Op::NumToI64 { a: x, lim, snap } => {
+            Op::NumToI64 { a: x, lim, shift, snap } => {
                 let x = f(*x)?;
                 let d = if let Home::G(d) = dst { d } else { R::Rax };
-                num_to_i64(&mut a, d, x, *lim, stub(*snap));
+                num_to_i64(&mut a, d, x, *lim, *shift, stub(*snap));
             }
             Op::I32ToI64(x) => {
                 if let Home::G(d) = dst {
                     a.movsxd(d, g(*x)?);
                 }
             }
-            Op::I64ToNum(x) => {
+            Op::I64ToNum(x, s) => {
                 if let Home::F(d) = dst {
+                    // (cleared first: cvtsi2sd keeps the register's upper
+                    // half, a dependency on its last value)
+                    a.xorps(d, d);
                     a.cvtsi2sd64(d, g(*x)?);
+                    scale_down(&mut a, d, *s);
                 }
             }
             Op::NegI64(x) => {
@@ -1362,6 +1366,8 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             }
             Op::I32ToNum(x) => {
                 if let Home::F(d) = dst {
+                    // (cleared first: see I64ToNum)
+                    a.xorps(d, d);
                     a.cvtsi2sd(d, g(*x)?);
                 }
             }
@@ -1547,11 +1553,11 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 // the number, converted as on entry (exactly, in bounds, or
                 // the interpreter runs the iteration)
                 let Op::Phi { pre, .. } = t.insts[j].op else { return Err("I64 PHI".into()) };
-                let Op::NumToI64 { lim, .. } = t.inst(pre).op else { return Err("I64 PHI entry".into()) };
+                let Op::NumToI64 { lim, shift, .. } = t.inst(pre).op else { return Err("I64 PHI entry".into()) };
                 a.cmp32_mi(R::R13, disp + OFF_TT, LUA_TNUMBER);
                 a.jcc(Cond::NE, stubs[0]);
                 a.movsd_load(X(1), R::R13, disp);
-                num_to_i64(&mut a, R::Rax, X(1), lim, stubs[0]);
+                num_to_i64(&mut a, R::Rax, X(1), lim, shift, stubs[0]);
                 match home[j] {
                     Home::G(r) => a.mov_rr(r, R::Rax),
                     Home::S(s2) => a.store(R::Rsp, spill_off(s2), R::Rax),
@@ -1756,7 +1762,7 @@ fn store_value(a: &mut Asm, home: &[Home], t: &Trace, v: Ref, base: R, disp: i32
             a.cvtsi2sd(X(0), R::Rax);
             a.movsd_store(base, disp, X(0));
         }
-        (Home::None, Op::I64ToNum(x)) => {
+        (Home::None, Op::I64ToNum(x, sh)) => {
             // (a conversion done only where it is stored)
             match home[x.index()] {
                 Home::G(r) => a.cvtsi2sd64(X(0), r),
@@ -1766,6 +1772,7 @@ fn store_value(a: &mut Asm, home: &[Home], t: &Trace, v: Ref, base: R, disp: i32
                 }
                 h => return Err(format!("converted value {} has no home {:?}", x.0, h)),
             }
+            scale_down(a, X(0), *sh);
             a.movsd_store(base, disp, X(0));
         }
         (Home::None, Op::I32ToNum(x)) => {
@@ -2402,14 +2409,22 @@ fn magic_s64(k: i64) -> Option<(i64, u32)> {
     Some((m, s))
 }
 
-/// `d` = the number in `x` as an i64; jumps to `fail` unless it is exactly
-/// one (bit for bit: not -0, NaN, out of range) with |d| < lim. Uses rcx,
-/// rdx, xmm0.
-fn num_to_i64(a: &mut Asm, d: R, x: X, lim: i64, fail: Label) {
-    a.cvttsd2si64_x(d, x);
+/// `d` = the number in `x` times 2^shift (exact: a power of two) as an
+/// i64; jumps to `fail` unless it is exactly one (bit for bit: not -0, NaN,
+/// out of range) with |d| < lim. Uses rcx, rdx, xmm0.
+fn num_to_i64(a: &mut Asm, d: R, x: X, lim: i64, shift: u8, fail: Label) {
+    let src = if shift > 0 {
+        a.mov_ri64(R::Rcx, (2f64).powi(shift as i32).to_bits());
+        a.movq_xr(X(0), R::Rcx);
+        a.mulsd(X(0), x);
+        X(0)
+    } else {
+        x
+    };
+    a.movq_rx(R::Rdx, src);
+    a.cvttsd2si64_x(d, src);
     a.cvtsi2sd64(X(0), d);
     a.movq_rx(R::Rcx, X(0));
-    a.movq_rx(R::Rdx, x);
     a.cmp_rr(R::Rcx, R::Rdx);
     a.jcc(Cond::NE, fail);
     a.mov_ri64(R::Rcx, lim as u64);
@@ -2418,4 +2433,13 @@ fn num_to_i64(a: &mut Asm, d: R, x: X, lim: i64, fail: Label) {
     a.mov_ri64(R::Rcx, lim.wrapping_neg() as u64);
     a.cmp_rr(d, R::Rcx);
     a.jcc(Cond::LE, fail);
+}
+
+/// `x` *= 2^-shift (exact). Uses rcx and xmm1.
+fn scale_down(a: &mut Asm, x: X, shift: u8) {
+    if shift > 0 {
+        a.mov_ri64(R::Rcx, (2f64).powi(-(shift as i32)).to_bits());
+        a.movq_xr(X(1), R::Rcx);
+        a.mulsd(x, X(1));
+    }
 }

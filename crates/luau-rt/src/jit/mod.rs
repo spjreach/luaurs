@@ -249,6 +249,17 @@ unsafe fn handle_exit(L: *mut lua_State, p: *mut Proto, header: u32, base: StkId
             }
             return resume_at(pc);
         }
+        // an integer conversion's entry check failed: the loop again,
+        // recorded without them (not a storm: re-recording the same trace
+        // would fail the same way)
+        let int_fail = state::with(|s| s.by_tag_mut(tag).and_then(|t| t.int_snaps.iter().find(|x| x.0 == k).map(|x| x.1)));
+        if let Some(level) = int_fail {
+            state::with(|s| {
+                let e = s.no_int.entry(key).or_insert(0);
+                *e = (*e).max(level);
+                s.remove_root(key);
+            });
+        }
         let header = key.1;
         // Leaving the loop is normal. An exit back into the loop body that
         // gets hot is continued by a side trace (recorded from there to the
@@ -402,6 +413,7 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
     let side_of = t.side_of;
     let root_key = (proto as usize, header);
     t.root_key = root_key;
+    t.no_int = state::with(|s| s.no_int.get(&root_key).copied().unwrap_or(0));
     // how it ends: looping; a side trace by running its root again; a
     // trace ending at another loop's header by running that loop's trace
     // (through a cell: that trace may come and go)

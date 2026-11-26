@@ -22,6 +22,9 @@ pub struct JitState {
     next_id: u32,
     /// recent aborts, for diagnostics
     pub aborts: Vec<(TraceId, u32, AbortReason)>,
+    /// loops (proto, header) whose integer conversions' entry checks
+    /// failed: recorded without them from then on
+    pub no_int: HashMap<(usize, u32), u8>,
     /// side traces by tag
     pub sides: HashMap<u16, Trace>,
     /// compiled traces by tag: a root's (proto, header), or a side trace
@@ -57,6 +60,7 @@ impl JitState {
             traces: HashMap::new(),
             next_id: 1,
             aborts: Vec::new(),
+            no_int: HashMap::new(),
             sides: HashMap::new(),
             by_tag: HashMap::new(),
             dead: HashMap::new(),
