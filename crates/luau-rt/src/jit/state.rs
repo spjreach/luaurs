@@ -7,7 +7,55 @@ use super::hotness::HotCounters;
 use super::trace::{AbortReason, Trace, TraceId};
 use crate::lobject::Proto;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::HashMap as StdMap;
+
+/// FxHash (rustc's): for the JIT's small integer keys - (proto, pc),
+/// trace tags - looked up on every trace exit; SipHash cost more than the
+/// lookups (hash-flooding resistance isn't needed for internal keys).
+#[derive(Default, Clone, Copy)]
+pub struct FxHasher(u64);
+
+impl std::hash::Hasher for FxHasher {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.add(b as u64);
+        }
+    }
+    #[inline]
+    fn write_u8(&mut self, v: u8) {
+        self.add(v as u64);
+    }
+    #[inline]
+    fn write_u16(&mut self, v: u16) {
+        self.add(v as u64);
+    }
+    #[inline]
+    fn write_u32(&mut self, v: u32) {
+        self.add(v as u64);
+    }
+    #[inline]
+    fn write_u64(&mut self, v: u64) {
+        self.add(v);
+    }
+    #[inline]
+    fn write_usize(&mut self, v: usize) {
+        self.add(v as u64);
+    }
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+impl FxHasher {
+    #[inline]
+    fn add(&mut self, w: u64) {
+        self.0 = (self.0.rotate_left(5) ^ w).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+}
+
+pub type HashMap<K, V> = StdMap<K, V, std::hash::BuildHasherDefault<FxHasher>>;
 use std::sync::atomic::{AtomicI8, Ordering};
 
 pub struct JitState {
@@ -57,14 +105,14 @@ impl JitState {
             max_trace_len: config.max_trace_len,
             max_traces: 1000,
             hot: HotCounters::default(),
-            traces: HashMap::new(),
+            traces: HashMap::default(),
             next_id: 1,
             aborts: Vec::new(),
-            no_int: HashMap::new(),
-            sides: HashMap::new(),
-            by_tag: HashMap::new(),
-            dead: HashMap::new(),
-            link_cells: HashMap::new(),
+            no_int: HashMap::default(),
+            sides: HashMap::default(),
+            by_tag: HashMap::default(),
+            dead: HashMap::default(),
+            link_cells: HashMap::default(),
             next_tag: 1,
         }
     }

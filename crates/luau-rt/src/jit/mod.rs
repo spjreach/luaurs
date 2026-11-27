@@ -562,6 +562,10 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
             return;
         }
     };
+    // (LUAU_TRACE_ADDR=1: where each trace's code is, for profilers)
+    if crate::trace_flag!("LUAU_TRACE_ADDR") {
+        eprintln!("[ADDR] tag={} id={} pc={} side_of={:?} start={:#x} end={:#x}", t.tag, t.id.0, t.start_pc, t.side_of, native.entry, native.entry + native.size);
+    }
     t.native = Some(native);
     debug::log(debug::Event::TraceCompiled { id: id.0, pc: header, insts: t.len() });
     state::with(|s| match side_of {

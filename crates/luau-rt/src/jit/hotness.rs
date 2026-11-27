@@ -7,7 +7,7 @@
 //! (the threshold doubles) and is given up on after `MAX_PENALTY` failures.
 
 use crate::lobject::Proto;
-use std::collections::HashMap;
+use super::state::HashMap;
 
 /// LuaJIT's default `hotloop`.
 pub const DEFAULT_HOTLOOP: u32 = 56;
