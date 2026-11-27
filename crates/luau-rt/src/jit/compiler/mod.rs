@@ -36,7 +36,8 @@ pub enum End {
 
 /// `t.tag` and `t.link_table` must be set. Side traces (`t.side_of`) have
 /// no prologue: they run in their root's frame.
-pub fn compile(t: &Trace, end: End) -> Result<CompiledTrace, String> {
+/// Also returns `Trace::exit_regs` for the compiled code.
+pub fn compile(t: &Trace, end: End) -> Result<(CompiledTrace, Vec<Vec<(u16, u8, u8)>>), String> {
     super::ir::validate(t)?;
     #[cfg(all(target_arch = "x86_64", windows))]
     {
@@ -47,7 +48,7 @@ pub fn compile(t: &Trace, end: End) -> Result<CompiledTrace, String> {
             let _ = std::fs::write(std::path::Path::new(&dir).join(format!("trace-{}{}.bin", t.id.0, if t.side_of.is_some() { "s" } else { "" })), &code.bytes);
         }
         let entry = crate::codegen::mem::with_code(|m| unsafe { m.place(&code.bytes) }).ok_or("out of executable memory")?;
-        Ok(CompiledTrace { entry, size: code.bytes.len(), reentry: entry + code.reentry, body_entry: code.body_entry.map_or(0, |o| entry + o), reserved: code.reserved })
+        Ok((CompiledTrace { entry, size: code.bytes.len(), reentry: entry + code.reentry, body_entry: code.body_entry.map_or(0, |o| entry + o), reserved: code.reserved }, code.exit_regs))
     }
     #[cfg(not(all(target_arch = "x86_64", windows)))]
     {

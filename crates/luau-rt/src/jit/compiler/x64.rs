@@ -95,6 +95,8 @@ pub struct Code {
     pub body_entry: Option<usize>,
     /// spill slots side traces must not use
     pub reserved: u32,
+    /// see `Trace::exit_regs`
+    pub exit_regs: Vec<Vec<(u16, u8, u8)>>,
 }
 
 /// Compiles `t`. Fails (cleanly) on anything the backend doesn't handle yet.
@@ -246,6 +248,22 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     let limit = *LIMIT.get_or_init(|| std::env::var("LUAU_TRACE_REGS").ok().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX));
     let mut free_g: Vec<R> = GPRS.iter().take(limit).rev().copied().collect();
     let mut free_x: Vec<X> = XMMS.iter().take(limit).rev().map(|&x| X(x)).collect();
+    // a side trace's entry values its parent's exit left in registers (see
+    // `Trace::inherit`): those registers are theirs from the start
+    let mut forced: Vec<Option<Home>> = vec![None; n];
+    for &(i, kind, reg) in &t.inherit {
+        let i = i as usize;
+        if i >= n || !used[i] || !matches!(t.insts[i].op, Op::SLoad { guarded: false, .. }) || (0..i).any(|j| !matches!(t.insts[j].op, Op::SLoad { .. } | Op::Nop)) {
+            continue;
+        }
+        if kind == 1 {
+            if let Some(k) = free_x.iter().position(|x| x.0 == reg) {
+                forced[i] = Some(Home::F(free_x.remove(k)));
+            }
+        } else if let Some(k) = free_g.iter().position(|r| *r as u8 == reg) {
+            forced[i] = Some(Home::G(free_g.remove(k)));
+        }
+    }
     // spill slots: occupied now, and the last instruction a past occupant
     // used it at (a value spilled after the fact holds its slot from its
     // definition on, so only a slot unused since then will do)
@@ -311,6 +329,14 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
         }
         let Some(fp) = needs_reg(inst.ty) else { continue };
         let end = end_of(i, &last, &used);
+        if let Some(h) = forced[i] {
+            home[i] = h;
+            active.push(i);
+            if end != END {
+                dying[(end + 1).min(n)].push(i);
+            }
+            continue;
+        }
         // a back value computed from its PHI's last use takes the PHI's
         // register (no move at the back edge); only for instructions
         // without exits that allow their result in an operand's register
@@ -344,7 +370,9 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 // out of registers: the value (this one or one holding a
                 // register of the same kind) needed furthest ahead lives in
                 // a spill slot for its whole life
-                let same = |w: &usize| matches!((home[*w], fp), (Home::F(_), true) | (Home::G(_), false));
+                // (not an inherited entry value: it is in its register, never
+                // loaded - a spill slot of it would hold nothing)
+                let same = |w: &usize| matches!((home[*w], fp), (Home::F(_), true) | (Home::G(_), false)) && forced[*w].is_none();
                 let victim = active.iter().copied().filter(same).max_by_key(|&w| end_of(w, &last, &used));
                 let mut take_slot = |from: usize| -> Result<Home, String> {
                     let k = (spill_base..SPILL_SLOTS).find(|&k| !slot_busy[k] && slot_until[k].is_none_or(|u| u < from)).ok_or("out of spill slots")?;
@@ -488,7 +516,8 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     }
 
     for (i, inst) in t.insts.iter().enumerate() {
-        if deferred[i] || deferred_add[i] {
+        // (an inherited entry value is in its register already)
+        if deferred[i] || deferred_add[i] || forced[i].is_some() {
             continue;
         }
         // spilled operands go to the temp registers for this instruction
@@ -1657,7 +1686,31 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     if !a.finish() {
         return Err("assembler: unresolved label".into());
     }
-    Ok(Code { bytes: a.code, reentry, body_entry, reserved: reserved as u32 })
+    // per exit: the values it holds in registers (not where it rebuilds
+    // sunk tables: those calls clobber them)
+    let exit_regs: Vec<Vec<(u16, u8, u8)>> = t
+        .snapshots
+        .iter()
+        .enumerate()
+        .map(|(k, sn)| {
+            if t.sinks.iter().any(|sk| sk.states.iter().any(|st| st.snap == k as u32)) || sn.entries.iter().any(|e| matches!(t.inst(e.value).op, Op::Sunk)) {
+                return Vec::new();
+            }
+            sn.entries
+                .iter()
+                .filter_map(|e| {
+                    let ty = t.ty(e.value);
+                    ty.tag()?;
+                    match home.get(e.value.index())? {
+                        Home::F(x) if ty == IrType::Number => Some((e.slot, 1, x.0)),
+                        Home::G(r) if needs_reg(ty) == Some(false) => Some((e.slot, 0, *r as u8)),
+                        _ => None,
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    Ok(Code { bytes: a.code, reentry, body_entry, reserved: reserved as u32, exit_regs })
 }
 
 /// 1/v when v is a power of two whose reciprocal is a normal double.

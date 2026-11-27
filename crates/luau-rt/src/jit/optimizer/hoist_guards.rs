@@ -35,6 +35,12 @@ pub fn run(t: &mut Trace) -> bool {
             || matches!(x.op, Op::XStore { .. } | Op::TSet { .. })
             || matches!(x.op, Op::Builtin { bfid, .. } if bfid == B::Rawset as u8 || bfid == B::TableInsert as u8)
     });
+    // what can move or resize table storage (add keys, grow arrays): value
+    // stores can't
+    let moves = body.clone().any(|i| {
+        let x = &t.insts[i];
+        x.moves_tables() || matches!(x.op, Op::TSet { .. }) || matches!(x.op, Op::Builtin { bfid, .. } if bfid == B::Rawset as u8 || bfid == B::TableInsert as u8)
+    });
     let calls = body.clone().any(|i| matches!(t.insts[i].op, Op::CallC { .. }));
     let closes = body.clone().any(|i| matches!(t.insts[i].op, Op::CloseUpvals { .. }));
     let metas = calls || body.clone().any(|i| matches!(t.insts[i].op, Op::Builtin { bfid, .. } if bfid == B::Setmetatable as u8));
@@ -52,7 +58,10 @@ pub fn run(t: &mut Trace) -> bool {
         let ok = match &inst.op {
             Op::GuardProto { .. } | Op::ULoad { by_ref: false, .. } | Op::ClEnv { .. } | Op::GuardCFunc { .. } => true,
             Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } => true,
-            Op::HRef { .. } | Op::XLoad { .. } | Op::ASize(_) | Op::HSlot { .. } | Op::ABase(_) => !writes,
+            // (a load can see a store in the loop; sizes, storage and node
+            // addresses only change when storage moves)
+            Op::XLoad { .. } => !writes,
+            Op::HRef { .. } | Op::ASize(_) | Op::HSlot { .. } | Op::ABase(_) | Op::ARef { .. } => !moves,
             // (stores into tables don't change metatables or the read-only
             // flag: only setmetatable / calls - table.freeze is one)
             Op::TMeta { .. } | Op::GuardPlainTable { .. } => !metas,

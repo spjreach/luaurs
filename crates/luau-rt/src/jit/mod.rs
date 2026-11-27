@@ -423,6 +423,35 @@ unsafe fn record_step_inner(L: *mut lua_State, p: *mut Proto, pc: u32, base: Stk
 
 /// Optimizes, compiles and installs a recorded trace (a root trace for its
 /// loop, or a side trace linked to its parent's exit).
+/// A side trace's entry loads of slots its parent's exit holds in
+/// registers (`regs`: slot, kind, register) move to its start and take
+/// their values from those registers (`Trace::inherit`). Entry loads are
+/// unguarded loads of the stack as the exit left it - before any call, so
+/// moving them first changes nothing.
+fn inherit_front(t: &mut trace::Trace, regs: &[(u16, u8, u8)]) {
+    use ir::instruction::Op;
+    use ir::types::IrType;
+    let mut picked: Vec<(usize, u8, u8)> = Vec::new();
+    for (i, x) in t.insts.iter().enumerate() {
+        let Op::SLoad { slot, guarded: false, .. } = x.op else { continue };
+        let Some(&(_, kind, reg)) = regs.iter().find(|r| r.0 == slot) else { continue };
+        let fits = match kind {
+            1 => x.ty == IrType::Number,
+            _ => x.ty.tag().is_some() && !matches!(x.ty, IrType::Number | IrType::Vector | IrType::Nil),
+        };
+        if fits && !picked.iter().any(|p| p.0 == i || matches!(t.insts[p.0].op, Op::SLoad { slot: s2, .. } if s2 == slot)) {
+            picked.push((i, kind, reg));
+        }
+    }
+    if picked.is_empty() {
+        return;
+    }
+    let mut order: Vec<usize> = picked.iter().map(|p| p.0).collect();
+    order.extend((0..t.insts.len()).filter(|i| !picked.iter().any(|p| p.0 == *i)));
+    optimizer::hoist_consts::reorder(t, &order);
+    t.inherit = picked.iter().enumerate().map(|(k, p)| (k as u32, p.1, p.2)).collect();
+}
+
 fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mut Proto) {
     let side_of = t.side_of;
     let root_key = (proto as usize, header);
@@ -481,6 +510,18 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
                 link_to = compiler::End::Root(n.body_entry);
             }
         }
+        // values the parent's exit leaves in registers: taken from there
+        if let Some((ptag, k)) = side_of {
+            let regs = state::with(|s| s.by_tag_mut(ptag).and_then(|p| p.exit_regs.get(k as usize).cloned())).unwrap_or_default();
+            if !regs.is_empty() && !crate::trace_flag!("LUAU_TRACE_NOINHERIT") {
+                inherit_front(&mut t, &regs);
+            }
+            if crate::trace_flag!("LUAU_TRACE_INHDBG") {
+                let loads = t.insts.iter().filter(|x| matches!(x.op, ir::instruction::Op::SLoad { .. })).count();
+                let unguarded = t.insts.iter().filter(|x| matches!(x.op, ir::instruction::Op::SLoad { guarded: false, .. })).count();
+                eprintln!("[INH] side of {:?}: parent regs {} loads {} unguarded {} inherited {}", side_of, regs.len(), loads, unguarded, t.inherit.len());
+            }
+        }
     } else {
         root_facts(&mut t);
     }
@@ -503,7 +544,10 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
     }
     t.fallback = None;
     let native = match compiled {
-        Ok(n) => n,
+        Ok((n, regs)) => {
+            t.exit_regs = regs;
+            n
+        }
         Err(e) => {
             let reason = trace::AbortReason::Internal(format!("compile: {}", e));
             debug::log(debug::Event::TraceAbort { id: id.0, pc: header, reason: &reason });
