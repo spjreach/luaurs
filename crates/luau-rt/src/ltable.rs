@@ -390,6 +390,30 @@ unsafe fn hashslotsused(t: *const LuaTable) -> i32 {
     totaluse
 }
 
+/// Largest array part allocated inside the table's own block.
+const COLO_MAX: i32 = 8;
+
+/// Where a table's colocated array storage starts (see `LuaTable::colo`).
+#[inline(always)]
+fn colo_ptr(t: *mut LuaTable) -> *mut TValue {
+    unsafe { (t as *mut u8).add(std::mem::size_of::<LuaTable>()) as *mut TValue }
+}
+
+/// The table's block size: the struct and its colocated storage.
+#[inline(always)]
+pub unsafe fn table_bytes(t: *const LuaTable) -> usize {
+    std::mem::size_of::<LuaTable>() + (*t).colo as usize * std::mem::size_of::<TValue>()
+}
+
+/// Frees array storage `a` of `n` elements, unless it is the table's
+/// colocated storage (freed with the table).
+#[inline(always)]
+unsafe fn free_array(L: *mut lua_State, t: *mut LuaTable, a: *mut TValue, n: usize, memcat: u8) {
+    if (*t).colo == 0 || a != colo_ptr(t) {
+        luaM_freearray(L, a, n, memcat);
+    }
+}
+
 unsafe fn setarrayvector(L: *mut lua_State, t: *mut LuaTable, size: i32) {
     if size > MAXSIZE {
         luaG_runerror(L, "table overflow");
@@ -505,7 +529,7 @@ unsafe fn resize(L: *mut lua_State, t: *mut LuaTable, nasize: i32, mut nhsize: i
     }
 
     if nasize != oldsizearray {
-        luaM_freearray(L, oldarray, oldsizearray as usize, memcat);
+        free_array(L, t, oldarray, oldsizearray as usize, memcat);
     }
     if oldnode != dummynode() {
         luaM_freearray(L, oldnode, oldsizenode as usize, memcat);
@@ -570,7 +594,10 @@ unsafe fn rehash(L: *mut lua_State, t: *mut LuaTable, isintkey: bool, newintkey:
 // ---------------------------------------------------------------------------
 
 pub unsafe fn luaH_new(L: *mut lua_State, narray: i32, nhash: i32) -> *mut LuaTable {
-    let t = luaM_newgco_(L, std::mem::size_of::<LuaTable>(), (*L).activememcat) as *mut LuaTable;
+    // (a small array part and no hash part: in the table's own block)
+    let colo = if nhash == 0 && narray > 0 && narray <= COLO_MAX { narray } else { 0 };
+    let size = std::mem::size_of::<LuaTable>() + colo as usize * std::mem::size_of::<TValue>();
+    let t = luaM_newgco_(L, size, (*L).activememcat) as *mut LuaTable;
     luaC_init(L, t as *mut GCObject, LUA_TTABLE);
     (*t).metatable = ptr::null_mut();
     (*t).tmcache = !0;
@@ -583,7 +610,15 @@ pub unsafe fn luaH_new(L: *mut lua_State, narray: i32, nhash: i32) -> *mut LuaTa
     (*t).nodemask8 = 0;
     (*t).node = dummynode();
     (*t).gclist = ptr::null_mut();
-    if narray > 0 {
+    (*t).colo = colo as u8;
+    if colo > 0 {
+        let a = colo_ptr(t);
+        for i in 0..colo as usize {
+            setnilvalue(a.add(i));
+        }
+        (*t).array = a;
+        (*t).sizearray = colo;
+    } else if narray > 0 {
         setarrayvector(L, t, narray);
     }
     if nhash > 0 {
@@ -601,10 +636,10 @@ pub unsafe fn luaH_free(L: *mut lua_State, t: *mut LuaTable) {
         if hasmetacache(t) {
             luaM_freearray(L, (*t).array.sub(TM_N), (*t).sizearray as usize + TM_N, memcat);
         } else {
-            luaM_freearray(L, (*t).array, (*t).sizearray as usize, memcat);
+            free_array(L, t, (*t).array, (*t).sizearray as usize, memcat);
         }
     }
-    luaM_freegco_(L, t as *mut GCObject, std::mem::size_of::<LuaTable>(), memcat);
+    luaM_freegco_(L, t as *mut GCObject, table_bytes(t), memcat);
 }
 
 unsafe fn getfreepos(t: *mut LuaTable) -> *mut LuaNode {
@@ -917,6 +952,7 @@ pub unsafe fn luaH_clone(L: *mut lua_State, tt: *mut LuaTable) -> *mut LuaTable 
     (*t).node = dummynode();
     (*t).lastfree = 0;
     (*t).gclist = ptr::null_mut();
+    (*t).colo = 0;
     if (*tt).sizearray != 0 {
         (*t).array = luaM_newarray(L, (*tt).sizearray as usize, (*t).hdr.memcat);
         maybesetaboundary(t, getaboundary(tt));
@@ -985,7 +1021,7 @@ pub unsafe fn luaH_setreadonly(L: *mut lua_State, t: *mut LuaTable, readonly: bo
                 (*t).array = newarray.add(TM_N);
                 (*t).readonly |= 2;
                 if !oldarray.is_null() {
-                    luaM_freearray(L, oldarray, (*t).sizearray as usize, memcat);
+                    free_array(L, t, oldarray, (*t).sizearray as usize, memcat);
                 }
             }
         }

@@ -711,6 +711,11 @@ pub struct LuaTable {
     pub safeenv: u8,
     pub lsizenode: u8,
     pub nodemask8: u8,
+    /// elements of array storage in this table's own block, right after
+    /// the struct (a small array part given at creation: one allocation);
+    /// 0 none. The array moves out when resized; the block keeps the
+    /// room until the table is freed.
+    pub colo: u8,
     pub sizearray: i32,
     /// `lastfree` / `aboundary` union
     pub lastfree: i32,
