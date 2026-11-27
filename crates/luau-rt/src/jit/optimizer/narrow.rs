@@ -156,7 +156,7 @@ pub fn int_induction(t: &mut Trace) -> bool {
         return false;
     }
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *OFF.get_or_init(|| std::env::var_os("LUAU_TRACE_NOINTIND").is_some()) {
+    if *OFF.get_or_init(|| crate::trace_flag!("LUAU_TRACE_NOINTIND")) {
         return false;
     }
     let Some(loop_ref) = t.loop_ref else { return false };
@@ -214,7 +214,7 @@ pub fn int_induction(t: &mut Trace) -> bool {
             Op::Guard { cmp, a, b, .. } => Some(j) != loop_guard && cmp != Cmp::ULt && (t.ty(a) == IrType::Number || t.ty(b) == IrType::Number),
             _ => false,
         });
-        let control = sign.is_some() && loop_guard.is_some() && !branchy && std::env::var_os("LUAU_TRACE_NOICTL").is_none();
+        let control = sign.is_some() && loop_guard.is_some() && !branchy && !crate::trace_flag!("LUAU_TRACE_NOICTL");
         if users.is_empty() && !control {
             continue;
         }
@@ -352,7 +352,7 @@ const EXACT: f64 = 4503599627370496.0; // 2^52
 /// be an integer (not -0) below c in magnitude before the loop; the float
 /// values (for exits, other users) are the integers converted.
 pub fn int_mod_phi(t: &mut Trace) -> bool {
-    if t.no_int >= 1 || std::env::var_os("LUAU_TRACE_NOMODPHI").is_some() {
+    if t.no_int >= 1 || crate::trace_flag!("LUAU_TRACE_NOMODPHI") {
         return false;
     }
     let Some(loop_ref) = t.loop_ref else { return false };

@@ -48,7 +48,7 @@ pub fn run(t: &mut Trace) -> bool {
     let backs = phi_back_refs(t);
     let loop_at = t.loop_ref.map(|r| r.index());
     let mut map = identity(t);
-    let mut seen: HashMap<String, (Ref, Kind)> = HashMap::new();
+    let mut seen: HashMap<(u8, u8, u32, u32, u64), (Ref, Kind)> = HashMap::new();
     let mut changed = false;
     for i in 0..t.insts.len() {
         let op = t.insts[i].op.clone();
@@ -74,31 +74,33 @@ pub fn run(t: &mut Trace) -> bool {
         }
         let r = |x: Ref| resolve(&map, x).0;
         let ty = t.insts[i].ty;
-        let key = match op {
-            Op::HRef { t: tb, k, idx, lsize, store, .. } => Some((format!("HRef {} {} {} {} {}", r(tb), r(k), idx, lsize, store), if store { Kind::Value } else { Kind::Layout })),
-            Op::TMeta { t: tb, .. } => Some((format!("TMeta {}", r(tb)), Kind::Meta)),
-            Op::GuardPlainTable { t: tb, store, .. } => Some((format!("Plain {} {}", r(tb), store), Kind::Meta)),
-            Op::GuardProto { f, p, .. } => Some((format!("Proto {} {}", r(f), r(p)), Kind::Fixed)),
-            Op::GuardCFunc { f, fp, .. } => Some((format!("CFunc {} {}", r(f), fp), Kind::Fixed)),
-            Op::ULoad { cl, idx, by_ref: false, .. } => Some((format!("UVal {} {} {:?}", r(cl), idx, ty), Kind::Fixed)),
-            Op::GuardFlag { p, off, .. } => Some((format!("Flag {} {}", r(p), off), Kind::Env)),
-            Op::UPtr { cl, idx, stack, .. } => Some((format!("UPtr {} {} {}", r(cl), idx, stack), Kind::Upval)),
+        // (a fixed-size key: what the instruction reads, by kind - no
+        // formatting or allocation per instruction)
+        let key: Option<((u8, u32, u32, u64), Kind)> = match op {
+            Op::HRef { t: tb, k, idx, lsize, store, .. } => Some(((1, r(tb), r(k), idx as u64 | (lsize as u64) << 32 | (store as u64) << 40), if store { Kind::Value } else { Kind::Layout })),
+            Op::TMeta { t: tb, .. } => Some(((2, r(tb), 0, 0), Kind::Meta)),
+            Op::GuardPlainTable { t: tb, store, .. } => Some(((3, r(tb), 0, store as u64), Kind::Meta)),
+            Op::GuardProto { f, p, .. } => Some(((4, r(f), r(p), 0), Kind::Fixed)),
+            Op::GuardCFunc { f, fp, .. } => Some(((5, r(f), 0, fp as u64), Kind::Fixed)),
+            Op::ULoad { cl, idx, by_ref: false, .. } => Some(((6, r(cl), idx as u32, ty as u64), Kind::Fixed)),
+            Op::GuardFlag { p, off, .. } => Some(((7, r(p), 0, off as u32 as u64), Kind::Env)),
+            Op::UPtr { cl, idx, stack, .. } => Some(((8, r(cl), idx as u32, stack as u64), Kind::Upval)),
             // (sizes change only when storage moves; a comparison of the
             // same values holds again)
-            Op::ASize(tb) => Some((format!("ASize {}", r(tb)), Kind::Layout)),
-            Op::ABase(tb) => Some((format!("ABase {}", r(tb)), Kind::Layout)),
-            Op::Guard { cmp, a, b, .. } => Some((format!("Guard {:?} {} {}", cmp, r(a), r(b)), Kind::Fixed)),
-            Op::GuardTruthy { a, want, .. } => Some((format!("Truthy {} {}", r(a), want), Kind::Fixed)),
-            Op::GuardSame { a, k, .. } => Some((format!("Same {} {}", r(a), r(k)), Kind::Fixed)),
-            Op::GuardDiff { a, k, .. } => Some((format!("Diff {} {}", r(a), r(k)), Kind::Fixed)),
+            Op::ASize(tb) => Some(((9, r(tb), 0, 0), Kind::Layout)),
+            Op::ABase(tb) => Some(((10, r(tb), 0, 0), Kind::Layout)),
+            Op::Guard { cmp, a, b, .. } => Some(((11, r(a), r(b), cmp as u64), Kind::Fixed)),
+            Op::GuardTruthy { a, want, .. } => Some(((12, r(a), 0, want as u64), Kind::Fixed)),
+            Op::GuardSame { a, k, .. } => Some(((13, r(a), r(k), 0), Kind::Fixed)),
+            Op::GuardDiff { a, k, .. } => Some(((14, r(a), r(k), 0), Kind::Fixed)),
             _ => None,
         };
-        let Some((key, kind)) = key else { continue };
-        let region = match loop_at {
+        let Some(((tag, x, y, z), kind)) = key else { continue };
+        let region: u8 = match loop_at {
             Some(l) if i > l => 1,
             _ => 0,
         };
-        let key = format!("{region}|{key}");
+        let key = (region, tag, x, y, z);
         match seen.get(&key) {
             Some(&(first, _)) if !backs.contains(&Ref(i as u32)) => {
                 map[i] = first;

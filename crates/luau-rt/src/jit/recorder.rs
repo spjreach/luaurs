@@ -2696,7 +2696,7 @@ impl Recorder {
     /// value takes unrecorded up to the join (`skip_to`). Returns false
     /// (nothing emitted) when the branch isn't one of those.
     unsafe fn if_convert(&mut self, pc: u32, base: StkId) -> R<bool> {
-        if self.b.forced.is_some() || std::env::var_os("LUAU_TRACE_NOIFCONV").is_some() {
+        if self.b.forced.is_some() || crate::trace_flag!("LUAU_TRACE_NOIFCONV") {
             return Ok(false);
         }
         // a dry run first: shape and types, nothing emitted

@@ -26,55 +26,66 @@ pub mod util;
 mod tests;
 
 /// Runs the pass pipeline to a fixed point, validating after each pass.
+/// Validates the IR between passes in debug builds (or with
+/// `LUAU_TRACE_VALIDATE=1`): a full walk per pass, too slow to pay on every
+/// trace in release.
+fn check(t: &Trace) -> Result<(), String> {
+    if cfg!(debug_assertions) || crate::trace_flag!("LUAU_TRACE_VALIDATE") {
+        validate(t)
+    } else {
+        Ok(())
+    }
+}
+
 pub fn optimize_checked(t: &mut Trace) -> Result<(), String> {
     for _ in 0..5 {
         let mut changed = false;
 
         changed |= constant_folding::run(t);
-        validate(t)?;
+        check(t)?;
         changed |= copy_propagation::run(t);
-        validate(t)?;
+        check(t)?;
         changed |= strength::run(t);
-        validate(t)?;
+        check(t)?;
         changed |= cse::run(t);
-        validate(t)?;
+        check(t)?;
         changed |= redundant::run(t);
-        validate(t)?;
+        check(t)?;
         changed |= forwarding::run(t);
-        validate(t)?;
+        check(t)?;
         changed |= dce::run(t);
-        validate(t)?;
+        check(t)?;
         changed |= licm::run(t);
-        validate(t)?;
+        check(t)?;
 
         if !changed {
             break;
         }
     }
-    validate(t)?;
+    check(t)?;
     if narrow::run(t) | narrow::int_induction(t) | narrow::int_mod_phi(t) {
-        validate(t)?;
+        check(t)?;
         // (the conversions may now be loop-invariant or common)
         for _ in 0..3 {
             let c = cse::run(t) | redundant::run(t) | dce::run(t) | licm::run(t);
-            validate(t)?;
+            check(t)?;
             if !c {
                 break;
             }
         }
     }
     hoist_consts::run(t);
-    validate(t)?;
+    check(t)?;
     sink::run(t);
-    validate(t)?;
+    check(t)?;
     // (sinking drops stores that kept loads in the loop)
     if hoist_guards::run(t) {
-        validate(t)?;
+        check(t)?;
         // (loop values carried in memory become PHIs there: integers too)
         if narrow::int_mod_phi(t) {
-            validate(t)?;
+            check(t)?;
             let _ = cse::run(t) | dce::run(t);
-            validate(t)?;
+            check(t)?;
         }
     }
     validate(t)

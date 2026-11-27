@@ -292,7 +292,7 @@ unsafe fn handle_exit(L: *mut lua_State, p: *mut Proto, header: u32, base: StkId
             let mut count_storm = in_loop && !traceable && !loop_end_exit;
             if traceable {
                 t.exit_counts[k as usize] += 1;
-                if t.exit_counts[k as usize] >= HOTEXIT && !recording && std::env::var_os("LUAU_TRACE_NOSIDE").is_none() {
+                if t.exit_counts[k as usize] >= HOTEXIT && !recording && !crate::trace_flag!("LUAU_TRACE_NOSIDE") {
                     t.exit_counts[k as usize] = 0;
                     t.exit_tries[k as usize] += 1;
                     side = Some((tag, k, pc));
@@ -300,7 +300,7 @@ unsafe fn handle_exit(L: *mut lua_State, p: *mut Proto, header: u32, base: StkId
             } else if !in_loop {
                 count_storm = false;
             }
-            if count_storm && std::env::var_os("LUAU_TRACE_STORMDBG").is_some() {
+            if count_storm && crate::trace_flag!("LUAU_TRACE_STORMDBG") {
                 eprintln!("storm-exit frames={} header={} k0={} tries={} sides={}", !sn_frames_empty, pc == header, k == 0, tries, nsides);
             }
             let root = s.traces.get_mut(&key).unwrap();
@@ -353,6 +353,20 @@ unsafe fn handle_exit(L: *mut lua_State, p: *mut Proto, header: u32, base: StkId
 /// Called before the single-step interpreter executes instruction `pc` of
 /// `p` (frame base `base`) while recording.
 pub unsafe fn record_step(L: *mut lua_State, p: *mut Proto, pc: u32, base: StkId) {
+    if !debug::timing() {
+        record_step_inner(L, p, pc, base);
+        return;
+    }
+    // (recording alone: finishing a trace counts as optimizing / codegen)
+    let t0 = std::time::Instant::now();
+    let nested = || debug::TIMES[1].load(std::sync::atomic::Ordering::Relaxed) + debug::TIMES[2].load(std::sync::atomic::Ordering::Relaxed);
+    let before = nested();
+    record_step_inner(L, p, pc, base);
+    let spent = (t0.elapsed().as_nanos() as u64).saturating_sub(nested() - before);
+    debug::TIMES[0].fetch_add(spent, std::sync::atomic::Ordering::Relaxed);
+}
+
+unsafe fn record_step_inner(L: *mut lua_State, p: *mut Proto, pc: u32, base: StkId) {
     let result = RECORDER.with(|r| {
         let mut r = r.borrow_mut();
         let (rec, _) = r.as_mut().expect("recording");
@@ -440,7 +454,9 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
     };
     let Some(tag) = state::with(|s| s.new_tag()) else { return };
     let prepare = |t: &mut trace::Trace| {
+        let t0 = debug::now();
         optimizer::optimize(t);
+        debug::add_time(1, t0);
         t.tag = tag;
         let n = t.snapshots.len().max(1);
         t.link_table = Box::leak(vec![0usize; n].into_boxed_slice()).as_mut_ptr() as usize;
@@ -461,14 +477,19 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
         let root = state::with(|s| s.traces.get(&root_key).map(|r| (r.native, r.reads.clone(), r.phi_slots.clone(), r.layout_hoisted, r.mem_hoisted)));
         if let Some((Some(n), reads, phis, layout, mem)) = root {
             t.spill_base = n.reserved;
-            if t.link.is_none() && n.body_entry != 0 && std::env::var_os("LUAU_TRACE_NOBODY").is_none() && body_reentry_ok(&t, &reads, &phis, layout, mem) {
+            if t.link.is_none() && n.body_entry != 0 && !crate::trace_flag!("LUAU_TRACE_NOBODY") && body_reentry_ok(&t, &reads, &phis, layout, mem) {
                 link_to = compiler::End::Root(n.body_entry);
             }
         }
     } else {
         root_facts(&mut t);
     }
+    let t0 = debug::now();
     let mut compiled = compiler::compile(&t, link_to);
+    debug::add_time(2, t0);
+    if debug::timing() {
+        debug::TIMES[3].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     if compiled.is_err() {
         if let Some(mut fb) = t.fallback.take() {
             prepare(&mut fb);
@@ -948,7 +969,7 @@ fn note_run(cell: &mut LoopCell, ran: u64) {
         cell.entries = 0;
         cell.cycles = 0;
         static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if short && !*OFF.get_or_init(|| std::env::var_os("LUAU_TRACE_NOCYCLES").is_some()) {
+        if short && !*OFF.get_or_init(|| crate::trace_flag!("LUAU_TRACE_NOCYCLES")) {
             // stay native (look again in a while)
             cell.ctr = 1 << 16;
         }

@@ -415,7 +415,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             }
         }
     }
-    if std::env::var_os("LUAU_TRACE_HOMES").is_some() {
+    if crate::trace_flag!("LUAU_TRACE_HOMES") {
         eprintln!("-- homes ({} insts)", n);
         for (i, h) in home.iter().enumerate() {
             if used[i] || *h != Home::None {
@@ -1674,7 +1674,7 @@ fn exact_reciprocal(v: f64) -> Option<f64> {
 /// The CPU has AVX (three-operand scalar arithmetic: no copies).
 fn avx() -> bool {
     static AVX: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *AVX.get_or_init(|| std::arch::is_x86_feature_detected!("avx") && std::env::var_os("LUAU_TRACE_NOAVX").is_none())
+    *AVX.get_or_init(|| std::arch::is_x86_feature_detected!("avx") && !crate::trace_flag!("LUAU_TRACE_NOAVX"))
 }
 
 /// d = x op y (scalar double), without clobbering x or y.

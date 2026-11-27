@@ -143,6 +143,59 @@ mod tests {
 
 /// `LUAU_TRACE_COUNT`: compiled traces count their entries and loop
 /// iterations; a summary prints when the thread ends.
+/// `LUAU_TRACE_TIME=1`: time spent recording, optimizing and generating
+/// code, printed when the thread ends.
+pub fn timing() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LUAU_TRACE_TIME").is_some())
+}
+
+/// Nanoseconds spent: 0 recording, 1 optimizing, 2 generating code; 3
+/// traces compiled.
+pub static TIMES: [std::sync::atomic::AtomicU64; 4] = [const { std::sync::atomic::AtomicU64::new(0) }; 4];
+
+/// Adds the time since `t0` to `TIMES[which]` (when timing).
+pub fn add_time(which: usize, t0: Option<std::time::Instant>) {
+    if let Some(t0) = t0 {
+        TIME_REPORT.with(|_| {});
+        TIMES[which].fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// `Some(now)` when timing.
+pub fn now() -> Option<std::time::Instant> {
+    timing().then(std::time::Instant::now)
+}
+
+struct TimeReport;
+
+impl Drop for TimeReport {
+    fn drop(&mut self) {
+        let g = |i: usize| TIMES[i].load(std::sync::atomic::Ordering::Relaxed);
+        eprintln!(
+            "[TIME] record {:.2} ms, optimize {:.2} ms, codegen {:.2} ms, {} traces",
+            g(0) as f64 / 1e6,
+            g(1) as f64 / 1e6,
+            g(2) as f64 / 1e6,
+            g(3)
+        );
+    }
+}
+
+thread_local! {
+    static TIME_REPORT: TimeReport = const { TimeReport };
+}
+
+/// Whether environment variable `$name` is set, looked up once (the
+/// lookup is slow on Windows: these sit on recording and exit paths).
+#[macro_export]
+macro_rules! trace_flag {
+    ($name:literal) => {{
+        static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *F.get_or_init(|| std::env::var_os($name).is_some())
+    }};
+}
+
 pub fn counting() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LUAU_TRACE_COUNT").is_some())
