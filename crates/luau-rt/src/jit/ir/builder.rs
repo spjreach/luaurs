@@ -38,6 +38,9 @@ pub struct IrBuilder {
     /// a call of Lua code was recorded: slots are read where they are used
     /// (SReload), not once at trace entry
     pub reload: bool,
+    /// trace slots whose type is known on entry (a side trace: what its
+    /// parent's exit wrote or checked) - their loads need no tag check
+    pub known: Vec<Option<IrType>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -65,6 +68,7 @@ impl IrBuilder {
             top: None,
             forced: None,
             reload: false,
+            known: Vec::new(),
         }
     }
 
@@ -129,7 +133,8 @@ impl IrBuilder {
         let r = if self.reload {
             self.emit(Op::SReload { slot: slot as u16, snap }, ty)
         } else {
-            self.emit(Op::SLoad { slot: slot as u16, guarded: true, snap }, ty)
+            let guarded = self.known.get(slot).copied().flatten() != Some(ty);
+            self.emit(Op::SLoad { slot: slot as u16, guarded, snap }, ty)
         };
         self.slots[slot] = Some(r);
         r

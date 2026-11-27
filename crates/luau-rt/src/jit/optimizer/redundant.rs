@@ -93,6 +93,8 @@ pub fn run(t: &mut Trace) -> bool {
             Op::GuardTruthy { a, want, .. } => Some(((12, r(a), 0, want as u64), Kind::Fixed)),
             Op::GuardSame { a, k, .. } => Some(((13, r(a), r(k), 0), Kind::Fixed)),
             Op::GuardDiff { a, k, .. } => Some(((14, r(a), r(k), 0), Kind::Fixed)),
+            // (the same number converted again: the same I32, the same check)
+            Op::NumToI32 { a, .. } => Some(((15, r(a), 0, 0), Kind::Fixed)),
             _ => None,
         };
         let Some(((tag, x, y, z), kind)) = key else { continue };

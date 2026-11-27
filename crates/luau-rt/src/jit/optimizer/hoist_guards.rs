@@ -53,7 +53,9 @@ pub fn run(t: &mut Trace) -> bool {
             Op::GuardProto { .. } | Op::ULoad { by_ref: false, .. } | Op::ClEnv { .. } | Op::GuardCFunc { .. } => true,
             Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } => true,
             Op::HRef { .. } | Op::XLoad { .. } | Op::ASize(_) | Op::HSlot { .. } | Op::ABase(_) => !writes,
-            Op::TMeta { .. } | Op::GuardPlainTable { .. } => !metas && !writes,
+            // (stores into tables don't change metatables or the read-only
+            // flag: only setmetatable / calls - table.freeze is one)
+            Op::TMeta { .. } | Op::GuardPlainTable { .. } => !metas,
             Op::GuardFlag { .. } => !calls,
             Op::UPtr { .. } => !calls && !closes,
             _ => false,

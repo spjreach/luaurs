@@ -16,7 +16,10 @@ pub fn run(t: &mut Trace) {
     let Some(loop_ref) = t.loop_ref else { return };
     let l = loop_ref.index();
     let n = t.insts.len();
-    let moved: Vec<usize> = (l + 1..n).filter(|&i| t.insts[i].is_const()).collect();
+    // (not a PHI's back value: that must stay in the body - `x = 1` each
+    // iteration)
+    let backs = super::util::phi_back_refs(t);
+    let moved: Vec<usize> = (l + 1..n).filter(|&i| t.insts[i].is_const() && !backs.contains(&Ref(i as u32))).collect();
     if !moved.is_empty() {
         move_before_loop(t, &moved);
     }

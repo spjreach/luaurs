@@ -233,6 +233,39 @@ impl Recorder {
         let mut r = Recorder::new(id, proto, cl, start_pc, base, max_len);
         r.loop_end = loop_end;
         r.side = Some((header, parent));
+        // the slots' types on entry: what the parent's exit writes (its
+        // snapshot), and what it checked and left alone - unless something
+        // in it writes stack slots outside the IR (calls, concatenation)
+        r.b.known = super::state::with(|s| {
+            let mut known: Vec<Option<IrType>> = Vec::new();
+            let Some(t) = s.by_tag_mut(parent.0) else { return known };
+            let Some(sn) = t.snapshots.get(parent.1 as usize) else { return known };
+            fn set(known: &mut Vec<Option<IrType>>, slot: usize, ty: Option<IrType>) {
+                if known.len() <= slot {
+                    known.resize(slot + 1, None);
+                }
+                known[slot] = ty;
+            }
+            let limit = sn.ref_limit.index().min(t.insts.len());
+            let opaque = t.insts.iter().any(|x| matches!(x.op, Op::CCall { .. } | Op::CallC { .. } | Op::Concat { .. }));
+            if !opaque {
+                for x in &t.insts[..limit] {
+                    if let Op::SLoad { slot, guarded: true, .. } = x.op {
+                        if x.ty.tag().is_some() {
+                            set(&mut known, slot as usize, Some(x.ty));
+                        }
+                    }
+                }
+            }
+            for e in &sn.entries {
+                let ty = t.ty(e.value);
+                set(&mut known, e.slot as usize, ty.tag().map(|_| ty));
+            }
+            if crate::trace_flag!("LUAU_TRACE_NOKNOWN") {
+                known.clear();
+            }
+            known
+        });
         // starting inside inlined calls: their frames are the parent's
         // (virtual: no CallInfos while the trace runs)
         if let Some(last) = frames.last() {

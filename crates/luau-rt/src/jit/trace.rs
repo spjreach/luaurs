@@ -185,7 +185,7 @@ impl Trace {
     pub fn dump(&self) -> String {
         use std::fmt::Write;
         let mut s = String::new();
-        let _ = writeln!(s, "trace {} at pc {}", self.id.0, self.start_pc);
+        let _ = writeln!(s, "trace {} at pc {} tag {} side_of {:?}", self.id.0, self.start_pc, self.tag, self.side_of);
         for (i, inst) in self.insts.iter().enumerate() {
             if matches!(inst.op, Op::Nop) {
                 continue;
