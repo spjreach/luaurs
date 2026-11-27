@@ -1126,17 +1126,25 @@ impl<'f> Tr<'f> {
             return false;
         }
         let n = c - 1;
-        if rb + n > 256 || !(rb..rb + n).all(|r| matches!(self.st.tag[r], TNUM | TINT | TVEC | TBOOL | TNIL)) {
+        if rb + n > 256 {
             return false;
         }
         let last = index as i64 + n as i64 - 1;
         if last > i32::MAX as i64 {
             return false;
         }
+        // (collectable values: the interpreter's barrier - only a black
+        // table needs it, which a table being built rarely is: that case
+        // takes the slow path)
+        let gc = (rb..rb + n).any(|r| !matches!(self.st.tag[r], TNUM | TINT | TVEC | TBOOL | TNIL));
         let t = self.st.ptr_g(&mut self.a, ra);
         let s = self.slow(false);
         self.a.cmp32_mi(t, OFF_T_SIZEARRAY, last as i32);
         self.a.jcc(Cond::L, s);
+        if gc {
+            self.a.test8_mi(t, OFF_T_MARKED, BLACK);
+            self.a.jcc(Cond::NE, s);
+        }
         // (copy_to_mem only uses r8, r9 and xmm2 as scratch)
         self.a.load(R::Rdx, t, OFF_T_ARRAY);
         for k in 0..n {
