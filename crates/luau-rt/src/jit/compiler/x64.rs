@@ -25,6 +25,7 @@ const OFF_TT: i32 = offset_of!(TValue, tt) as i32;
 const OFF_TAGWORD: i32 = offset_of!(TValue, extra) as i32;
 const OFF_T_SIZEARRAY: i32 = offset_of!(LuaTable, sizearray) as i32;
 const OFF_T_ARRAY: i32 = offset_of!(LuaTable, array) as i32;
+const OFF_T_LASTFREE: i32 = offset_of!(LuaTable, lastfree) as i32;
 const OFF_T_METATABLE: i32 = offset_of!(LuaTable, metatable) as i32;
 const OFF_T_READONLY: i32 = offset_of!(LuaTable, readonly) as i32;
 const OFF_GLOBAL: i32 = offset_of!(lua_State, global) as i32;
@@ -1265,11 +1266,51 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 a.bind(skip);
             }
             Op::TLen { t: tb } => {
+                let tbr = g(*tb)?;
+                let slow = a.label();
+                let have = a.label();
+                let done = a.label();
+                if !crate::trace_flag!("LUAU_TRACE_NOTLENFAST") {
+                    // the cached boundary b (lastfree < 0: -b) as
+                    // luaH_getn's fast paths: still the border, or one past
+                    // it (an append: the cache moves up)
+                    a.load32(R::Rdx, tbr, OFF_T_LASTFREE);
+                    a.movsxd(R::Rdx, R::Rdx);
+                    a.test_rr(R::Rdx, R::Rdx);
+                    a.jcc(Cond::GE, slow);
+                    a.unary64(3, R::Rdx);
+                    a.cmp32_rm(R::Rdx, tbr, OFF_T_SIZEARRAY);
+                    a.jcc(Cond::AE, slow);
+                    a.mov_rr(R::Rcx, R::Rdx);
+                    a.shl_ri(R::Rcx, 4);
+                    a.load(R::Rax, tbr, OFF_T_ARRAY);
+                    a.add_rr(R::Rcx, R::Rax);
+                    // (arr[b-1] non-nil: b is a border when arr[b] is nil)
+                    a.cmp32_mi(R::Rcx, OFF_TT - TV, LUA_TNIL);
+                    a.jcc(Cond::E, slow);
+                    a.cmp32_mi(R::Rcx, OFF_TT, LUA_TNIL);
+                    a.jcc(Cond::E, have);
+                    a.lea(R::Rax, R::Rdx, 1);
+                    a.cmp32_rm(R::Rax, tbr, OFF_T_SIZEARRAY);
+                    a.jcc(Cond::AE, slow);
+                    a.cmp32_mi(R::Rcx, OFF_TT + TV, LUA_TNIL);
+                    a.jcc(Cond::NE, slow);
+                    a.mov_rr(R::Rdx, R::Rax);
+                    a.unary64(3, R::Rax);
+                    a.store32(tbr, OFF_T_LASTFREE, R::Rax);
+                    a.bind(have);
+                    if let Home::F(d) = dst {
+                        a.cvtsi2sd64(d, R::Rdx);
+                    }
+                    a.jmp(done);
+                }
+                a.bind(slow);
                 let live = live_across(i);
-                call_out(&mut a, &live, helpers::len as usize, &[Arg::G(g(*tb)?)]);
+                call_out(&mut a, &live, helpers::len as usize, &[Arg::G(tbr)]);
                 if let Home::F(d) = dst {
                     a.cvtsi2sd64(d, R::Rax);
                 }
+                a.bind(done);
             }
             Op::SLen { s } => {
                 if let Home::F(d) = dst {

@@ -2030,6 +2030,31 @@ impl Recorder {
             self.pending = Some((None, 0, call_at as u32 + 1, false));
             return Ok(());
         }
+        if bfid == B::TableInsert as u8 && nres == 0 && nargs == 2 && self.b.trace.ty(args[0]) == IrType::Table && !crate::trace_flag!("LUAU_TRACE_NOINSERTINLINE") {
+            // table.insert(t, v) of a plain table with room in its array
+            // part: t[#t + 1] = v (anything else exits before the FASTCALL)
+            let s0 = if op == O::FastCall as u8 { ra + 1 } else { b_of(insn) };
+            let h = hvalue(base.add(s0));
+            let n = crate::ltable::luaH_getn(h);
+            if (*h).metatable.is_null() && (*h).readonly == 0 && (n as usize) < (*h).sizearray as usize {
+                self.guard_safeenv(clr);
+                let t = args[0];
+                self.mm_store_ok(Some(t))?;
+                let snap = self.b.snapshot();
+                self.b.emit(Op::GuardPlainTable { t, store: true, snap }, IrType::Nil);
+                let len = self.b.emit(Op::TLen { t }, IrType::Number);
+                let snap = self.b.snapshot();
+                let idx = self.b.emit(Op::NumToI32 { a: len, snap }, IrType::I32);
+                let p = self.array_slot(t, idx)?;
+                let v = args[1];
+                self.b.emit(Op::XStore { p, v }, IrType::Nil);
+                if self.b.trace.ty(v).is_gc() {
+                    self.b.emit(Op::Barrier { t, v }, IrType::Nil);
+                }
+                self.pending = Some((None, 0, call_at as u32 + 1, false));
+                return Ok(());
+            }
+        }
         if bfid == B::Tostring as u8 && nres == 1 && nargs == 1 && self.b.trace.ty(args[0]) == IrType::Number && !crate::trace_flag!("LUAU_TRACE_NOTOSTR") {
             // tostring(number): formatted and interned directly
             self.guard_safeenv(clr);
