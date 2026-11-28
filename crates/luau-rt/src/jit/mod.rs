@@ -711,7 +711,7 @@ fn prune_dead_stores(t: &mut trace::Trace) {
                 }
             }
         }
-        let calls = t.insts.iter().any(|x| matches!(x.op, Op::CallC { .. } | Op::CCall { .. } | Op::Concat { .. }));
+        let calls = t.insts.iter().any(|x| matches!(x.op, Op::CallC { .. } | Op::CCall { .. } | Op::Concat { .. })) || (!t.sinks.is_empty() && !crate::trace_flag!("LUAU_TRACE_PRUNESINK"));
         for (k, sn) in t.snapshots.iter_mut().enumerate() {
             if !sn.frames.is_empty() || sn.top.is_some() || keep[k] || sn.stack_current || calls {
                 continue;

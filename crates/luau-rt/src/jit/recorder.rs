@@ -1182,7 +1182,10 @@ impl Recorder {
             // unrolled in side traces, inside inlined calls, or when it can't be traced
             let target = (pc as i64 + 1 + d_of(insn) as i64) as u32;
             let p = self.cur_proto();
-            if self.funcs.len() <= 1 && self.side.is_none() && !crate::trace_flag!("LUAU_TRACE_NOINNERFIRST") && !super::state::with(|s| s.hot.is_blacklisted(p, target)) {
+            // (a loop of an inlined call, in any trace: its own trace -
+            // unrolled, each trip count was a side trace of its own)
+            let inlined_loop = self.funcs.len() > 1 && self.mm.is_empty() && crate::trace_flag!("LUAU_TRACE_NOINLINELOOPS");
+            if (inlined_loop || (self.funcs.len() <= 1 && self.side.is_none())) && !crate::trace_flag!("LUAU_TRACE_NOINNERFIRST") && !super::state::with(|s| s.hot.is_blacklisted(p, target)) {
                 return Err(AbortReason::InnerLoop { proto: p as usize, header: target });
             }
             // an unrolled inner while/repeat loop's back edge
