@@ -519,21 +519,26 @@ impl<'src, 'names> Lexer<'src, 'names> {
         debug_assert!(is_alpha(self.peekch()) || self.peekch() == b'_' || self.peekch() == b'@');
 
         let start_offset = self.offset as usize;
-
-        loop {
-            self.consume();
-
-            let ch = self.peekch();
+        let buf = self.buffer;
+        let mut i = start_offset;
+        let mut h = crate::name_table::NameHasher::new();
+        h.byte(buf[i]);
+        i += 1;
+        while i < buf.len() {
+            let ch = buf[i];
             if !(is_alpha(ch) || is_digit(ch) || ch == b'_') {
                 break;
             }
+            h.byte(ch);
+            i += 1;
         }
+        self.offset = i as u32;
 
-        let slice = &self.buffer[start_offset..self.offset as usize];
+        let slice = &buf[start_offset..i];
         if self.read_names {
-            self.names.get_or_add_with_type(slice)
+            self.names.get_or_add_hashed(slice, h.finish())
         } else {
-            let (name, ty) = self.names.get_with_type(slice);
+            let (name, ty) = self.names.get_hashed(slice, h.finish());
             (name.unwrap_or(""), ty)
         }
     }

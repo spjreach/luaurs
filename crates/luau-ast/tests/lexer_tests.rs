@@ -4,7 +4,7 @@
 
 use luau_ast::confusables::find_confusable;
 use luau_ast::lexer::{fixup_multiline_string, fixup_quoted_string, is_space, Lexer};
-use luau_ast::lexeme::{LexemeData, LexemeType, QuoteStyle};
+use luau_ast::lexeme::{Kw, LexemeData, LexemeType, QuoteStyle};
 use luau_ast::location::Position;
 use luau_ast::name_table::AstNameTable;
 
@@ -28,7 +28,7 @@ fn basic_statement_tokens() {
     use LexemeType::*;
     assert_eq!(
         types,
-        vec![Reserved("local"), Name, Char(b'='), Number, Char(b'+'), Number, Comment]
+        vec![Reserved(Kw::LOCAL), Name, Char(b'='), Number, Char(b'+'), Number, Comment]
     );
 }
 
@@ -102,8 +102,8 @@ fn reserved_words() {
         assert!(t.is_reserved(), "'{t:?}' should be a reserved word");
     }
     // spot check first/last
-    assert_eq!(types[0], LexemeType::Reserved("and"));
-    assert_eq!(types[20], LexemeType::Reserved("while"));
+    assert_eq!(types[0], LexemeType::Reserved(Kw::AND));
+    assert_eq!(types[20], LexemeType::Reserved(Kw::WHILE));
 }
 
 #[test]

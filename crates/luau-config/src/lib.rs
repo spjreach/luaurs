@@ -7,7 +7,7 @@ pub mod luau_config;
 
 use std::collections::HashMap;
 
-use luau_ast::lexeme::{LexemeData, LexemeType};
+use luau_ast::lexeme::{Kw, LexemeData, LexemeType};
 use luau_ast::lexer::Lexer;
 use luau_ast::name_table::AstNameTable;
 
@@ -280,10 +280,10 @@ fn parse_json(contents: &str, mut action: impl FnMut(&[String], &str) -> Error) 
             if is(&lexer, b'{') || is(&lexer, b'[') {
                 array_top = is(&lexer, b'[');
                 next(&mut lexer);
-            } else if ty == LexemeType::QuotedString || ty == LexemeType::Reserved("true") || ty == LexemeType::Reserved("false") {
+            } else if ty == LexemeType::QuotedString || ty == LexemeType::Reserved(Kw::TRUE) || ty == LexemeType::Reserved(Kw::FALSE) {
                 let value = match ty {
                     LexemeType::QuotedString => slice(source, lexer.current().data),
-                    LexemeType::Reserved("true") => "true".to_string(),
+                    LexemeType::Reserved(Kw::TRUE) => "true".to_string(),
                     _ => "false".to_string(),
                 };
                 next(&mut lexer);

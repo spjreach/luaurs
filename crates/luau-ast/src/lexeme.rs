@@ -13,6 +13,46 @@ pub type CharToken = u8;
 ///
 /// In the C++ version, values 1..255 are actual character values; here they
 /// are represented as [`LexemeType::Char`].
+/// A reserved word, as its index in [`crate::name_table::RESERVED_WORDS`]
+/// (compares as one byte; C++ uses an enum value per reserved word).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Kw(pub u8);
+
+impl Kw {
+    pub const AND: Kw = Kw(0);
+    pub const BREAK: Kw = Kw(1);
+    pub const DO: Kw = Kw(2);
+    pub const ELSE: Kw = Kw(3);
+    pub const ELSEIF: Kw = Kw(4);
+    pub const END: Kw = Kw(5);
+    pub const FALSE: Kw = Kw(6);
+    pub const FOR: Kw = Kw(7);
+    pub const FUNCTION: Kw = Kw(8);
+    pub const IF: Kw = Kw(9);
+    pub const IN: Kw = Kw(10);
+    pub const LOCAL: Kw = Kw(11);
+    pub const NIL: Kw = Kw(12);
+    pub const NOT: Kw = Kw(13);
+    pub const OR: Kw = Kw(14);
+    pub const REPEAT: Kw = Kw(15);
+    pub const RETURN: Kw = Kw(16);
+    pub const THEN: Kw = Kw(17);
+    pub const TRUE: Kw = Kw(18);
+    pub const UNTIL: Kw = Kw(19);
+    pub const WHILE: Kw = Kw(20);
+
+    #[inline]
+    pub fn as_str(self) -> &'static str {
+        crate::name_table::RESERVED_WORDS[self.0 as usize]
+    }
+}
+
+impl std::fmt::Display for Kw {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LexemeType {
     Eof,
@@ -59,7 +99,7 @@ pub enum LexemeType {
     BrokenInterpDoubleBrace,
     Error,
 
-    Reserved(&'static str),
+    Reserved(Kw),
 
     /// Single-character punctuation token; carries the raw character value
     /// (C++ lexemes use the character value directly as the token type).

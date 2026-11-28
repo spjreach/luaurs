@@ -176,6 +176,9 @@ struct Arena {
     last: usize,
     /// a released standard-size chunk kept for the next arena
     spare: usize,
+    /// address bounds of all chunks (quick rejection in `in_arena`)
+    lo: usize,
+    hi: usize,
 }
 
 #[thread_local]
@@ -188,6 +191,8 @@ static mut ARENA: Arena = Arena {
     end: 0,
     last: 0,
     spare: 0,
+    lo: 0,
+    hi: 0,
 };
 
 #[inline(always)]
@@ -198,7 +203,11 @@ fn arena() -> &'static mut Arena {
 
 #[inline(always)]
 fn in_arena(a: &Arena, p: usize) -> bool {
-    a.live && a.chunks[..a.n].iter().any(|&(s, e)| p >= s && p < e)
+    if !a.live || p < a.lo || p >= a.hi {
+        return false;
+    }
+    // (most frees and reallocs are of recent blocks: newest chunk first)
+    a.chunks[..a.n].iter().rev().any(|&(s, e)| p >= s && p < e)
 }
 
 #[inline(never)]
@@ -214,7 +223,11 @@ unsafe fn arena_alloc(a: &mut Arena, size: usize) -> *mut u8 {
         a.on = false;
         return std::ptr::null_mut();
     }
-    let csize = if size + GRANULE > ARENA_CHUNK { size + GRANULE } else { ARENA_CHUNK };
+    // chunks grow geometrically (1 MB for the first 8, then 2, 4, ... 64 MB),
+    // so the fixed chunk table covers large chunks' ASTs without the arena
+    // running out of slots
+    let grow = ARENA_CHUNK << (a.n / 8).min(6);
+    let csize = if size + GRANULE > grow { size + GRANULE } else { grow };
     let chunk = if csize == ARENA_CHUNK && a.spare != 0 {
         std::mem::replace(&mut a.spare, 0) as *mut u8
     } else {
@@ -226,6 +239,13 @@ unsafe fn arena_alloc(a: &mut Arena, size: usize) -> *mut u8 {
     }
     let c = chunk as usize;
     a.chunks[a.n] = (c, c + csize);
+    if a.n == 0 {
+        a.lo = c;
+        a.hi = c + csize;
+    } else {
+        a.lo = a.lo.min(c);
+        a.hi = a.hi.max(c + csize);
+    }
     a.n += 1;
     a.live = true;
     a.bump = c + size;
@@ -279,6 +299,8 @@ pub unsafe fn arena_reset() {
     a.bump = 0;
     a.end = 0;
     a.last = 0;
+    a.lo = 0;
+    a.hi = 0;
 }
 
 /// The global allocator type; install with `#[global_allocator]`.

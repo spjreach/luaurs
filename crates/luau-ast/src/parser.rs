@@ -47,7 +47,7 @@ impl std::hash::Hasher for NameHasher {
 }
 
 use crate::ast::*;
-use crate::lexeme::{Lexeme, LexemeType, QuoteStyle};
+use crate::lexeme::{Kw, Lexeme, LexemeType, QuoteStyle};
 use crate::lexer::{fixup_multiline_string, fixup_quoted_string, Lexer};
 use crate::location::{Location, Position};
 use crate::name_table::AstNameTable;
@@ -156,7 +156,7 @@ pub fn parse(source: &[u8], names: &mut AstNameTable) -> ParseResult {
                 body: Vec::new(),
                 has_end: false,
             },
-            errors: vec![err],
+            errors: vec![*err],
             hot_comments,
             size_hint: 0,
             local_hint: 0,
@@ -167,7 +167,9 @@ pub fn parse(source: &[u8], names: &mut AstNameTable) -> ParseResult {
     }
 }
 
-type PResult<T> = Result<T, ParseError>;
+// (the error is boxed: a parse result is then two words, returned in
+// registers, instead of going through memory on every recursive call)
+type PResult<T> = Result<T, Box<ParseError>>;
 
 pub struct Parser<'src, 'names> {
     source: &'src [u8],
@@ -300,7 +302,6 @@ impl<'src, 'names> Parser<'src, 'names> {
     }
 
     #[inline]
-    #[inline]
     fn note_global(&mut self, name: AstName) {
         let n = name.0;
         if n.len() == 7 && (n == "getfenv" || n == "setfenv") {
@@ -314,6 +315,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         }
     }
 
+    #[inline]
     fn advance(&mut self) -> Lexeme {
         self.n_tokens += 1;
         self.lexer.next()
@@ -347,9 +349,9 @@ impl<'src, 'names> Parser<'src, 'names> {
         }
     }
 
-    fn accept_kw(&mut self, kw: &'static str) -> bool {
+    fn accept_kw(&mut self, kw: Kw) -> bool {
         if self.cur() == LexemeType::Reserved(kw) {
-            if kw == "function" {
+            if kw == Kw::FUNCTION {
                 self.match_fn = self.cur_lexeme();
             }
             self.advance();
@@ -360,7 +362,7 @@ impl<'src, 'names> Parser<'src, 'names> {
     }
 
     fn fail<T>(&self, location: Location, message: impl Into<String>) -> PResult<T> {
-        Err(ParseError { location, message: message.into() })
+        Err(Box::new(ParseError { location, message: message.into() }))
     }
 
     fn cur_str(&self) -> String {
@@ -391,7 +393,7 @@ impl<'src, 'names> Parser<'src, 'names> {
     }
 
     /// `expectAndConsume(Reserved, context)`.
-    fn expect_kw(&mut self, kw: &'static str, ctx: &str) -> PResult<()> {
+    fn expect_kw(&mut self, kw: Kw, ctx: &str) -> PResult<()> {
         if self.accept_kw(kw) {
             Ok(())
         } else {
@@ -423,7 +425,7 @@ impl<'src, 'names> Parser<'src, 'names> {
     }
 
     /// `expectMatchEndAndConsume`.
-    fn expect_match_end(&mut self, kw: &'static str, open: &Lexeme) -> PResult<()> {
+    fn expect_match_end(&mut self, kw: Kw, open: &Lexeme) -> PResult<()> {
         let cur = self.cur_lexeme();
         let p = open.location.begin;
         if cur.ty != LexemeType::Reserved(kw) {
@@ -554,10 +556,10 @@ impl<'src, 'names> Parser<'src, 'names> {
         matches!(
             self.cur(),
             LexemeType::Eof
-                | LexemeType::Reserved("end")
-                | LexemeType::Reserved("else")
-                | LexemeType::Reserved("elseif")
-                | LexemeType::Reserved("until")
+                | LexemeType::Reserved(Kw::END)
+                | LexemeType::Reserved(Kw::ELSE)
+                | LexemeType::Reserved(Kw::ELSEIF)
+                | LexemeType::Reserved(Kw::UNTIL)
         )
     }
 
@@ -570,7 +572,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         self.block_depth += 1;
 
         while !self.at_block_end() {
-            if let LexemeType::Reserved("return") = self.cur() {
+            if let LexemeType::Reserved(Kw::RETURN) = self.cur() {
                 let stat = self.parse_return()?;
                 body.push(Box::new(stat));
                 break;
@@ -590,7 +592,7 @@ impl<'src, 'names> Parser<'src, 'names> {
 
             // A `return` may be followed by `end`, and any statement may be
             // terminated by a semicolon.
-            if let LexemeType::Reserved("return") = self.cur() {
+            if let LexemeType::Reserved(Kw::RETURN) = self.cur() {
                 let stat = self.parse_return()?;
                 body.push(Box::new(stat));
                 break;
@@ -600,7 +602,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         self.block_depth -= 1;
         let end = self.cur_lexeme().location.begin;
 
-        if matches!(self.cur(), LexemeType::Reserved("end")) {
+        if matches!(self.cur(), LexemeType::Reserved(Kw::END)) {
             has_end = true;
         }
 
@@ -614,7 +616,7 @@ impl<'src, 'names> Parser<'src, 'names> {
 
     fn parse_return(&mut self) -> PResult<AstStat> {
         let begin = self.cur_lexeme().location.begin;
-        self.expect_kw("return", "")?;
+        self.expect_kw(Kw::RETURN, "")?;
 
         let mut list = Vec::new();
         if !self.at_block_end() && self.cur() != LexemeType::Char(b';') {
@@ -633,10 +635,10 @@ impl<'src, 'names> Parser<'src, 'names> {
 
         if self.function_depth == 0 {
             if !self.declared_exports.is_empty() {
-                return Err(ParseError {
+                return Err(Box::new(ParseError {
                     location: Location::new(begin, end),
                     message: "Exporting values is not compatible with top-level return (export/return conflict)".to_string(),
-                });
+                }));
             }
             self.has_module_return = true;
         }
@@ -650,14 +652,14 @@ impl<'src, 'names> Parser<'src, 'names> {
 
     fn parse_statement(&mut self) -> PResult<AstStat> {
         match self.cur() {
-            LexemeType::Reserved("if") => self.parse_if_statement(),
-            LexemeType::Reserved("while") => self.parse_while_statement(),
-            LexemeType::Reserved("repeat") => self.parse_repeat_statement(),
-            LexemeType::Reserved("for") => self.parse_for_statement(),
-            LexemeType::Reserved("do") => self.parse_do_statement(),
-            LexemeType::Reserved("break") => self.parse_break_statement(),
-            LexemeType::Reserved("local") => self.parse_local_statement(),
-            LexemeType::Reserved("function") => self.parse_function_statement(),
+            LexemeType::Reserved(Kw::IF) => self.parse_if_statement(),
+            LexemeType::Reserved(Kw::WHILE) => self.parse_while_statement(),
+            LexemeType::Reserved(Kw::REPEAT) => self.parse_repeat_statement(),
+            LexemeType::Reserved(Kw::FOR) => self.parse_for_statement(),
+            LexemeType::Reserved(Kw::DO) => self.parse_do_statement(),
+            LexemeType::Reserved(Kw::BREAK) => self.parse_break_statement(),
+            LexemeType::Reserved(Kw::LOCAL) => self.parse_local_statement(),
+            LexemeType::Reserved(Kw::FUNCTION) => self.parse_function_statement(),
             LexemeType::Attribute | LexemeType::AttributeOpen => self.parse_attributed_function_statement(),
 
             // contextual keywords are names unless the statement turns out
@@ -694,7 +696,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         self.push_scope();
         let body = self.parse_block()?;
         self.pop_scope();
-        self.expect_match_end("end", &match_do)?;
+        self.expect_match_end(Kw::END, &match_do)?;
         let has_semicolon = self.skip_semicolon();
         Ok(AstStat::Block(Box::new(AstStatBlock {
             location: Location::new(begin, self.lexer.previous_location().end),
@@ -709,7 +711,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         let begin = start.begin;
         self.advance();
         if self.loop_depth == 0 {
-            return Err(ParseError { location: start, message: "break statement must be inside a loop".to_string() });
+            return Err(Box::new(ParseError { location: start, message: "break statement must be inside a loop".to_string() }));
         }
         let has_semicolon = self.skip_semicolon();
         Ok(AstStat::Break(Box::new(AstStatBreak {
@@ -723,7 +725,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         let begin = start.begin;
         self.advance();
         if self.loop_depth == 0 {
-            return Err(ParseError { location: start, message: "continue statement must be inside a loop".to_string() });
+            return Err(Box::new(ParseError { location: start, message: "continue statement must be inside a loop".to_string() }));
         }
         let has_semicolon = self.skip_semicolon();
         Ok(AstStat::Continue(Box::new(AstStatContinue {
@@ -740,7 +742,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         let mut keyword_location = None;
         let mut equals_location = None;
 
-        if matches!(self.cur(), LexemeType::Reserved("local")) {
+        if matches!(self.cur(), LexemeType::Reserved(Kw::LOCAL)) {
             keyword_location = Some(self.cur_lexeme().location);
             self.advance();
 
@@ -799,7 +801,7 @@ impl<'src, 'names> Parser<'src, 'names> {
 
         let then_location = Some(self.cur_lexeme().location);
         let match_then = self.cur_lexeme();
-        self.expect_kw("then", "if statement")?;
+        self.expect_kw(Kw::THEN, "if statement")?;
 
         let thenbody = {
             self.push_scope();
@@ -815,17 +817,17 @@ impl<'src, 'names> Parser<'src, 'names> {
         let mut elsebody: Option<Box<AstStat>> = None;
         let mut else_location = None;
 
-        if matches!(self.cur(), LexemeType::Reserved("elseif")) {
+        if matches!(self.cur(), LexemeType::Reserved(Kw::ELSEIF)) {
             else_location = Some(self.cur_lexeme().location);
             elsebody = Some(Box::new(self.parse_if_statement_from_elseif()?));
-        } else if matches!(self.cur(), LexemeType::Reserved("else")) {
+        } else if matches!(self.cur(), LexemeType::Reserved(Kw::ELSE)) {
             else_location = Some(self.cur_lexeme().location);
             let match_else = self.cur_lexeme();
             self.advance();
             self.push_scope();
             let block = self.parse_block()?;
             self.pop_scope();
-            self.expect_match_end("end", &match_else)?;
+            self.expect_match_end(Kw::END, &match_else)?;
             elsebody = Some(Box::new(AstStat::Block(Box::new(AstStatBlock {
                 location: block.location,
                 has_semicolon: false,
@@ -833,7 +835,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                 has_end: true,
             }))));
         } else {
-            self.expect_match_end("end", &match_then)?;
+            self.expect_match_end(Kw::END, &match_then)?;
         }
 
         let has_semicolon = self.skip_semicolon();
@@ -865,7 +867,7 @@ impl<'src, 'names> Parser<'src, 'names> {
 
         let then_location = Some(self.cur_lexeme().location);
         let match_then = self.cur_lexeme();
-        self.expect_kw("then", "if statement")?;
+        self.expect_kw(Kw::THEN, "if statement")?;
 
         let thenbody = {
             self.push_scope();
@@ -881,17 +883,17 @@ impl<'src, 'names> Parser<'src, 'names> {
         let mut elsebody: Option<Box<AstStat>> = None;
         let mut else_location = None;
 
-        if matches!(self.cur(), LexemeType::Reserved("elseif")) {
+        if matches!(self.cur(), LexemeType::Reserved(Kw::ELSEIF)) {
             else_location = Some(self.cur_lexeme().location);
             elsebody = Some(Box::new(self.parse_if_statement_from_elseif()?));
-        } else if matches!(self.cur(), LexemeType::Reserved("else")) {
+        } else if matches!(self.cur(), LexemeType::Reserved(Kw::ELSE)) {
             else_location = Some(self.cur_lexeme().location);
             let match_else = self.cur_lexeme();
             self.advance();
             self.push_scope();
             let block = self.parse_block()?;
             self.pop_scope();
-            self.expect_match_end("end", &match_else)?;
+            self.expect_match_end(Kw::END, &match_else)?;
             elsebody = Some(Box::new(AstStat::Block(Box::new(AstStatBlock {
                 location: block.location,
                 has_semicolon: false,
@@ -899,7 +901,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                 has_end: true,
             }))));
         } else {
-            self.expect_match_end("end", &match_then)?;
+            self.expect_match_end(Kw::END, &match_then)?;
         }
 
         let has_semicolon = self.skip_semicolon();
@@ -930,7 +932,7 @@ impl<'src, 'names> Parser<'src, 'names> {
 
         let do_location = self.cur_lexeme().location;
         let match_do = self.cur_lexeme();
-        self.expect_kw("do", "while loop")?;
+        self.expect_kw(Kw::DO, "while loop")?;
         let has_do = true;
 
         self.loop_depth += 1;
@@ -939,7 +941,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         self.pop_scope();
         self.loop_depth -= 1;
 
-        self.expect_match_end("end", &match_do)?;
+        self.expect_match_end(Kw::END, &match_do)?;
         self.pop_scope();
 
         let has_semicolon = self.skip_semicolon();
@@ -968,7 +970,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         self.push_scope();
         let body = self.parse_block()?;
 
-        self.expect_match_end("until", &match_repeat)?;
+        self.expect_match_end(Kw::UNTIL, &match_repeat)?;
         // The `until` condition is part of the body scope, so locals declared
         // inside the loop remain visible to it.
         let condition = self.parse_expr()?;
@@ -1004,7 +1006,7 @@ impl<'src, 'names> Parser<'src, 'names> {
             let step = if self.accept_char(b',') { Some(self.parse_expr()?) } else { None };
             let do_location = self.cur_lexeme().location;
             let match_do = self.cur_lexeme();
-            self.expect_kw("do", "for loop")?;
+            self.expect_kw(Kw::DO, "for loop")?;
             let has_do = true;
 
             // the loop variable belongs to the loop (C++ declares it after
@@ -1016,7 +1018,7 @@ impl<'src, 'names> Parser<'src, 'names> {
             self.pop_scope();
             self.loop_depth -= 1;
 
-            self.expect_match_end("end", &match_do)?;
+            self.expect_match_end(Kw::END, &match_do)?;
             self.pop_scope();
             let has_semicolon = self.skip_semicolon();
 
@@ -1043,13 +1045,13 @@ impl<'src, 'names> Parser<'src, 'names> {
         }
 
         let in_location = self.cur_lexeme().location;
-        self.expect_kw("in", "for loop")?;
+        self.expect_kw(Kw::IN, "for loop")?;
         let has_in = true;
         let values = self.parse_expr_list()?;
 
         let do_location = self.cur_lexeme().location;
         let match_do = self.cur_lexeme();
-        self.expect_kw("do", "for loop")?;
+        self.expect_kw(Kw::DO, "for loop")?;
         let has_do = true;
 
         self.push_scope();
@@ -1064,7 +1066,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         self.pop_scope();
         self.loop_depth -= 1;
 
-        self.expect_match_end("end", &match_do)?;
+        self.expect_match_end(Kw::END, &match_do)?;
         self.pop_scope();
         let has_semicolon = self.skip_semicolon();
 
@@ -1085,7 +1087,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         let begin = self.cur_lexeme().location.begin;
         self.advance();
 
-        if self.accept_kw("function") {
+        if self.accept_kw(Kw::FUNCTION) {
             // diagnostics point at `local` when it is on the same line
             if self.match_fn.location.begin.line == begin.line {
                 self.match_fn.location.begin.column = begin.column;
@@ -1149,7 +1151,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         let keyword_location = self.cur_lexeme().location;
         self.accept_contextual("const");
 
-        if self.accept_kw("function") {
+        if self.accept_kw(Kw::FUNCTION) {
             if self.match_fn.location.begin.line == begin.line {
                 self.match_fn.location.begin.column = begin.column;
             }
@@ -1232,7 +1234,7 @@ impl<'src, 'names> Parser<'src, 'names> {
 
         let mut members = Vec::new();
 
-        while !matches!(self.cur(), LexemeType::Reserved("end") | LexemeType::Eof) {
+        while !matches!(self.cur(), LexemeType::Reserved(Kw::END) | LexemeType::Eof) {
             if self.accept_char(b';') {
                 continue;
             }
@@ -1249,7 +1251,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                 self.advance();
             }
 
-            if self.accept_kw("function") {
+            if self.accept_kw(Kw::FUNCTION) {
                 let keyword_location = qualifier_location;
                 let (function_name, function_location) = self.expect_name("method name")?;
                 let old = std::mem::replace(&mut self.in_class_method_body, true);
@@ -1298,7 +1300,7 @@ impl<'src, 'names> Parser<'src, 'names> {
             self.accept_char(b',');
         }
 
-        self.expect_kw("end", "class")?;
+        self.expect_kw(Kw::END, "class")?;
         let has_semicolon = self.skip_semicolon();
 
         Ok(AstStat::Class(Box::new(AstStatClass {
@@ -1418,15 +1420,15 @@ impl<'src, 'names> Parser<'src, 'names> {
         let begin = self.cur_lexeme().location.begin;
         let attributes = self.parse_attributes()?;
 
-        if self.cur() == LexemeType::Reserved("local") && self.lexer.lookahead().ty != LexemeType::Reserved("function") {
+        if self.cur() == LexemeType::Reserved(Kw::LOCAL) && self.lexer.lookahead().ty != LexemeType::Reserved(Kw::FUNCTION) {
             self.advance();
             return self.fail(
                 self.cur_lexeme().location,
                 format!("Expected 'function' after local declaration with attribute, but got {} instead", self.cur_str()),
             );
         }
-        if self.accept_kw("local") {
-            self.expect_kw("function", "")?;
+        if self.accept_kw(Kw::LOCAL) {
+            self.expect_kw(Kw::FUNCTION, "")?;
             let (name, name_loc) = self.expect_name("variable name")?;
             let local = self.declare_local(name, name_loc, false, None);
             let mut func = self.parse_function_body(Some(name))?;
@@ -1449,7 +1451,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         let contextual = self.cur_name();
         if contextual == Some("export") || contextual == Some("const") {
             let keyword = contextual.unwrap();
-            if self.lexer.lookahead().ty != LexemeType::Reserved("function") {
+            if self.lexer.lookahead().ty != LexemeType::Reserved(Kw::FUNCTION) {
                 self.advance();
                 let what = if keyword == "export" { "export" } else { "local" };
                 return self.fail(
@@ -1468,7 +1470,7 @@ impl<'src, 'names> Parser<'src, 'names> {
             }
             return Ok(stat);
         }
-        if self.cur() != LexemeType::Reserved("function") {
+        if self.cur() != LexemeType::Reserved(Kw::FUNCTION) {
             return self.fail(
                 self.cur_lexeme().location,
                 format!(
@@ -1477,7 +1479,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                 ),
             );
         }
-        self.expect_kw("function", "")?;
+        self.expect_kw(Kw::FUNCTION, "")?;
         let (name, func, _) = self.parse_function_name_and_body(None)?;
         let mut func = func;
         if let Some(first) = attributes.first() {
@@ -1495,7 +1497,7 @@ impl<'src, 'names> Parser<'src, 'names> {
 
     fn parse_function_statement(&mut self) -> PResult<AstStat> {
         let begin = self.cur_lexeme().location.begin;
-        self.expect_kw("function", "")?;
+        self.expect_kw(Kw::FUNCTION, "")?;
         let (name, func, _method_name) = self.parse_function_name_and_body(None)?;
         let has_semicolon = self.skip_semicolon();
         Ok(AstStat::Function(Box::new(AstStatFunction {
@@ -1658,7 +1660,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         let body = self.parse_block();
         self.vararg = saved_vararg;
         let body = body?;
-        self.expect_match_end("end", &match_fn)?;
+        self.expect_match_end(Kw::END, &match_fn)?;
 
         self.function_depth -= 1;
         self.loop_depth = saved_loop_depth;
@@ -1723,12 +1725,12 @@ impl<'src, 'names> Parser<'src, 'names> {
     /// variables or fields, and constants may not be reassigned.
     fn check_lvalue(expr: &AstExpr) -> PResult<()> {
         match expr {
-            AstExpr::Local(l) if l.local.is_const => Err(ParseError {
+            AstExpr::Local(l) if l.local.is_const => Err(Box::new(ParseError {
                 location: l.location,
                 message: format!("Variable '{}' is constant and may not be reassigned", l.local.name.0),
-            }),
+            })),
             AstExpr::Local(_) | AstExpr::Global(_) | AstExpr::IndexName(_) | AstExpr::IndexExpr(_) => Ok(()),
-            _ => Err(ParseError { location: expr.location(), message: "Assigned expression must be a variable or a field".to_string() }),
+            _ => Err(Box::new(ParseError { location: expr.location(), message: "Assigned expression must be a variable or a field".to_string() })),
         }
     }
 
@@ -1804,27 +1806,27 @@ impl<'src, 'names> Parser<'src, 'names> {
         let export_loc = self.cur_lexeme().location;
         let export_begin = export_loc.begin;
         self.advance();
-        let value_export = matches!(self.cur(), LexemeType::Reserved("local") | LexemeType::Reserved("function"))
+        let value_export = matches!(self.cur(), LexemeType::Reserved(Kw::LOCAL) | LexemeType::Reserved(Kw::FUNCTION))
             || self.cur_name() == Some("const");
         if value_export {
             let start = export_loc;
             if self.function_depth != 0 || self.block_depth != 1 {
-                return Err(ParseError { location: start, message: "'export' may only be applied to top-level statements".to_string() });
+                return Err(Box::new(ParseError { location: start, message: "'export' may only be applied to top-level statements".to_string() }));
             }
             if self.has_module_return {
-                return Err(ParseError {
+                return Err(Box::new(ParseError {
                     location: start,
                     message: "Exporting values is not compatible with top-level return (export/return conflict)".to_string(),
-                });
+                }));
             }
             let keyword_location = self.cur_lexeme().location;
-            if self.cur() == LexemeType::Reserved("function") {
+            if self.cur() == LexemeType::Reserved(Kw::FUNCTION) {
                 // `export function f` declares a constant exported local function
                 self.match_fn = self.cur_lexeme();
                 self.advance();
                 let (name, name_loc) = self.expect_name("variable name")?;
                 if self.declared_exports.contains(&name) {
-                    return Err(ParseError { location: name_loc, message: format!("Duplicate exported identifier '{}'", name.0) });
+                    return Err(Box::new(ParseError { location: name_loc, message: format!("Duplicate exported identifier '{}'", name.0) }));
                 }
                 self.declared_exports.push(name);
                 self.export_pending = true;
@@ -1841,14 +1843,14 @@ impl<'src, 'names> Parser<'src, 'names> {
                     const_keyword_begin: export_begin,
                 })));
             }
-            let is_local = self.cur() == LexemeType::Reserved("local");
-            if matches!(self.lexer.lookahead().ty, LexemeType::Reserved("function")) {
+            let is_local = self.cur() == LexemeType::Reserved(Kw::LOCAL);
+            if matches!(self.lexer.lookahead().ty, LexemeType::Reserved(Kw::FUNCTION)) {
                 let message = if is_local {
                     "'export' must be followed by an identifier or 'function'; try removing 'local'"
                 } else {
                     "'export' must be followed by an identifier or 'function'"
                 };
-                return Err(ParseError { location: start, message: message.to_string() });
+                return Err(Box::new(ParseError { location: start, message: message.to_string() }));
             }
             self.export_pending = true;
             let stat = if is_local { self.parse_local_statement() } else { self.parse_const_statement() };
@@ -1860,7 +1862,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                 local.location.begin = export_begin;
                 for var in &local.vars {
                     if self.declared_exports.contains(&var.name) {
-                        return Err(ParseError { location: var.location, message: format!("Duplicate exported identifier '{}'", var.name.0) });
+                        return Err(Box::new(ParseError { location: var.location, message: format!("Duplicate exported identifier '{}'", var.name.0) }));
                     }
                     self.declared_exports.push(var.name);
                 }
@@ -1890,7 +1892,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         let begin = self.cur_lexeme().location.begin;
         self.advance();
 
-        if self.accept_kw("function") {
+        if self.accept_kw(Kw::FUNCTION) {
             let (name, name_loc) = self.expect_name("type function name")?;
             let old = std::mem::replace(&mut self.in_class_method_body, false);
             let old_depth = std::mem::replace(&mut self.type_fn_depth, self.function_depth + 1);
@@ -1956,8 +1958,8 @@ impl<'src, 'names> Parser<'src, 'names> {
     fn binary_op_info(&self) -> Option<(AstExprBinaryOp, u8, bool)> {
         // (operator, precedence, right-associative)
         match self.cur() {
-            LexemeType::Reserved("or") => Some((AstExprBinaryOp::Or, 1, false)),
-            LexemeType::Reserved("and") => Some((AstExprBinaryOp::And, 2, false)),
+            LexemeType::Reserved(Kw::OR) => Some((AstExprBinaryOp::Or, 1, false)),
+            LexemeType::Reserved(Kw::AND) => Some((AstExprBinaryOp::And, 2, false)),
             LexemeType::LessEqual => Some((AstExprBinaryOp::CompareLe, 3, false)),
             LexemeType::GreaterEqual => Some((AstExprBinaryOp::CompareGe, 3, false)),
             LexemeType::NotEqual => Some((AstExprBinaryOp::CompareNe, 3, false)),
@@ -2029,7 +2031,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         let begin = self.cur_lexeme().location.begin;
 
         let op = match self.cur() {
-            LexemeType::Reserved("not") => Some(AstExprUnaryOp::Not),
+            LexemeType::Reserved(Kw::NOT) => Some(AstExprUnaryOp::Not),
             LexemeType::Char(b'-') => Some(AstExprUnaryOp::Minus),
             LexemeType::Char(b'#') => Some(AstExprUnaryOp::Len),
             LexemeType::Char(b'!') => return self.fail(self.cur_lexeme().location, "Unexpected '!'; did you mean 'not'?"),
@@ -2231,18 +2233,18 @@ impl<'src, 'names> Parser<'src, 'names> {
         let lex = self.cur_lexeme();
 
         match lex.ty {
-            LexemeType::Reserved("nil") => {
+            LexemeType::Reserved(Kw::NIL) => {
                 self.advance();
                 Ok(AstExpr::ConstantNil(Box::new(AstExprConstantNil { location: lex.location })))
             }
-            LexemeType::Reserved("true") => {
+            LexemeType::Reserved(Kw::TRUE) => {
                 self.advance();
                 Ok(AstExpr::ConstantBool(Box::new(AstExprConstantBool {
                     location: lex.location,
                     value: true,
                 })))
             }
-            LexemeType::Reserved("false") => {
+            LexemeType::Reserved(Kw::FALSE) => {
                 self.advance();
                 Ok(AstExpr::ConstantBool(Box::new(AstExprConstantBool {
                     location: lex.location,
@@ -2255,10 +2257,10 @@ impl<'src, 'names> Parser<'src, 'names> {
                 if text.last() == Some(&b'i') {
                     let (value, parse_result) = parse_integer_literal(text);
                     if parse_result == ConstantNumberParseResult::Malformed {
-                        return Err(ParseError { location: lex.location, message: "Malformed integer".into() });
+                        return Err(Box::new(ParseError { location: lex.location, message: "Malformed integer".into() }));
                     }
                     if parse_result != ConstantNumberParseResult::Ok {
-                        return Err(ParseError { location: lex.location, message: "Integer overflow".into() });
+                        return Err(Box::new(ParseError { location: lex.location, message: "Integer overflow".into() }));
                     }
                     Ok(AstExpr::ConstantInteger(Box::new(AstExprConstantInteger {
                         location: lex.location,
@@ -2268,7 +2270,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                 } else {
                     let (value, parse_result) = parse_number_literal(text);
                     if parse_result == ConstantNumberParseResult::Malformed {
-                        return Err(ParseError { location: lex.location, message: "Malformed number".into() });
+                        return Err(Box::new(ParseError { location: lex.location, message: "Malformed number".into() }));
                     }
                     Ok(AstExpr::ConstantNumber(Box::new(AstExprConstantNumber {
                         location: lex.location,
@@ -2281,7 +2283,7 @@ impl<'src, 'names> Parser<'src, 'names> {
             LexemeType::InterpStringBegin | LexemeType::InterpStringSimple => {
                 self.parse_interp_string()
             }
-            LexemeType::Reserved("function") => {
+            LexemeType::Reserved(Kw::FUNCTION) => {
                 self.match_fn = lex;
                 self.advance();
                 let func = self.parse_function_body(None)?;
@@ -2289,7 +2291,7 @@ impl<'src, 'names> Parser<'src, 'names> {
             }
             LexemeType::Attribute | LexemeType::AttributeOpen => {
                 let attributes = self.parse_attributes()?;
-                if self.cur() != LexemeType::Reserved("function") {
+                if self.cur() != LexemeType::Reserved(Kw::FUNCTION) {
                     return self.fail(
                         lex.location,
                         format!("Expected 'function' declaration after attribute, but got {} instead", self.cur_str()),
@@ -2328,7 +2330,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                 self.advance();
                 Ok(AstExpr::Varargs(Box::new(AstExprVarargs { location: lex.location })))
             }
-            LexemeType::Reserved("if") => self.parse_if_expr(),
+            LexemeType::Reserved(Kw::IF) => self.parse_if_expr(),
             LexemeType::Name => {
                 self.advance();
                 let name = match lex.data {
@@ -2368,10 +2370,10 @@ impl<'src, 'names> Parser<'src, 'names> {
 
         let (condition, condition_local, condition_is_const, condition_keyword_location, condition_equals_location) =
             self.parse_condition("if")?;
-        self.expect_kw("then", "if then else expression")?;
+        self.expect_kw(Kw::THEN, "if then else expression")?;
         let true_expr = self.parse_expr()?;
 
-        if self.cur() == LexemeType::Reserved("elseif") {
+        if self.cur() == LexemeType::Reserved(Kw::ELSEIF) {
             self.pop_scope();
             let nested = self.parse_if_expr_from_elseif()?;
             return Ok(AstExpr::IfElse(Box::new(AstExprIfElse {
@@ -2390,7 +2392,7 @@ impl<'src, 'names> Parser<'src, 'names> {
 
         // The binding scope ends before the `else` expression is parsed.
         self.pop_scope();
-        self.expect_kw("else", "if then else expression")?;
+        self.expect_kw(Kw::ELSE, "if then else expression")?;
         let false_expr = self.parse_expr()?;
 
         Ok(AstExpr::IfElse(Box::new(AstExprIfElse {
@@ -2414,10 +2416,10 @@ impl<'src, 'names> Parser<'src, 'names> {
 
         let (condition, condition_local, condition_is_const, condition_keyword_location, condition_equals_location) =
             self.parse_condition("if")?;
-        self.expect_kw("then", "if then else expression")?;
+        self.expect_kw(Kw::THEN, "if then else expression")?;
         let true_expr = self.parse_expr()?;
 
-        if self.cur() == LexemeType::Reserved("elseif") {
+        if self.cur() == LexemeType::Reserved(Kw::ELSEIF) {
             self.pop_scope();
             let nested = self.parse_if_expr_from_elseif()?;
             return Ok(AstExpr::IfElse(Box::new(AstExprIfElse {
@@ -2436,7 +2438,7 @@ impl<'src, 'names> Parser<'src, 'names> {
 
         // The binding scope ends before the `else` expression is parsed.
         self.pop_scope();
-        self.expect_kw("else", "if then else expression")?;
+        self.expect_kw(Kw::ELSE, "if then else expression")?;
         let false_expr = self.parse_expr()?;
         Ok(AstExpr::IfElse(Box::new(AstExprIfElse {
             location: Location::new(begin, false_expr.location().end),
@@ -3027,7 +3029,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         let begin = lex.location.begin;
 
         match lex.ty {
-            LexemeType::Reserved("nil") => {
+            LexemeType::Reserved(Kw::NIL) => {
                 self.advance();
                 Ok(AstType::Reference(Box::new(AstTypeReference {
                     location: lex.location,
@@ -3040,8 +3042,8 @@ impl<'src, 'names> Parser<'src, 'names> {
                     parameters: Vec::new(),
                 })))
             }
-            LexemeType::Reserved("true") | LexemeType::Reserved("false") => {
-                let value = lex.ty == LexemeType::Reserved("true");
+            LexemeType::Reserved(Kw::TRUE) | LexemeType::Reserved(Kw::FALSE) => {
+                let value = lex.ty == LexemeType::Reserved(Kw::TRUE);
                 self.advance();
                 Ok(AstType::SingletonBool(Box::new(AstTypeSingletonBool {
                     location: lex.location,
@@ -3129,7 +3131,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                 })))
             }
             LexemeType::Char(b'{') => self.parse_table_type(),
-            LexemeType::Reserved("function") => self.fail(
+            LexemeType::Reserved(Kw::FUNCTION) => self.fail(
                 lex.location,
                 "Using 'function' as a type annotation is not supported, consider replacing with a function type annotation e.g. '(...any) -> ...any'",
             ),
