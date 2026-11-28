@@ -1366,6 +1366,12 @@ unsafe fn func_exit(L: *mut lua_State, p: *mut Proto, ex: u32, cell: &FuncCell, 
     func_resume(L)
 }
 
+/// Side traces take over the stores of the values their parent's exit
+/// holds in registers (the exit stub then leaves them to the side trace).
+pub fn takeover() -> bool {
+    !crate::trace_flag!("LUAU_TRACE_NOINHERIT") && !crate::trace_flag!("LUAU_TRACE_NOTAKEOVER")
+}
+
 /// A trace run from native code took `ran` cycles: is it worth entering
 /// from here? (a short loop is left native for a while)
 fn note_run(cell: &mut LoopCell, ran: u64) {

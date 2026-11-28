@@ -29,7 +29,51 @@ mod tests;
 /// Validates the IR between passes in debug builds (or with
 /// `LUAU_TRACE_VALIDATE=1`): a full walk per pass, too slow to pay on every
 /// trace in release.
+thread_local! {
+    /// LUAU_TRACE_PASSTIME: time per pass (since the previous check)
+    static PASS_T: std::cell::RefCell<(Option<std::time::Instant>, Vec<(String, u128)>)> = const { std::cell::RefCell::new((None, Vec::new())) };
+}
+
+struct PassReport;
+impl Drop for PassReport {
+    fn drop(&mut self) {
+        PASS_T.with(|p| {
+            let p = p.borrow();
+            let mut v = p.1.clone();
+            v.sort_by(|a, b| b.1.cmp(&a.1));
+            for (n, t) in v.iter().take(12) {
+                eprintln!("[PASS] {:<28} {:.3} ms", n, *t as f64 / 1e6);
+            }
+        });
+    }
+}
+
+fn pass_time(after: &str) {
+    if !crate::trace_flag!("LUAU_TRACE_PASSTIME") {
+        return;
+    }
+    static REPORT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    PASS_T.with(|p| {
+        let mut p = p.borrow_mut();
+        let now = std::time::Instant::now();
+        if let Some(t0) = p.0 {
+            let d = now.duration_since(t0).as_nanos();
+            match p.1.iter_mut().find(|x| x.0 == after) {
+                Some(x) => x.1 += d,
+                None => p.1.push((after.to_string(), d)),
+            }
+        }
+        p.0 = Some(now);
+    });
+    REPORT.get_or_init(|| {
+        // (reported at thread exit)
+        thread_local! { static R: PassReport = const { PassReport }; }
+        R.with(|_| {});
+    });
+}
+
 fn check(t: &Trace, after: &str) -> Result<(), String> {
+    pass_time(after);
     if cfg!(debug_assertions) || crate::trace_flag!("LUAU_TRACE_VALIDATE") {
         validate(t).map_err(|e| format!("after {after}: {e}"))
     } else {
@@ -38,6 +82,7 @@ fn check(t: &Trace, after: &str) -> Result<(), String> {
 }
 
 pub fn optimize_checked(t: &mut Trace) -> Result<(), String> {
+    pass_time("(start)");
     for _ in 0..5 {
         let mut changed = false;
 

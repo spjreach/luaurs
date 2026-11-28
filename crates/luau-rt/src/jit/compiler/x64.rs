@@ -276,6 +276,9 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             forced[i] = Some(Home::G(free_g.remove(k)));
         }
     }
+    // (inherited values that didn't get their parent's register: filled
+    // in from it at the start - computed once homes are known, below)
+    let inherit_rest: Vec<(usize, u8, u8)> = t.inherit.iter().map(|&(i, k, r)| (i as usize, k, r)).filter(|&(i, _, _)| i < n && forced[i].is_none() && matches!(t.insts[i].op, Op::SLoad { guarded: false, .. }) && (0..i).all(|j| matches!(t.insts[j].op, Op::SLoad { .. } | Op::Nop))).collect();
     // spill slots: occupied now, and the last instruction a past occupant
     // used it at (a value spilled after the fact holds its slot from its
     // definition on, so only a slot unused since then will do)
@@ -500,6 +503,18 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
         }
     }
 
+    let mut moved_in: Vec<(Home, Home)> = Vec::new();
+    let mut inherited_moved = vec![false; n];
+    for &(i, kind, reg) in &inherit_rest {
+        if home[i] == Home::None {
+            inherited_moved[i] = true;
+            continue;
+        }
+        let src = if kind == 1 { Home::F(X(reg)) } else { Home::G(gpr_of(reg).ok_or("inherited register")?) };
+        moved_in.push((home[i], src));
+        inherited_moved[i] = true;
+    }
+
     // ---- emission -------------------------------------------------------
     let mut a = Asm::new();
     let exit = a.label();
@@ -520,6 +535,10 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
         a.sub_ri(R::Rsp, SPILL_BYTES);
     }
     let reentry = a.pos() as usize;
+    // (before the entry checks: their exits store these values)
+    if !moved_in.is_empty() {
+        parallel_move(&mut a, &moved_in)?;
+    }
     let counting = crate::jit::debug::counting();
     if counting {
         // (LUAU_TRACE_COUNT: entries of this trace)
@@ -559,8 +578,9 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     }
 
     for (i, inst) in t.insts.iter().enumerate() {
-        // (an inherited entry value is in its register already)
-        if deferred[i] || deferred_add[i] || forced[i].is_some() {
+        // (an inherited entry value is in its register already, or moved
+        // there from the parent's)
+        if deferred[i] || deferred_add[i] || forced[i].is_some() || inherited_moved[i] {
             continue;
         }
         // spilled operands go to the temp registers for this instruction
@@ -1918,6 +1938,35 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
         // (the interrupt exit stores the loop-close snapshot)
         let sid = if k == t.snapshots.len() { back_snap.0 } else { k as u32 };
         materialize(&mut a, &home, t, sid, sn)?;
+        // (a side trace attached here stores the values held in registers
+        // itself: see `jit::takeover`; the predicate is `exit_regs`')
+        let sinks_here = t.sinks.iter().any(|sk| sk.states.iter().any(|st| st.snap == k as u32)) || sn.entries.iter().any(|e| matches!(t.inst(e.value).op, Op::Sunk));
+        let in_reg = |e: &crate::jit::snapshots::SnapEntry| -> bool {
+            let ty = t.ty(e.value);
+            ty.tag().is_some()
+                && match home.get(e.value.index()) {
+                    Some(Home::F(_)) => ty == IrType::Number,
+                    Some(Home::G(_)) => needs_reg(ty) == Some(false),
+                    _ => false,
+                }
+        };
+        let split = k < t.snapshots.len() && t.link_table != 0 && !sinks_here && crate::jit::takeover();
+        if split {
+            let rest: Vec<crate::jit::snapshots::SnapEntry> = sn.entries.iter().filter(|e| !in_reg(e)).cloned().collect();
+            store_entries(&mut a, &home, t, &rest)?;
+            let none = a.label();
+            a.mov_ri64(R::Rax, (t.link_table + k * 8) as u64);
+            a.load(R::Rax, R::Rax, 0);
+            a.test_rr(R::Rax, R::Rax);
+            a.jcc(Cond::E, none);
+            a.jmp_r(R::Rax);
+            a.bind(none);
+            let regs: Vec<crate::jit::snapshots::SnapEntry> = sn.entries.iter().filter(|e| in_reg(e)).cloned().collect();
+            store_entries(&mut a, &home, t, &regs)?;
+            a.mov_ri(R::Rax, (tag | k as u32) as u64);
+            a.jmp(exit);
+            continue;
+        }
         store_entries(&mut a, &home, t, &sn.entries)?;
         if k == t.snapshots.len() {
             a.mov_ri(R::Rax, (0x8000_0000 | tag | back_snap.0) as u64);

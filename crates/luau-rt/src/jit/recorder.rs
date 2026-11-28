@@ -302,6 +302,32 @@ impl Recorder {
         // that call left it: checked, and kept by exits at the start)
         let keep = top.is_some_and(|t| t.1);
         r.set_top(if keep { Some(KEEP_TOP as usize) } else { top.map(|t| t.0) });
+        // the values the parent's exit holds in registers are this trace's
+        // to store (its exit stub doesn't): they start as this trace's
+        // writes, taken from those registers (see `takeover`)
+        if super::takeover() {
+            let regs = super::state::with(|s| {
+                let t = s.by_tag_mut(parent.0)?;
+                let sn = t.snapshots.get(parent.1 as usize)?;
+                let regs = t.exit_regs.get(parent.1 as usize)?;
+                Some(regs.iter().filter_map(|&(slot, _, _)| sn.entries.iter().find(|e| e.slot == slot).map(|e| (slot, t.ty(e.value)))).collect::<Vec<_>>())
+            });
+            if let Some(regs) = regs.filter(|r| !r.is_empty()) {
+                let saved = r.b.off;
+                r.b.off = 0;
+                for (slot, ty) in regs {
+                    let v = r.b.emit(Op::SLoad { slot, guarded: false, snap: SnapId(0) }, ty);
+                    r.b.set_slot(slot as usize, v);
+                }
+                r.b.off = saved;
+                // (the entry snapshot too: an exit right at the start
+                // stores them)
+                let w: Vec<SnapEntry> = r.b.written().into_iter().map(|(s, v)| SnapEntry { slot: s as u16, value: v }).collect();
+                for sn in r.b.trace.snapshots.iter_mut() {
+                    sn.entries = w.clone();
+                }
+            }
+        }
         // snapshot 0: the start, nothing done (the entry checks exit here)
         let s0 = r.b.snapshot();
         if let (Some((t, true)), _) = (top, s0) {
@@ -2077,6 +2103,10 @@ impl Recorder {
             return Err(AbortReason::UnsupportedControlFlow);
         }
         if self.funcs.len() >= MAX_INLINE_DEPTH {
+            return Err(AbortReason::UnsupportedControlFlow);
+        }
+        if self.funcs.iter().any(|f| f.0 == p) && crate::trace_flag!("LUAU_TRACE_NORECINLINE") {
+            // (recursion: the function's own traces run it)
             return Err(AbortReason::UnsupportedControlFlow);
         }
         let (nargs, nres) = (self.call_args(a, bb)?, c as i32 - 1);
