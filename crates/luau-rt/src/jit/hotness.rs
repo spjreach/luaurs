@@ -62,6 +62,15 @@ impl HotCounters {
         c.count = 0;
     }
 
+    /// The loop is recorded at its next back edge (an outer loop's
+    /// recording met it: see `AbortReason::InnerLoop`).
+    pub fn make_hot(&mut self, p: usize, header: u32) {
+        let c = self.counters.entry((p, header)).or_default();
+        if c.penalty < MAX_PENALTY {
+            c.count = u32::MAX / 2;
+        }
+    }
+
     pub fn is_blacklisted(&self, p: *mut Proto, header: u32) -> bool {
         self.counters.get(&(p as usize, header)).is_some_and(|c| c.penalty >= MAX_PENALTY)
     }

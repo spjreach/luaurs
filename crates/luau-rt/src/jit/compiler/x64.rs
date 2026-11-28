@@ -460,6 +460,34 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     // for the collector to run: nothing collects while a trace runs)
     let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::Builtin { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::MakeClosure { .. } | Op::CallC { .. }));
 
+    // stores whose slot already holds the value's type: an earlier load of
+    // that slot checked it, and nothing since could have changed any
+    // slot's type to another (only stores of that same type ran) - the
+    // value alone is written
+    let mut tag_known = vec![false; n];
+    if !crate::trace_flag!("LUAU_TRACE_NOTAGELIDE") {
+        for (i, x) in t.insts.iter().enumerate() {
+            let Op::XStore { p, v } = x.op else { continue };
+            let ty = t.ty(v);
+            if ty != IrType::Number {
+                continue;
+            }
+            for j in (0..i).rev() {
+                match &t.insts[j].op {
+                    Op::XLoad { p: q, .. } if *q == p && t.insts[j].ty == ty => {
+                        tag_known[i] = true;
+                        break;
+                    }
+                    Op::XStore { v: w, .. } if t.ty(*w) == ty => {}
+                    Op::XLoad { .. } | Op::SLoad { .. } | Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::NumToI32 { .. } | Op::NumToI64 { .. } | Op::GuardPlainTable { .. } | Op::Nop => {}
+                    _ if t.insts[j].is_pure() => {}
+                    // (a PHI, the loop head, calls, other stores: no)
+                    _ => break,
+                }
+            }
+        }
+    }
+
     // ---- emission -------------------------------------------------------
     let mut a = Asm::new();
     let exit = a.label();
@@ -507,7 +535,10 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
         a.cmp_ri(R::Rcx, (1 + (*t.proto).numparams as i32 + n as i32) * TV);
         a.jcc(Cond::NE, stubs[0]);
     }
-    if t.stack_need > 0 {
+    // (a frame has room for its function's own slots: the call checked;
+    // a vararg function's base moved up after that)
+    let room = if !t.proto.is_null() && (*t.proto).is_vararg == 0 && !crate::trace_flag!("LUAU_TRACE_STACKCHK") { (*t.proto).maxstacksize as u32 } else { 0 };
+    if t.stack_need > room {
         a.load(R::Rax, R::R12, OFF_STACK_LAST);
         a.sub_rr(R::Rax, R::R13);
         a.mov_ri(R::Rcx, (t.stack_need as u64) * TV as u64);
@@ -718,11 +749,29 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             }
             Op::XStore { p, v } => {
                 let p = g(*p)?;
-                store_value(&mut a, &home, t, *v, p, 0)?;
+                store_value_tag(&mut a, &home, t, *v, p, 0, !tag_known[i])?;
             }
             Op::Select { cmp, a: x, b: y, t: tv, f: fv } => {
-                // (a native branch: predicted like the interpreter's)
-                if let Home::F(d) = dst {
+                if let (Home::F(d), false, Cmp::Lt | Cmp::Le | Cmp::Nlt | Cmp::Nle | Cmp::Eq | Cmp::Ne) = (dst, crate::trace_flag!("LUAU_TRACE_BRSELECT"), cmp) {
+                    // branchless: the condition as a mask (cmpsd's
+                    // predicates treat NaN as the comparisons do), then a
+                    // blend
+                    let (x, y, tv, fv) = (f(*x)?, f(*y)?, f(*tv)?, f(*fv)?);
+                    let pred = match cmp {
+                        Cmp::Lt => 1,
+                        Cmp::Le => 2,
+                        Cmp::Nlt => 5,
+                        Cmp::Nle => 6,
+                        Cmp::Eq => 0,
+                        _ => 4,
+                    };
+                    a.movapd(X(0), x);
+                    a.cmpsd(X(0), y, pred);
+                    a.movapd(X(1), fv);
+                    a.blendvpd(X(1), tv);
+                    a.movapd(d, X(1));
+                } else if let Home::F(d) = dst {
+                    // (a native branch: predicted like the interpreter's)
                     let (x, y, tv, fv) = (f(*x)?, f(*y)?, f(*tv)?, f(*fv)?);
                     let no = a.label();
                     let done = a.label();
@@ -1041,6 +1090,56 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 call_out(&mut a, &live, helpers::ustore as usize, &[Arg::L, Arg::G(g(*cl)?), Arg::Imm(*idx as u64), Arg::Imm(*buf as u64)]);
                 a.test_rr(R::Rax, R::Rax);
                 a.jcc(Cond::E, stub(*snap));
+            }
+            Op::Random { state } => {
+                // PCG32 twice (see `lmathlib::pcg32_random`): lo, hi
+                const MUL: u64 = 6364136223846793005;
+                a.mov_ri64(R::R10, *state as u64);
+                a.load(R::Rax, R::R10, 0);
+                a.mov_ri64(R::R11, MUL);
+                a.mov_rr(R::Rdx, R::Rax);
+                a.imul64_rr(R::Rdx, R::R11);
+                a.alu64_ri(0, R::Rdx, 105);
+                a.mov_rr(R::Rcx, R::Rdx);
+                a.imul64_rr(R::Rcx, R::R11);
+                a.alu64_ri(0, R::Rcx, 105);
+                a.store(R::R10, 0, R::Rcx);
+                // the output of state s: rotr32(((s >> 18) ^ s) >> 27, s >> 59)
+                for (s, out) in [(R::Rax, R::R10), (R::Rdx, R::R11)] {
+                    a.mov_rr(R::Rcx, s);
+                    a.shr_ri(R::Rcx, 59);
+                    a.mov_rr(out, s);
+                    a.shr_ri(out, 18);
+                    a.alu64_rr(0x31, out, s);
+                    a.shr_ri(out, 27);
+                    a.shift32_cl(1, out);
+                }
+                // v = lo | hi << 32, as a double (unsigned: halved with the
+                // lost bit kept when the top bit is set, then doubled)
+                a.mov_rr(R::Rax, R::R11);
+                a.shl_ri(R::Rax, 32);
+                a.alu64_rr(0x09, R::Rax, R::R10);
+                a.mov_rr(R::R11, R::Rax);
+                a.shr_ri(R::R11, 63);
+                a.mov_rr(R::Rdx, R::Rax);
+                a.shr_ri(R::Rdx, 1);
+                a.mov_rr(R::Rcx, R::Rax);
+                a.alu32_ri(4, R::Rcx, 1);
+                a.alu64_rr(0x09, R::Rdx, R::Rcx);
+                a.test_rr(R::Rax, R::Rax);
+                a.cmov64(Cond::L, R::Rax, R::Rdx);
+                a.cvtsi2sd64(X(0), R::Rax);
+                a.movq_rx(R::Rax, X(0));
+                a.shl_ri(R::R11, 52);
+                a.alu64_rr(0x01, R::Rax, R::R11);
+                a.movq_xr(X(0), R::Rax);
+                // * 2^-64
+                a.mov_ri64(R::Rax, 0x3bf0_0000_0000_0000);
+                a.movq_xr(X(1), R::Rax);
+                a.sd_rr(0x59, X(0), X(1));
+                if let Home::F(d) = dst {
+                    a.movapd(d, X(0));
+                }
             }
             Op::Math1(bfid, x) => {
                 use luau_common::bytecode::BuiltinFunction as B;
@@ -1761,6 +1860,12 @@ fn load_value(a: &mut Asm, h: Home, ty: IrType, base: R, disp: i32) -> Result<()
 
 /// Stores IR value `v` as a full TValue (payload + tag) at [base + disp].
 fn store_value(a: &mut Asm, home: &[Home], t: &Trace, v: Ref, base: R, disp: i32) -> Result<(), String> {
+    store_value_tag(a, home, t, v, base, disp, true)
+}
+
+/// `store_value`; without the tag word when `tag` is false (the slot holds
+/// the value's type already).
+fn store_value_tag(a: &mut Asm, home: &[Home], t: &Trace, v: Ref, base: R, disp: i32, tag_word: bool) -> Result<(), String> {
     let ty = t.ty(v);
     let tag = ty.tag().ok_or_else(|| format!("store of a non-Lua value {:?}", ty))?;
     if ty == IrType::Vector {
@@ -1842,6 +1947,9 @@ fn store_value(a: &mut Asm, home: &[Home], t: &Trace, v: Ref, base: R, disp: i32
         }
         (Home::None, _) if ty == IrType::Nil => {}
         (h, op) => return Err(format!("value {} ({:?}) has no home {:?}", v.0, op, h)),
+    }
+    if !tag_word {
+        return Ok(());
     }
     // (extra, tt) as one 8-byte word: extra = 0 (an iterator index: its
     // tag, the only light userdata traces handle)

@@ -71,6 +71,7 @@ pub fn map_op(op: &Op, map: &[Ref]) -> Op {
         Op::XStore { p, v } => Op::XStore { p: r(*p), v: r(*v) },
         Op::GuardPlainTable { t, store, snap } => Op::GuardPlainTable { t: r(*t), store: *store, snap: *snap },
         Op::FrameFunc => Op::FrameFunc,
+        Op::Random { state } => Op::Random { state: *state },
         Op::Barrier { t, v } => Op::Barrier { t: r(*t), v: r(*v) },
         Op::TMeta { t, snap } => Op::TMeta { t: r(*t), snap: *snap },
         Op::MakeClosure { cl, site, vals, nvals, buf } => {

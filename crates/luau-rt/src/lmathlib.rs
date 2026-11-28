@@ -183,7 +183,7 @@ unsafe fn math_max(L: *mut lua_State) -> i32 {
     1
 }
 
-unsafe fn math_random(L: *mut lua_State) -> i32 {
+pub(crate) unsafe fn math_random(L: *mut lua_State) -> i32 {
     let g = (*L).global;
     match lua_gettop(L) {
         0 => {

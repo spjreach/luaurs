@@ -915,6 +915,20 @@ impl Asm {
         self.byte(mode);
     }
     /// cmpps dst, src, predicate (0 = eq, ordered)
+    /// cmpsd dst, src, pred (low lane: all ones when the predicate holds)
+    pub fn cmpsd(&mut self, dst: X, src: X, pred: u8) {
+        self.sse_rr(0xf2, 0xc2, dst, src);
+        self.byte(pred);
+    }
+    /// blendvpd dst, src (SSE4.1; mask in xmm0: dst = mask ? src : dst)
+    pub fn blendvpd(&mut self, dst: X, src: X) {
+        self.byte(0x66);
+        self.rex(false, dst.0, 0, src.0, false);
+        self.byte(0x0f);
+        self.byte(0x38);
+        self.byte(0x15);
+        self.modrm_rr(dst.0, src.0);
+    }
     pub fn cmpps(&mut self, dst: X, src: X, pred: u8) {
         self.sse_rr(0, 0xc2, dst, src);
         self.byte(pred);

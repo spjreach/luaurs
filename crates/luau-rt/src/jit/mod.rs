@@ -268,7 +268,7 @@ unsafe fn handle_exit(L: *mut lua_State, p: *mut Proto, header: u32, base: StkId
         // for a re-record.
         let run = LAST_RUN.with(|c| c.get());
         let (storm, resume, frames, side, top) = state::with(|s| {
-            let max_sides = 64;
+            let max_sides = if crate::trace_flag!("LUAU_TRACE_SIDES64") { 64 } else { 256 };
             let (nsides, root_end) = match s.traces.get(&key) {
                 Some(r) => (r.sides.len(), r.end_pc),
                 None => return (false, header, None, None, None),
@@ -407,7 +407,14 @@ unsafe fn record_step_inner(L: *mut lua_State, p: *mut Proto, pc: u32, base: Stk
                         }
                     }
                 }
-                if !side {
+                if let trace::AbortReason::InnerLoop { proto: ip, header: ih } = reason {
+                    // (the inner loop first; this one tries again later,
+                    // like a recording that left the loop)
+                    s.hot.make_hot(ip, ih);
+                    if !side {
+                        s.hot.left_loop(proto, header);
+                    }
+                } else if !side {
                     if reason == trace::AbortReason::LeftLoop {
                         s.hot.left_loop(proto, header);
                     } else {
@@ -506,8 +513,30 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
         let root = state::with(|s| s.traces.get(&root_key).map(|r| (r.native, r.reads.clone(), r.phi_slots.clone(), r.layout_hoisted, r.mem_hoisted)));
         if let Some((Some(n), reads, phis, layout, mem)) = root {
             t.spill_base = n.reserved;
-            if t.link.is_none() && n.body_entry != 0 && !crate::trace_flag!("LUAU_TRACE_NOBODY") && body_reentry_ok(&t, &reads, &phis, layout, mem) {
+            // (the traces before this one since the root's loop: their
+            // exits wrote slots too)
+            let chain_ok = state::with(|s| {
+                let mut at = side_of;
+                let mut hops = 0;
+                while let Some((ptag, k)) = at {
+                    let Some(p) = s.by_tag_mut(ptag) else { return false };
+                    let Some(sn) = p.snapshots.get(k as usize) else { return false };
+                    if sn.entries.iter().any(|e| reads.contains(&e.slot) && !phis.contains(&e.slot)) {
+                        return false;
+                    }
+                    at = p.side_of;
+                    hops += 1;
+                    if hops > 1000 {
+                        return false;
+                    }
+                }
+                true
+            });
+            if t.link.is_none() && n.body_entry != 0 && chain_ok && !crate::trace_flag!("LUAU_TRACE_NOBODY") && body_reentry_ok(&t, &reads, &phis, layout, mem) {
                 link_to = compiler::End::Root(n.body_entry);
+            }
+            if crate::trace_flag!("LUAU_TRACE_BODYDBG") {
+                eprintln!("[BODY] side {:?} link={:?} body_entry={} layout={} mem={} ok={} reads={:?} phis={:?} last={:?}", side_of, t.link.is_some(), n.body_entry != 0, layout, mem, body_reentry_ok(&t, &reads, &phis, layout, mem), reads, phis, t.snapshots.last().map(|l| l.entries.iter().map(|e| e.slot).collect::<Vec<_>>()));
             }
         }
         // values the parent's exit leaves in registers: taken from there
@@ -614,6 +643,9 @@ fn root_facts(t: &mut trace::Trace) {
         match x.op {
             Op::SLoad { slot, .. } => reads.push(slot),
             Op::HRef { .. } | Op::HSlot { .. } | Op::ASize(_) | Op::ABase(_) | Op::ARef { .. } => layout = true,
+            // (metatable checks: only setmetatable or Lua code changes
+            // those - see `body_reentry_ok`)
+            Op::TMeta { .. } | Op::GuardPlainTable { .. } if !crate::trace_flag!("LUAU_TRACE_METAMEM") => {}
             Op::XLoad { .. } | Op::TMeta { .. } | Op::ULoad { by_ref: true, .. } | Op::GuardFlag { .. } | Op::GuardPlainTable { .. } | Op::HMiss { .. } | Op::TGet { .. } | Op::TLen { .. } => mem = true,
             _ => {}
         }
@@ -655,7 +687,9 @@ fn body_reentry_ok(t: &trace::Trace, reads: &[u16], phis: &[u16], layout: bool, 
         return false;
     }
     for x in &t.insts {
-        if matches!(x.op, Op::CallC { .. }) {
+        // (a call of Lua code, or a metatable change: the root's hoisted
+        // metatable checks may no longer hold)
+        if matches!(x.op, Op::CallC { .. }) || matches!(x.op, Op::Builtin { bfid, .. } if bfid == B::Setmetatable as u8) {
             return false;
         }
         if layout && x.moves_tables() {

@@ -503,6 +503,12 @@ impl Recorder {
             };
         }
         if pc == self.start_pc && self.steps > 0 && !inlined {
+            if self.exits_next(pc, base) && !crate::trace_flag!("LUAU_TRACE_NOLASTITER") {
+                // the loop's own test is about to end it: this was its last
+                // iteration, often a path no other iteration takes (a
+                // trace of it would leave every time) - record another one
+                return Step::Abort(AbortReason::LeftLoop);
+            }
             return match self.close() {
                 Ok(t) => Step::Closed(t),
                 Err(e) => Step::Abort(e),
@@ -1117,6 +1123,14 @@ impl Recorder {
             let (x, y) = if step_v > 0.0 { (i1, limit) } else { (limit, i1) };
             self.b.emit(Op::Guard { cmp: if continues { Cmp::Le } else { Cmp::Nle }, a: x, b: y, snap }, IrType::Nil);
         } else if o(O::JumpBack) && (pc as i64 + 1 + d_of(insn) as i64) as u32 != self.header() {
+            // an inner while/repeat loop: traced on its own first (its trip
+            // count varies: unrolled, every count would be a side trace);
+            // unrolled in side traces, inside inlined calls, or when it can't be traced
+            let target = (pc as i64 + 1 + d_of(insn) as i64) as u32;
+            let p = self.cur_proto();
+            if self.funcs.len() <= 1 && self.side.is_none() && !crate::trace_flag!("LUAU_TRACE_NOINNERFIRST") && !super::state::with(|s| s.hot.is_blacklisted(p, target)) {
+                return Err(AbortReason::InnerLoop { proto: p as usize, header: target });
+            }
             // an unrolled inner while/repeat loop's back edge
             self.unrolled += 1;
             if self.unrolled > UNROLL_LIMIT {
@@ -1911,6 +1925,20 @@ impl Recorder {
             self.pending = Some((None, 0, call_at as u32 + 1, false));
             return Ok(());
         }
+        if bfid == B::Assert as u8 && (nres == 0 || nres == 1) && self.b.trace.ty(args[0]).tag().is_some() && self.b.trace.ty(args[0]) != IrType::Nil && !crate::trace_flag!("LUAU_TRACE_NOASSERT") {
+            // assert(x): only a check (a false x exits before the FASTCALL:
+            // the interpreter raises the error); its result is x
+            self.guard_safeenv(clr);
+            if self.b.trace.ty(args[0]) == IrType::Boolean {
+                let snap = self.b.snapshot();
+                self.b.emit(Op::GuardTruthy { a: args[0], want: true, snap }, IrType::Nil);
+            }
+            if nres == 1 {
+                self.b.set_slot(ra, args[0]);
+            }
+            self.pending = Some((None, 0, call_at as u32 + 1, false));
+            return Ok(());
+        }
         self.guard_safeenv(clr);
         let buf = Box::leak(vec![0u64; 8].into_boxed_slice()).as_mut_ptr() as usize;
         let snap = self.b.snapshot();
@@ -2462,6 +2490,13 @@ impl Recorder {
         let f = self.read(a, base)?;
         let snap = self.b.snapshot();
         self.b.emit(Op::GuardCFunc { f, fp, snap }, IrType::Nil);
+        if nargs == 0 && nres == 1 && fp == crate::lmathlib::math_random as usize && !crate::trace_flag!("LUAU_TRACE_NORANDOM") {
+            // math.random(): the generator inline
+            let state = std::ptr::addr_of_mut!((*(*self.l).global).rngstate) as usize;
+            let v = self.b.emit(Op::Random { state }, IrType::Number);
+            self.b.set_slot(a, v);
+            return Ok(());
+        }
         for k in 0..nargs {
             let tv = base.add(a + 1 + k);
             let ok = matches!((*tv).tt, LUA_TNUMBER | LUA_TSTRING | LUA_TBOOLEAN | LUA_TNIL | LUA_TVECTOR) || (k == 0 && table_arg && (*tv).tt == LUA_TTABLE);
@@ -2687,6 +2722,40 @@ impl Recorder {
     /// Turns the recorded iteration into `pre-roll; LOOP; PHIs; body`
     /// (with loop-invariant work hoisted into the pre-roll, and a version
     /// without as the fallback).
+    /// The conditional jump at the loop header `pc` leaves the loop now
+    /// (numeric comparisons and truthiness tests; anything else: false).
+    unsafe fn exits_next(&self, pc: u32, base: StkId) -> bool {
+        let code = (*self.cur_proto()).code;
+        let insn = *code.add(pc as usize);
+        let op = op_of(insn);
+        let o = |x: O| op == x as u8;
+        let a = a_of(insn);
+        let taken = if o(O::JumpIfLe) || o(O::JumpIfNotLe) || o(O::JumpIfLt) || o(O::JumpIfNotLt) || o(O::JumpIfEq) || o(O::JumpIfNotEq) {
+            let rb = *code.add(pc as usize + 1) as usize;
+            let (x, y) = (base.add(a), base.add(rb));
+            if (*x).tt != LUA_TNUMBER || (*y).tt != LUA_TNUMBER {
+                return false;
+            }
+            let (x, y) = ((*x).value.n, (*y).value.n);
+            let holds = if o(O::JumpIfLe) || o(O::JumpIfNotLe) {
+                x <= y
+            } else if o(O::JumpIfLt) || o(O::JumpIfNotLt) {
+                x < y
+            } else {
+                x == y
+            };
+            holds == (o(O::JumpIfLe) || o(O::JumpIfLt) || o(O::JumpIfEq))
+        } else if o(O::JumpIf) || o(O::JumpIfNot) {
+            let tv = base.add(a);
+            let truthy = !((*tv).tt == LUA_TNIL || ((*tv).tt == LUA_TBOOLEAN && (*tv).value.b == 0));
+            truthy == o(O::JumpIf)
+        } else {
+            return false;
+        };
+        let dest = if taken { (pc as i64 + 1 + d_of(insn) as i64) as u32 } else { pc + op_len(op) as u32 };
+        dest < self.start_pc || dest > self.loop_end
+    }
+
     fn close(&mut self) -> R<Trace> {
         let rec = std::mem::replace(&mut self.b.trace, Trace::new(TraceId(0), std::ptr::null_mut(), 0));
         // (a trace that may move table storage keeps every table access in
@@ -3437,7 +3506,7 @@ pub(crate) fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *pre = rm(*pre);
             *back = rm(*back);
         }
-        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | KI64(_) | SLoad { .. } | Loop | Nop | FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } | GuardTop { .. } | Sunk => {}
+        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | KI64(_) | SLoad { .. } | Loop | Nop | FrameFunc | Random { .. } | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } | GuardTop { .. } | Sunk => {}
         UStore { cl, v, .. } => {
             *cl = rm(*cl);
             *v = rm(*v);

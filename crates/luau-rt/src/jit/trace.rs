@@ -32,6 +32,10 @@ pub enum AbortReason {
     LeftLoop,
     /// a call, yield, error or other VM re-entry during recording
     LeftFrame,
+    /// reached the back edge of an inner while / repeat loop without a
+    /// trace: that loop is traced first (made hot), the outer one later
+    /// links to it
+    InnerLoop { proto: usize, header: u32 },
     Internal(String),
 }
 

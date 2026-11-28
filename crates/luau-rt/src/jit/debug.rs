@@ -88,6 +88,7 @@ fn abort_name(reason: &AbortReason) -> &'static str {
         AbortReason::UnsupportedControlFlow => "unsupported_control_flow",
         AbortReason::LeftLoop => "left_loop",
         AbortReason::LeftFrame => "left_frame",
+        AbortReason::InnerLoop { .. } => "inner_loop",
         AbortReason::Internal(_) => "internal",
     }
 }

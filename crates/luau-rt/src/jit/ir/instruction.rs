@@ -107,6 +107,9 @@ pub enum Op {
     /// a math builtin of one argument (floor, sqrt, abs, ...): `luau_common`
     /// builtin id
     Math1(u8, Ref),
+    /// `math.random()`: the next number of the PCG32 generator whose state
+    /// is at `state` (two steps, as the library function)
+    Random { state: usize },
 
     // ---- vectors (3 x f32, in an xmm register; lane 3 is junk) -----------
     /// lane-wise `a op b` in single precision (`op`: 0x58 add, 0x5c sub,
@@ -316,7 +319,7 @@ impl Inst {
             XLoad { p, .. } => vec![*p],
             XStore { p, v } => vec![*p, *v],
             GuardPlainTable { t, .. } => vec![*t],
-            FrameFunc | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } | GuardTop { .. } | Sunk => vec![],
+            FrameFunc | Random { .. } | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } | GuardTop { .. } | Sunk => vec![],
             UStore { cl, v, .. } => vec![*cl, *v],
             Not(a) | LudToI32(a) | I32ToLud(a) => vec![*a],
             TMeta { t, .. } => vec![*t],
