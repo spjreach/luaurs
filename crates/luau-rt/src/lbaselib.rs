@@ -330,7 +330,7 @@ unsafe fn luaB_xpcallcont(L: *mut lua_State, status: i32) -> i32 {
     }
 }
 
-unsafe fn luaB_tostring(L: *mut lua_State) -> i32 {
+pub(crate) unsafe fn luaB_tostring(L: *mut lua_State) -> i32 {
     luaL_checkany(L, 1);
     luaL_tolstring(L, 1);
     1

@@ -110,6 +110,8 @@ pub enum Op {
     /// `math.random()`: the next number of the PCG32 generator whose state
     /// is at `state` (two steps, as the library function)
     Random { state: usize },
+    /// `tostring` of a number: its string (allocates)
+    NumToStr(Ref),
     /// a function trace's RETURN into another call of the same function
     /// (down-recursion): exits unless the frame returns to the caller
     /// whose savedpc is `ret` (one of this function's call sites) and isn't
@@ -315,7 +317,7 @@ impl Inst {
             Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) | Mod(a, b) | Pow(a, b) | IDiv(a, b) | AddI32(a, b) | AndI32(a, b) => {
                 vec![*a, *b]
             }
-            Neg(a) | Math1(_, a) | I32ToNum(a) | ASize(a) | VNeg(a) | ABase(a) | TruncI32(a) => vec![*a],
+            Neg(a) | Math1(_, a) | I32ToNum(a) | ASize(a) | VNeg(a) | ABase(a) | TruncI32(a) | NumToStr(a) => vec![*a],
             VArith { a, b, .. } | GuardVecEq { a, b, .. } => vec![*a, *b],
             VGet { v, .. } => vec![*v],
             VargLoad { idx, .. } => vec![*idx],

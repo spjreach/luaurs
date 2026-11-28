@@ -2030,6 +2030,14 @@ impl Recorder {
             self.pending = Some((None, 0, call_at as u32 + 1, false));
             return Ok(());
         }
+        if bfid == B::Tostring as u8 && nres == 1 && nargs == 1 && self.b.trace.ty(args[0]) == IrType::Number && !crate::trace_flag!("LUAU_TRACE_NOTOSTR") {
+            // tostring(number): formatted and interned directly
+            self.guard_safeenv(clr);
+            let v = self.b.emit(Op::NumToStr(args[0]), IrType::String);
+            self.b.set_slot(ra, v);
+            self.pending = Some((None, 0, call_at as u32 + 1, false));
+            return Ok(());
+        }
         if bfid == B::Assert as u8 && (nres == 0 || nres == 1) && self.b.trace.ty(args[0]).tag().is_some() && self.b.trace.ty(args[0]) != IrType::Nil && !crate::trace_flag!("LUAU_TRACE_NOASSERT") {
             // assert(x): only a check (a false x exits before the FASTCALL:
             // the interpreter raises the error); its result is x
@@ -2617,6 +2625,14 @@ impl Recorder {
         let f = self.read(a, base)?;
         let snap = self.b.snapshot();
         self.b.emit(Op::GuardCFunc { f, fp, snap }, IrType::Nil);
+        if nargs == 1 && nres == 1 && fp == crate::lbaselib::luaB_tostring as usize && (*base.add(a + 1)).tt == LUA_TNUMBER && !crate::trace_flag!("LUAU_TRACE_NOTOSTR") {
+            // tostring(number): formatted and interned directly (a number
+            // has no __tostring)
+            let x = self.read(a + 1, base)?;
+            let v = self.b.emit(Op::NumToStr(x), IrType::String);
+            self.b.set_slot(a, v);
+            return Ok(());
+        }
         if nargs == 0 && nres == 1 && fp == crate::lmathlib::math_random as usize && !crate::trace_flag!("LUAU_TRACE_NORANDOM") {
             // math.random(): the generator inline
             let state = std::ptr::addr_of_mut!((*(*self.l).global).rngstate) as usize;
@@ -3664,7 +3680,7 @@ pub(crate) fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *a = rm(*a);
             *b = rm(*b);
         }
-        Neg(a) | Math1(_, a) | I32ToNum(a) | ASize(a) | ABase(a) | TruncI32(a) => *a = rm(*a),
+        Neg(a) | Math1(_, a) | I32ToNum(a) | ASize(a) | ABase(a) | TruncI32(a) | NumToStr(a) => *a = rm(*a),
         NumToI32 { a, .. } => *a = rm(*a),
         ARef { t, idx } => {
             *t = rm(*t);
@@ -3888,6 +3904,19 @@ unsafe fn leaf_c(l: *mut lua_State, fp: usize) -> Option<bool> {
                     if (*v).tt == LUA_TFUNCTION && (*clvalue(v)).isC != 0 {
                         if let Some(f) = Closure::c(clvalue(v)).f {
                             map.insert(f as usize, true);
+                        }
+                    }
+                }
+            }
+            // (tostring / tonumber: Lua code only for a table's or
+            // userdata's metamethods - leaf calls take no such argument)
+            if !crate::trace_flag!("LUAU_TRACE_NOLEAFTOSTRING") {
+                for name in ["tostring", "tonumber"] {
+                    if let Some(v) = get_by_name(globals, name.as_bytes()) {
+                        if (*v).tt == LUA_TFUNCTION && (*clvalue(v)).isC != 0 {
+                            if let Some(f) = Closure::c(clvalue(v)).f {
+                                map.insert(f as usize, false);
+                            }
                         }
                     }
                 }

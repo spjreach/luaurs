@@ -51,6 +51,7 @@ const OFF_NODE_KEY: i32 = (offset_of!(LuaNode, key) + offset_of!(TKey, value)) a
 const OFF_NODE_KEYTT: i32 = (offset_of!(LuaNode, key) + offset_of!(TKey, ttnext)) as i32;
 const OFF_MARKED: i32 = offset_of!(GCheader, marked) as i32;
 const OFF_TS_LEN: i32 = offset_of!(TString, len) as i32;
+const OFF_TS_HASH: i32 = offset_of!(TString, hash) as i32;
 const OFF_TOTALBYTES: i32 = offset_of!(global_State, totalbytes) as i32;
 const OFF_GCTHRESHOLD: i32 = offset_of!(global_State, GCthreshold) as i32;
 const OFF_T_META: i32 = offset_of!(LuaTable, metatable) as i32;
@@ -473,7 +474,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     };
     // a trace that allocates checks for GC work at its back edge (and exits
     // for the collector to run: nothing collects while a trace runs)
-    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::Builtin { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::MakeClosure { .. } | Op::CallC { .. }));
+    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::NumToStr(_) | Op::Builtin { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::MakeClosure { .. } | Op::CallC { .. }));
 
     // stores whose slot already holds the value's type: an earlier load of
     // that slot checked it, and nothing since could have changed any
@@ -1145,6 +1146,15 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                     a.load(d, d, 0);
                 }
             }
+            Op::NumToStr(x) => {
+                let live = live_across(i);
+                // (a per-site cache of results: see `helpers::num_tostring`)
+                let cache = Box::leak(Box::new([[0u64; 3]; 256])) as *mut _ as u64;
+                call_out(&mut a, &live, helpers::num_tostring as usize, &[Arg::L, Arg::F(f(*x)?), Arg::Imm(cache)]);
+                if let Home::G(d) = dst {
+                    a.mov_rr(d, R::Rax);
+                }
+            }
             Op::Random { state } => {
                 // PCG32 twice (see `lmathlib::pcg32_random`): lo, hi
                 const MUL: u64 = 6364136223846793005;
@@ -1350,6 +1360,46 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 a.load(R::R13, R::R12, OFF_BASE);
                 if let Home::G(d) = dst {
                     a.mov_rr32(d, R::Rax);
+                }
+            }
+            Op::TGet { t: tb, k, .. } if t.ty(*k) == IrType::String && !crate::trace_flag!("LUAU_TRACE_NOSTRGET") => {
+                // a string key: the hash part's chain, inline (as
+                // luaH_getstr: interned strings compare by address)
+                let tb = g(*tb)?;
+                let kr = g(*k)?;
+                let lp = a.label();
+                let next = a.label();
+                let found = a.label();
+                let missing = a.label();
+                a.movzx8(R::Rcx, tb, OFF_T_LSIZENODE);
+                a.mov_ri(R::Rax, 1);
+                a.shift32_cl(4, R::Rax);
+                a.alu32_ri(5, R::Rax, 1);
+                a.load32(R::Rdx, kr, OFF_TS_HASH);
+                a.alu32_rr(0x21, R::Rdx, R::Rax);
+                a.imul64_rri(R::Rdx, R::Rdx, NODE_SIZE);
+                a.load(R::Rax, tb, OFF_T_NODE);
+                a.add_rr(R::Rax, R::Rdx);
+                a.bind(lp);
+                a.cmp_rm(kr, R::Rax, OFF_NODE_KEY);
+                a.jcc(Cond::NE, next);
+                a.load32(R::Rcx, R::Rax, OFF_NODE_KEYTT);
+                a.and32_ri(R::Rcx, 0xf);
+                a.cmp32_ri(R::Rcx, LUA_TSTRING);
+                a.jcc(Cond::E, found);
+                a.bind(next);
+                a.load32(R::Rcx, R::Rax, OFF_NODE_KEYTT);
+                a.shift32_ri(7, R::Rcx, 4);
+                a.jcc(Cond::E, missing);
+                a.movsxd(R::Rcx, R::Rcx);
+                a.imul64_rri(R::Rcx, R::Rcx, NODE_SIZE);
+                a.add_rr(R::Rax, R::Rcx);
+                a.jmp(lp);
+                a.bind(missing);
+                a.mov_ri64(R::Rax, luaO_nilobject() as u64);
+                a.bind(found);
+                if let Home::G(d) = dst {
+                    a.mov_rr(d, R::Rax);
                 }
             }
             Op::TGet { t: tb, k, buf } => {
@@ -2578,6 +2628,25 @@ mod helpers {
             (*L).top = res;
         }
         count
+    }
+
+    /// tostring of a number. `cache`: (number bits, GC_EPOCH, string),
+    /// direct-mapped; an entry counts only in the epoch it was filled in
+    /// (the string, alive then, stays alive until the next one: see
+    /// `ConcatCache`).
+    pub unsafe extern "sysv64" fn num_tostring(L: *mut lua_State, n: f64, cache: *mut [[u64; 3]; 256]) -> *mut TString {
+        let bits = n.to_bits();
+        let epoch = crate::lgc::GC_EPOCH.load(std::sync::atomic::Ordering::Relaxed);
+        let h = (bits.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 56) as usize;
+        let e = &mut (*cache)[h];
+        if e[0] == bits && e[1] == epoch && e[2] != 0 {
+            return e[2] as *mut TString;
+        }
+        let mut nb = crate::lnumutils::NumBuf::new();
+        let s = crate::lnumutils::luai_num2buf(&mut nb, n);
+        let r = crate::lstring::luaS_newlstr(L, s);
+        *e = [bits, epoch, r as u64];
+        r
     }
 
     pub extern "sysv64" fn pow(a: f64, b: f64) -> f64 {
