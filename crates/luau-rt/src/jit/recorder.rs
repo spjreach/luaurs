@@ -1135,6 +1135,11 @@ impl Recorder {
                     let nil = self.b.knil();
                     self.b.set_slot(a + 3 + k, nil);
                 }
+            } else if aux >= 0 && i_now >= (*h).sizearray as usize && (*h).node != crate::ltable::dummynode() && !crate::trace_flag!("LUAU_TRACE_NOHPAIRS") {
+                // (the hash part: its next node - its end is not recorded)
+                if !self.hash_pairs_step(a, aux, base)? {
+                    return Err(unsupported_type("end of a generic for over a hash part"));
+                }
             } else if i_now >= (*h).sizearray as usize && (aux < 0 || (*h).node == crate::ltable::dummynode()) {
                 // the end: past the array part, and (pairs) no hash part
                 self.b.emit(Op::Guard { cmp: Cmp::Nlt, a: i, b: size, snap }, IrType::Nil);
@@ -1155,6 +1160,10 @@ impl Recorder {
             }
             let h = hvalue(base.add(a + 1));
             let i_now = (*base.add(a + 2)).value.p as usize;
+            if aux >= 0 && i_now >= (*h).sizearray as usize && (*h).node != crate::ltable::dummynode() && !crate::trace_flag!("LUAU_TRACE_NOHPAIRS") {
+                // pairs over the hash part: the next node with a value
+                return if self.hash_pairs_step(a, aux, base)? { Ok(()) } else { Err(AbortReason::LeftLoop) };
+            }
             if i_now >= (*h).sizearray as usize || (*(*h).array.add(i_now)).tt == LUA_TNIL {
                 return Err(AbortReason::LeftLoop);
             }
@@ -2944,6 +2953,48 @@ impl Recorder {
         Ok(t)
     }
 
+    /// A pairs step in table slot `a + 1`'s hash part (FORGLOOP at the
+    /// current pc): the next node with a value (false: none left).
+    unsafe fn hash_pairs_step(&mut self, a: usize, aux: i32, base: StkId) -> R<bool> {
+        let h = hvalue(base.add(a + 1));
+        let i_now = (*base.add(a + 2)).value.p as usize;
+                let sizenode = 1usize << (*h).lsizenode;
+                let mut j = i_now - (*h).sizearray as usize;
+                while j < sizenode && (*crate::ltable::gval((*h).node.add(j))).tt == LUA_TNIL {
+                    j += 1;
+                }
+                if j >= sizenode {
+                    return Ok(false);
+                }
+                let n = (*h).node.add(j);
+                let kt = (*n).key.tt();
+                let kty = IrType::of_tag(kt).ok_or(unsupported_type("key type"))?;
+                let vty = IrType::of_tag((*crate::ltable::gval(n)).tt).ok_or(unsupported_type("value type"))?;
+                if matches!(kty, IrType::LightUserdata | IrType::Vector) || matches!(vty, IrType::LightUserdata) {
+                    return Err(unsupported_type("pairs key or value type"));
+                }
+                self.read(a, base)?;
+                let t = self.read(a + 1, base)?;
+                let st = self.read(a + 2, base)?;
+                let i = self.b.emit(Op::LudToI32(st), IrType::I32);
+                let snap = self.b.snapshot();
+                let idx = self.b.emit(Op::HNext { t, i, snap }, IrType::I32);
+                let p = self.b.emit(Op::HNode { t, i: idx }, IrType::Ptr);
+                let key = self.b.emit(Op::NodeKey { n: p, snap }, kty);
+                let v = self.b.emit(Op::XLoad { p, snap }, vty);
+                let one = self.b.ki32(1);
+                let i1 = self.b.emit(Op::AddI32(idx, one), IrType::I32);
+                let st1 = self.b.emit(Op::I32ToLud(i1), IrType::LightUserdata);
+                self.b.set_slot(a + 2, st1);
+                self.b.set_slot(a + 3, key);
+                self.b.set_slot(a + 4, v);
+                for k in 2..aux.max(2) as usize {
+                    let nil = self.b.knil();
+                    self.b.set_slot(a + 3 + k, nil);
+                }
+        Ok(true)
+    }
+
     unsafe fn record_return(&mut self, insn: u32, base: StkId) -> R<()> {
         if self.funcs.len() == 1 {
             // returning from the loop's function: the loop is left
@@ -3753,6 +3804,11 @@ pub(crate) fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *i = rm(*i);
             *j = rm(*j);
         }
+        HNext { t, i, .. } | HNode { t, i } => {
+            *t = rm(*t);
+            *i = rm(*i);
+        }
+        NodeKey { n, .. } => *n = rm(*n),
         StrCmp { a, b } => {
             *a = rm(*a);
             *b = rm(*b);
@@ -3874,6 +3930,8 @@ pub(crate) fn set_snapshot(op: &mut Op, s: SnapId) {
         | GuardTop { snap, .. }
         | PopFrame { snap, .. }
         | StrByte { snap, .. }
+        | HNext { snap, .. }
+        | NodeKey { snap, .. }
         | UStore { snap, .. } => *snap = s,
         _ => {}
     }

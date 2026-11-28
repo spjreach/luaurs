@@ -1168,6 +1168,74 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                     a.mov_rr(d, R::Rax);
                 }
             }
+            Op::HNext { t: tb, i: ix, snap } if NODE_SIZE == 32 && !crate::trace_flag!("LUAU_TRACE_NOHNEXTINLINE") => {
+                // the scan, inline: rdx the node, rax past the last one
+                let tr = g(*tb)?;
+                let ir = g(*ix)?;
+                let st = stub(*snap);
+                let lp = a.label();
+                let found = a.label();
+                a.mov_rr32(R::Rdx, ir);
+                a.load32(R::Rcx, tr, OFF_T_SIZEARRAY);
+                a.cmp32_rr(R::Rdx, R::Rcx);
+                a.jcc(Cond::L, st);
+                a.alu32_rr(0x29, R::Rdx, R::Rcx);
+                a.movzx8(R::Rcx, tr, OFF_T_LSIZENODE);
+                a.mov_ri(R::Rax, 1);
+                a.shift32_cl(4, R::Rax);
+                a.cmp32_rr(R::Rdx, R::Rax);
+                a.jcc(Cond::AE, st);
+                a.shl_ri(R::Rdx, 5);
+                a.shl_ri(R::Rax, 5);
+                a.load(R::Rcx, tr, OFF_T_NODE);
+                a.add_rr(R::Rdx, R::Rcx);
+                a.add_rr(R::Rax, R::Rcx);
+                a.bind(lp);
+                a.cmp32_mi(R::Rdx, OFF_TT, LUA_TNIL);
+                a.jcc(Cond::NE, found);
+                a.add_ri(R::Rdx, 32);
+                a.cmp_rr(R::Rdx, R::Rax);
+                a.jcc(Cond::B, lp);
+                a.jmp(st);
+                a.bind(found);
+                a.sub_rm(R::Rdx, tr, OFF_T_NODE);
+                a.shr_ri(R::Rdx, 5);
+                a.load32(R::Rcx, tr, OFF_T_SIZEARRAY);
+                a.alu32_rr(0x01, R::Rdx, R::Rcx);
+                if let Home::G(d) = dst {
+                    a.mov_rr32(d, R::Rdx);
+                }
+            }
+            Op::HNext { t: tb, i: ix, snap } => {
+                let live = live_across(i);
+                call_out(&mut a, &live, helpers::hnext as usize, &[Arg::G(g(*tb)?), Arg::G(g(*ix)?)]);
+                a.test32_rr(R::Rax, R::Rax);
+                a.jcc(Cond::L, stub(*snap));
+                if let Home::G(d) = dst {
+                    a.mov_rr32(d, R::Rax);
+                }
+            }
+            Op::HNode { t: tb, i: ix } => {
+                if let Home::G(d) = dst {
+                    let tr = g(*tb)?;
+                    a.mov_rr32(R::Rax, g(*ix)?);
+                    a.load32(R::Rcx, tr, OFF_T_SIZEARRAY);
+                    a.alu32_rr(0x29, R::Rax, R::Rcx);
+                    a.imul64_rri(R::Rax, R::Rax, NODE_SIZE);
+                    a.load(R::Rcx, tr, OFF_T_NODE);
+                    a.add_rr(R::Rax, R::Rcx);
+                    a.mov_rr(d, R::Rax);
+                }
+            }
+            Op::NodeKey { n, snap } => {
+                let nr = g(*n)?;
+                let tag = inst.ty.tag().ok_or("node key type")?;
+                a.load32(R::Rax, nr, OFF_NODE_KEYTT);
+                a.and32_ri(R::Rax, 0xf);
+                a.cmp32_ri(R::Rax, tag);
+                a.jcc(Cond::NE, stub(*snap));
+                load_value(&mut a, dst, inst.ty, nr, OFF_NODE_KEY)?;
+            }
             Op::NumToStr(x) => {
                 let live = live_across(i);
                 // (a per-site cache of results: see `helpers::num_tostring`)
@@ -2724,6 +2792,26 @@ mod helpers {
         } else {
             crate::lstring::luaS_newlstr(L, b"")
         }
+    }
+
+    /// pairs over the hash part of `t` from iterator index `i`: the index
+    /// of the next node with a value; -1 when `i` is in the array part or
+    /// there is none.
+    pub unsafe extern "sysv64" fn hnext(t: *mut LuaTable, i: i64) -> i64 {
+        let i = i as i32;
+        let size = (*t).sizearray;
+        if i < size {
+            return -1;
+        }
+        let sizenode = 1i32 << (*t).lsizenode;
+        let mut j = i - size;
+        while j < sizenode {
+            if (*crate::ltable::gval((*t).node.add(j as usize))).tt != LUA_TNIL {
+                return (j + size) as i64;
+            }
+            j += 1;
+        }
+        -1
     }
 
     /// tostring of a number. `cache`: (number bits, GC_EPOCH, string),

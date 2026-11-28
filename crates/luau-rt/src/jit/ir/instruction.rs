@@ -117,6 +117,14 @@ pub enum Op {
     StrByte { s: Ref, i: Ref, snap: SnapId },
     /// `string.sub(s, i, j)` of numbers i, j (allocates)
     StrSub { s: Ref, i: Ref, j: Ref },
+    /// pairs over table `t`'s hash part from iterator index `i` (array size
+    /// + node index): the index of the next node with a value; exits when
+    /// `i` is in the array part or no node is left
+    HNext { t: Ref, i: Ref, snap: SnapId },
+    /// the address of the node at iterator index `i` of table `t`
+    HNode { t: Ref, i: Ref },
+    /// the key of node `n` (its type checked)
+    NodeKey { n: Ref, snap: SnapId },
     /// a function trace's RETURN into another call of the same function
     /// (down-recursion): exits unless the frame returns to the caller
     /// whose savedpc is `ret` (one of this function's call sites) and isn't
@@ -321,6 +329,8 @@ impl Inst {
             StrCmp { a, b } => vec![*a, *b],
             StrByte { s, i, .. } => vec![*s, *i],
             StrSub { s, i, j } => vec![*s, *i, *j],
+            HNext { t, i, .. } | HNode { t, i } => vec![*t, *i],
+            NodeKey { n, .. } => vec![*n],
             Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) | Mod(a, b) | Pow(a, b) | IDiv(a, b) | AddI32(a, b) | AndI32(a, b) => {
                 vec![*a, *b]
             }
@@ -366,7 +376,7 @@ impl Inst {
         use Op::*;
         match &self.op {
             SLoad { guarded: true, snap, .. } => Some(*snap),
-            Guard { snap, .. } | NumToI64 { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } | GuardVecEq { snap, .. } | VargLoad { snap, .. } | CloseUpvals { snap, .. } | CallC { snap, .. } | UPtr { snap, .. } | GuardTop { snap, .. } | PopFrame { snap, .. } | StrByte { snap, .. } => {
+            Guard { snap, .. } | NumToI64 { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } | GuardVecEq { snap, .. } | VargLoad { snap, .. } | CloseUpvals { snap, .. } | CallC { snap, .. } | UPtr { snap, .. } | GuardTop { snap, .. } | PopFrame { snap, .. } | StrByte { snap, .. } | HNext { snap, .. } | NodeKey { snap, .. } => {
                 Some(*snap)
             }
             _ => None,
@@ -381,7 +391,7 @@ impl Inst {
             self.op,
             KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | Add(..) | Sub(..) | Mul(..) | Div(..) | Mod(..)
                 | Pow(..) | IDiv(..) | Neg(_) | Math1(..) | I32ToNum(_) | AddI32(..) | AndI32(..) | ARef { .. } | ABase(_) | TruncI32(_) | FrameFunc | ClEnv { .. } | HSlot { .. } | Not(_) | LudToI32(_) | I32ToLud(_)
-                | VArith { .. } | VNeg(_) | VGet { .. } | VMake { .. } | Select { .. }
+                | VArith { .. } | VNeg(_) | VGet { .. } | VMake { .. } | Select { .. } | HNode { .. }
                 | KI64(_) | I32ToI64(_) | AddI64(..) | SubI64(..) | MulI64(..) | NegI64(_) | ModI64K(..) | I64ToNum(..)
         )
     }
