@@ -1386,8 +1386,12 @@ fn note_run(cell: &mut LoopCell, ran: u64) {
         let short = cell.cycles / (cell.entries as u64) < MIN_TRACE_CYCLES;
         cell.entries = 0;
         cell.cycles = 0;
-        static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if short && !*OFF.get_or_init(|| crate::trace_flag!("LUAU_TRACE_NOCYCLES")) {
+        // (off unless LUAU_TRACE_CYCLES: timing noise near the threshold
+        // left loops whose traces are far faster than native code native
+        // for 65536 iterations - mandel ran 5x slower on such runs - and no
+        // benchmark measured a gain from it)
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if short && *ON.get_or_init(|| crate::trace_flag!("LUAU_TRACE_CYCLES")) {
             // stay native (look again in a while)
             cell.ctr = 1 << 16;
         }
