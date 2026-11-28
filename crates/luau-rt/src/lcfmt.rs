@@ -193,6 +193,62 @@ fn exp_of(s: &str) -> i32 {
 }
 
 /// `%e %E %f %F %g %G`.
+/// `%.{prec}f` of a finite non-negative `a` by exact integer arithmetic
+/// (a = m * 2^e: m * 10^prec >> -e, rounded half to even on the exact
+/// remainder - what C's printf does); false when out of its range.
+fn fixed_exact(out: &mut Vec<u8>, a: f64, prec: usize) -> bool {
+    if prec > 9 {
+        return false;
+    }
+    let bits = a.to_bits();
+    let exp = ((bits >> 52) & 0x7ff) as i32;
+    let frac = bits & ((1u64 << 52) - 1);
+    let (m, e) = if exp == 0 { (frac, -1074) } else { (frac | (1u64 << 52), exp - 1075) };
+    let p10 = 10u128.pow(prec as u32);
+    let q: u128 = if m == 0 {
+        0
+    } else if e >= 0 {
+        if e > 10 {
+            return false;
+        }
+        ((m as u128) << e) * p10
+    } else {
+        let shift = (-e) as u32;
+        if shift > 120 {
+            return false;
+        }
+        let n = m as u128 * p10;
+        let q = n >> shift;
+        let r = n & ((1u128 << shift) - 1);
+        let half = 1u128 << (shift - 1);
+        if r > half || (r == half && q & 1 == 1) { q + 1 } else { q }
+    };
+    let int = q / p10;
+    let mut f = (q % p10) as u64;
+    let mut buf = [0u8; 48];
+    let mut k = buf.len();
+    let mut iv = int;
+    loop {
+        k -= 1;
+        buf[k] = b'0' + (iv % 10) as u8;
+        iv /= 10;
+        if iv == 0 {
+            break;
+        }
+    }
+    out.extend_from_slice(&buf[k..]);
+    if prec > 0 {
+        out.push(b'.');
+        let mut d = [b'0'; 9];
+        for j in (0..prec).rev() {
+            d[j] = b'0' + (f % 10) as u8;
+            f /= 10;
+        }
+        out.extend_from_slice(&d[..prec]);
+    }
+    true
+}
+
 pub fn fmt_float(out: &mut Vec<u8>, sp: &Spec, v: f64, conv: u8) {
     let upper = conv.is_ascii_uppercase();
     let neg = v.is_sign_negative() && !v.is_nan();
@@ -218,6 +274,25 @@ pub fn fmt_float(out: &mut Vec<u8>, sp: &Spec, v: f64, conv: u8) {
         return;
     }
     let prec = sp.prec.unwrap_or(6);
+    if conv == b'f' && sp.width == 0 && !sp.alt && !sp.plus && !sp.space && prec <= 40 {
+        // (the common %.Nf: formatted straight into the output, no
+        // allocation)
+        struct Out<'a>(&'a mut Vec<u8>);
+        impl std::fmt::Write for Out<'_> {
+            fn write_str(&mut self, s: &str) -> std::fmt::Result {
+                self.0.extend_from_slice(s.as_bytes());
+                Ok(())
+            }
+        }
+        if neg {
+            out.push(b'-');
+        }
+        if fixed_exact(out, a, prec) {
+            return;
+        }
+        let _ = std::fmt::Write::write_fmt(&mut Out(out), format_args!("{:.*}", prec, a));
+        return;
+    }
     let body: Vec<u8> = match conv.to_ascii_lowercase() {
         b'e' => {
             let mut b = fix_exp(format!("{:.*e}", prec, a), upper);

@@ -117,6 +117,8 @@ pub enum Op {
     StrByte { s: Ref, i: Ref, snap: SnapId },
     /// `string.sub(s, i, j)` of numbers i, j (allocates)
     StrSub { s: Ref, i: Ref, j: Ref },
+    /// string.upper (0) / lower (1) / reverse (2) of `s` (allocates)
+    StrMap { s: Ref, kind: u8 },
     /// pairs over table `t`'s hash part from iterator index `i` (array size
     /// + node index): the index of the next node with a value; exits when
     /// `i` is in the array part or no node is left
@@ -329,6 +331,7 @@ impl Inst {
             StrCmp { a, b } => vec![*a, *b],
             StrByte { s, i, .. } => vec![*s, *i],
             StrSub { s, i, j } => vec![*s, *i, *j],
+            StrMap { s, .. } => vec![*s],
             HNext { t, i, .. } | HNode { t, i } => vec![*t, *i],
             NodeKey { n, .. } => vec![*n],
             Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) | Mod(a, b) | Pow(a, b) | IDiv(a, b) | AddI32(a, b) | AndI32(a, b) => {

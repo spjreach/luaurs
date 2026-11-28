@@ -55,24 +55,44 @@ unsafe fn str_sub(L: *mut lua_State) -> i32 {
     1
 }
 
-unsafe fn str_reverse(L: *mut lua_State) -> i32 {
+pub(crate) unsafe fn str_reverse(L: *mut lua_State) -> i32 {
     let s = luaL_checklstring(L, 1);
-    let r: Vec<u8> = s.iter().rev().copied().collect();
-    lua_pushlstring(L, &r);
+    if s.len() <= 256 {
+        let mut buf = [0u8; 256];
+        for (d, &c) in buf.iter_mut().zip(s.iter().rev()) {
+            *d = c;
+        }
+        lua_pushlstring(L, &buf[..s.len()]);
+    } else {
+        let r: Vec<u8> = s.iter().rev().copied().collect();
+        lua_pushlstring(L, &r);
+    }
     1
 }
 
-unsafe fn str_lower(L: *mut lua_State) -> i32 {
+pub(crate) unsafe fn str_lower(L: *mut lua_State) -> i32 {
     let s = luaL_checklstring(L, 1);
-    let r: Vec<u8> = s.iter().map(|c| c.to_ascii_lowercase()).collect();
-    lua_pushlstring(L, &r);
+    push_mapped(L, &s, |c| c.to_ascii_lowercase());
     1
 }
 
-unsafe fn str_upper(L: *mut lua_State) -> i32 {
+/// Pushes `s` with each byte mapped by `f` (short strings: no allocation).
+unsafe fn push_mapped(L: *mut lua_State, s: &[u8], f: impl Fn(u8) -> u8) {
+    if s.len() <= 256 {
+        let mut buf = [0u8; 256];
+        for (d, &c) in buf.iter_mut().zip(s) {
+            *d = f(c);
+        }
+        lua_pushlstring(L, &buf[..s.len()]);
+    } else {
+        let r: Vec<u8> = s.iter().map(|&c| f(c)).collect();
+        lua_pushlstring(L, &r);
+    }
+}
+
+pub(crate) unsafe fn str_upper(L: *mut lua_State) -> i32 {
     let s = luaL_checklstring(L, 1);
-    let r: Vec<u8> = s.iter().map(|c| c.to_ascii_uppercase()).collect();
-    lua_pushlstring(L, &r);
+    push_mapped(L, &s, |c| c.to_ascii_uppercase());
     1
 }
 

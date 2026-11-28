@@ -62,6 +62,7 @@ pub fn map_op(op: &Op, map: &[Ref]) -> Op {
         Op::NumToStr(a) => Op::NumToStr(r(*a)),
         Op::StrByte { s, i, snap } => Op::StrByte { s: r(*s), i: r(*i), snap: *snap },
         Op::StrSub { s, i, j } => Op::StrSub { s: r(*s), i: r(*i), j: r(*j) },
+        Op::StrMap { s, kind } => Op::StrMap { s: r(*s), kind: *kind },
         Op::HNext { t, i, snap } => Op::HNext { t: r(*t), i: r(*i), snap: *snap },
         Op::HNode { t, i } => Op::HNode { t: r(*t), i: r(*i) },
         Op::NodeKey { n, snap } => Op::NodeKey { n: r(*n), snap: *snap },

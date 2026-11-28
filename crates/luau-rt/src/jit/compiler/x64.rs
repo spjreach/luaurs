@@ -476,7 +476,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     };
     // a trace that allocates checks for GC work at its back edge (and exits
     // for the collector to run: nothing collects while a trace runs)
-    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::NumToStr(_) | Op::StrSub { .. } | Op::Builtin { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::MakeClosure { .. } | Op::CallC { .. }));
+    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::NumToStr(_) | Op::StrSub { .. } | Op::StrMap { .. } | Op::Builtin { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::MakeClosure { .. } | Op::CallC { .. }));
 
     // stores whose slot already holds the value's type: an earlier load of
     // that slot checked it, and nothing since could have changed any
@@ -1158,6 +1158,14 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 a.movzx8(R::Rax, R::Rax, OFF_TS_DATA);
                 if let Home::F(d) = dst {
                     a.cvtsi2sd64(d, R::Rax);
+                }
+            }
+            Op::StrMap { s, kind } => {
+                let live = live_across(i);
+                let cache = Box::leak(Box::new([[0u64; 3]; 64])) as *mut _ as u64;
+                call_out(&mut a, &live, helpers::str_map as usize, &[Arg::L, Arg::G(g(*s)?), Arg::Imm(*kind as u64), Arg::Imm(cache)]);
+                if let Home::G(d) = dst {
+                    a.mov_rr(d, R::Rax);
                 }
             }
             Op::StrSub { s, i: x, j: y } => {
@@ -2792,6 +2800,34 @@ mod helpers {
         } else {
             crate::lstring::luaS_newlstr(L, b"")
         }
+    }
+
+    /// string.upper / lower / reverse (`kind` 0 / 1 / 2) of `s`, with a
+    /// per-site cache (string, GC_EPOCH, result) like `num_tostring`'s.
+    pub unsafe extern "sysv64" fn str_map(L: *mut lua_State, s: *mut TString, kind: u64, cache: *mut [[u64; 3]; 64]) -> *mut TString {
+        let epoch = crate::lgc::GC_EPOCH.load(std::sync::atomic::Ordering::Relaxed);
+        let h = (((s as u64) >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 58) as usize;
+        let e = &mut (*cache)[h];
+        if e[0] == s as u64 && e[1] == epoch && e[2] != 0 {
+            return e[2] as *mut TString;
+        }
+        let src = crate::lobject::sbytes(s);
+        let mut small = [0u8; 256];
+        let mut big = Vec::new();
+        let out: &mut [u8] = if src.len() <= 256 {
+            &mut small[..src.len()]
+        } else {
+            big.resize(src.len(), 0);
+            &mut big[..]
+        };
+        match kind {
+            0 => out.iter_mut().zip(src).for_each(|(d, &c)| *d = c.to_ascii_uppercase()),
+            1 => out.iter_mut().zip(src).for_each(|(d, &c)| *d = c.to_ascii_lowercase()),
+            _ => out.iter_mut().zip(src.iter().rev()).for_each(|(d, &c)| *d = c),
+        }
+        let r = crate::lstring::luaS_newlstr(L, out);
+        *e = [s as u64, epoch, r as u64];
+        r
     }
 
     /// pairs over the hash part of `t` from iterator index `i`: the index

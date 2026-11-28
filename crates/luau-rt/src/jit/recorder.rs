@@ -2714,6 +2714,23 @@ impl Recorder {
             self.b.set_slot(a, v);
             return Ok(());
         }
+        if nargs == 1 && nres == 1 && (*base.add(a + 1)).tt == LUA_TSTRING && !crate::trace_flag!("LUAU_TRACE_NOSTRMAP") {
+            let kind = if fp == crate::lstrlib::str_upper as usize {
+                Some(0)
+            } else if fp == crate::lstrlib::str_lower as usize {
+                Some(1)
+            } else if fp == crate::lstrlib::str_reverse as usize {
+                Some(2)
+            } else {
+                None
+            };
+            if let Some(kind) = kind {
+                let s = self.read(a + 1, base)?;
+                let v = self.b.emit(Op::StrMap { s, kind }, IrType::String);
+                self.b.set_slot(a, v);
+                return Ok(());
+            }
+        }
         if nargs == 0 && nres == 1 && fp == crate::lmathlib::math_random as usize && !crate::trace_flag!("LUAU_TRACE_NORANDOM") {
             // math.random(): the generator inline
             let state = std::ptr::addr_of_mut!((*(*self.l).global).rngstate) as usize;
@@ -3804,6 +3821,7 @@ pub(crate) fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *i = rm(*i);
             *j = rm(*j);
         }
+        StrMap { s, .. } => *s = rm(*s),
         HNext { t, i, .. } | HNode { t, i } => {
             *t = rm(*t);
             *i = rm(*i);
