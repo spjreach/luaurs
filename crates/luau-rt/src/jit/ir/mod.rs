@@ -44,6 +44,9 @@ pub fn validate(t: &Trace) -> Result<(), String> {
             }
             _ => {
                 for o in inst.operands() {
+                    if o < here && matches!(t.insts[o.index()].op, Op::Nop) {
+                        return Err(format!("{}: operand {} was removed", i, o.0));
+                    }
                     if o >= here {
                         return Err(format!("{}: operand {} used before its definition", i, o.0));
                     }

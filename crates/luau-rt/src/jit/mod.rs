@@ -566,6 +566,11 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
         debug::TIMES[3].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     if compiled.is_err() {
+        if crate::trace_flag!("LUAU_TRACE_FBDBG") {
+            if let Err(e) = &compiled {
+                eprintln!("[FB] trace {} falls back: {}", id.0, e);
+            }
+        }
         if let Some(mut fb) = t.fallback.take() {
             prepare(&mut fb);
             root_facts(&mut fb);

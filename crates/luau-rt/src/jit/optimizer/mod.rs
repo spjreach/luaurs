@@ -126,8 +126,9 @@ pub fn optimize_checked(t: &mut Trace) -> Result<(), String> {
     // (sinking drops stores that kept loads in the loop)
     if hoist_guards::run(t) {
         check(t, "hoist_guards")?;
-        // (loop values carried in memory become PHIs there: integers too)
-        if narrow::int_mod_phi(t) {
+        // (loop values carried in memory become PHIs there: integers too -
+        // not with sunk tables: these passes don't keep their states)
+        if t.sinks.is_empty() && narrow::int_mod_phi(t) {
             check(t, "narrow")?;
             let _ = cse::run(t) | dce::run(t);
             check(t, "cse+dce")?;
