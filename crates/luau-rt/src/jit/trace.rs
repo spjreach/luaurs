@@ -123,6 +123,11 @@ pub struct Trace {
     /// a side trace: (instruction, kind, register) of its entry loads whose
     /// value its parent's exit leaves in that register (no load)
     pub inherit: Vec<(u32, u8, u8)>,
+    /// a function trace (recursion): see `PushFrame`
+    pub func: bool,
+    /// a function trace ending in a call of its function: the frame the
+    /// trace's end pushes before running the function's trace again
+    pub push: Option<PushFrame>,
     /// snapshots of the integer conversions' entry checks, with the level
     /// an exit through one sets for the loop (see `JitState::no_int`)
     pub int_snaps: Vec<(u32, u8)>,
@@ -141,6 +146,40 @@ pub struct Trace {
 /// A trace's return value when a C function it called yielded (the VM is
 /// left).
 pub const EXIT_LEFT_VM: u32 = u32::MAX;
+
+/// Root key "header" of a function's trace (recursion: entered at the
+/// function's first instruction; not a pc).
+pub const FUNC_HEADER: u32 = u32::MAX - 8;
+
+/// Link target of a function trace that ends in a RETURN out of the
+/// recursion (never has a trace: the trace exits there, and the hook runs
+/// the RETURN).
+pub const RET_HEADER: u32 = u32::MAX - 9;
+
+/// Root key "header" of a continuation trace: `CONT_FLAG | pc`, run after a
+/// function trace's RETURN popped a frame into a call of the same function
+/// at `pc` (the instruction after that call).
+pub const CONT_FLAG: u32 = 0x4000_0000;
+
+/// A function trace's key (entry or continuation).
+pub fn is_func_header(h: u32) -> bool {
+    h == FUNC_HEADER || h & 0xC000_0000 == CONT_FLAG
+}
+
+/// The call a function trace ends in (up-recursion): CALL R(ra) with
+/// `nargs` arguments and `nres` results (fixed) of a closure of the trace's
+/// own function. The trace's end pushes its frame as the interpreter would
+/// (`ret`: the caller's savedpc) and runs the function's trace in it; no
+/// room for it (CallInfo, stack) exits before the call.
+#[derive(Clone, Copy, Debug)]
+pub struct PushFrame {
+    pub ra: u16,
+    pub nargs: u16,
+    pub nres: i32,
+    pub ret: usize,
+    pub stacksize: u16,
+    pub numparams: u16,
+}
 
 /// A table the trace doesn't create (see `optimizer::sink`): exits through
 /// the snapshots in `states` build it.
@@ -173,7 +212,7 @@ pub const FAST_EXIT: u32 = 0x8000_0000;
 
 impl Trace {
     pub fn new(id: TraceId, proto: *mut Proto, start_pc: u32) -> Trace {
-        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, varargs: None, sinks: Vec::new(), link: None, link_cell: 0, root_key: (0, 0), spill_base: 0, reads: Vec::new(), phi_slots: Vec::new(), layout_hoisted: false, mem_hoisted: false, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new(), inserts: false, storm_cycles: 0, int_snaps: Vec::new(), no_int: 0, exit_regs: Vec::new(), inherit: Vec::new(), exit_pcs: Box::new([]), exit_seen: std::ptr::null_mut() }
+        Trace { id, proto, start_pc, insts: Vec::new(), snapshots: Vec::new(), loop_ref: None, state: TraceState::Recording, native: None, side_exits: 0, end_pc: u32::MAX, closure: 0, varargs: None, sinks: Vec::new(), link: None, link_cell: 0, root_key: (0, 0), spill_base: 0, reads: Vec::new(), phi_slots: Vec::new(), layout_hoisted: false, mem_hoisted: false, stack_need: 0, gc_refs: Vec::new(), protos: Vec::new(), fallback: None, side_of: None, tag: 0, link_table: 0, exit_counts: Vec::new(), exit_tries: Vec::new(), sides: Vec::new(), inserts: false, storm_cycles: 0, int_snaps: Vec::new(), no_int: 0, exit_regs: Vec::new(), inherit: Vec::new(), func: false, push: None, exit_pcs: Box::new([]), exit_seen: std::ptr::null_mut() }
     }
 
     pub fn inst(&self, r: Ref) -> &Inst {

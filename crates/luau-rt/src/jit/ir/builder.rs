@@ -185,6 +185,20 @@ impl IrBuilder {
         self.writes += 1;
     }
 
+    /// The trace's frame became another (its caller, after a RETURN in a
+    /// function trace): nothing is known about the new frame's slots, and
+    /// they are read where used (SReload).
+    pub fn rebase(&mut self) {
+        for s in 0..self.slots.len() {
+            self.slots[s] = None;
+            self.dirty[s] = false;
+        }
+        self.known.clear();
+        self.reload = true;
+        self.top = None;
+        self.writes += 1;
+    }
+
     /// Leaves the innermost inlined frame: its slots (from its function
     /// slot up) are dead.
     pub fn pop_frame(&mut self) -> Option<SnapFrame> {

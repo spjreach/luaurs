@@ -446,6 +446,39 @@ pub(super) fn emit_inline_return_to(a: &mut Asm, insn: u32, fallback: Label, sam
     a.jmp_table(R::Rbx, R::Rcx);
 }
 
+/// The entry of a function that may call itself (tracing JIT on): counts
+/// down `cell`'s counter; at zero `jit::func_hook` runs the function's trace
+/// (or records one), then this continues where it says - the function's
+/// own code (right after this) or another frame's.
+pub(super) fn emit_func_hook(a: &mut Asm, cx: &Ctx, pc: usize, op: u8, cell: usize) {
+    let body = a.label();
+    a.mov_ri64(R::Rax, cell as u64);
+    a.add32_mi(R::Rax, 0, -1);
+    a.jcc(Cond::NE, body);
+    emit_args(a, pc);
+    a.mov_ri64(R::R8, cell as u64);
+    a.mov_ri64(R::Rax, crate::jit::func_hook as usize as u64);
+    a.call_r(R::Rax);
+    a.cmp_ri(R::Rax, 3);
+    a.jcc(Cond::E, body);
+    let done = a.label();
+    a.cmp_ri(R::Rax, NATIVE_EXIT as i32);
+    a.jcc(Cond::NE, done);
+    emit_exit(a, pc, op);
+    a.bind(done);
+    a.cmp_ri(R::Rax, NATIVE_LEAVE as i32);
+    a.jcc(Cond::E, cx.ret);
+    a.cmp_ri(R::Rax, NATIVE_INTERP as i32);
+    a.jcc(Cond::E, cx.interp);
+    a.load(R::R13, R::R12, OFF_BASE);
+    a.load(R::Rcx, R::R12, OFF_CI);
+    a.load(R::Rcx, R::Rcx, OFF_CI_P);
+    a.load(R::R14, R::Rcx, OFF_P_K);
+    load_closure(a);
+    a.jmp_r(R::Rax);
+    a.bind(body);
+}
+
 pub(super) fn emit_frame_op(a: &mut Asm, cx: &Ctx, pc: usize, op: u8, helper: usize) {
     emit_args(a, pc);
     a.mov_ri(R::Rax, helper as u64);

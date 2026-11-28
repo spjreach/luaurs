@@ -31,6 +31,14 @@ const OFF_GLOBAL: i32 = offset_of!(lua_State, global) as i32;
 const OFF_INTERRUPT: i32 = (offset_of!(global_State, cb) + offset_of!(lua_Callbacks, interrupt)) as i32;
 const OFF_CI: i32 = offset_of!(lua_State, ci) as i32;
 const OFF_CI_FUNC: i32 = offset_of!(CallInfo, func) as i32;
+const OFF_CI_BASE: i32 = offset_of!(CallInfo, base) as i32;
+const OFF_CI_TOP: i32 = offset_of!(CallInfo, top) as i32;
+const OFF_CI_P: i32 = offset_of!(CallInfo, p) as i32;
+const OFF_CI_SAVEDPC: i32 = offset_of!(CallInfo, savedpc) as i32;
+const OFF_CI_FLAGS: i32 = offset_of!(CallInfo, flags) as i32;
+const OFF_CI_NRESULTS: i32 = offset_of!(CallInfo, nresults) as i32;
+const OFF_END_CI: i32 = offset_of!(lua_State, end_ci) as i32;
+const SIZE_CI: i32 = std::mem::size_of::<CallInfo>() as i32;
 const OFF_BASE: i32 = offset_of!(lua_State, base) as i32;
 const OFF_STACK_LAST: i32 = offset_of!(lua_State, stack_last) as i32;
 const OFF_UV_V: i32 = offset_of!(UpVal, v) as i32;
@@ -1091,6 +1099,28 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 a.test_rr(R::Rax, R::Rax);
                 a.jcc(Cond::E, stub(*snap));
             }
+            Op::PopFrame { ret, snap } => {
+                // (a call from C, or another caller: exit at the RETURN)
+                let s = stub(*snap);
+                a.load(R::Rcx, R::R12, OFF_CI);
+                a.test32_mi(R::Rcx, OFF_CI_FLAGS, LUA_CALLINFO_RETURN);
+                a.jcc(Cond::NE, s);
+                a.mov_rr(R::Rdx, R::Rcx);
+                a.sub_ri(R::Rdx, SIZE_CI);
+                a.mov_ri64(R::Rax, *ret as u64);
+                a.cmp_rm(R::Rax, R::Rdx, OFF_CI_SAVEDPC);
+                a.jcc(Cond::NE, s);
+                // the caller's frame from here on
+                a.store(R::R12, OFF_CI, R::Rdx);
+                a.load(R::R13, R::Rdx, OFF_CI_BASE);
+                a.store(R::R12, OFF_BASE, R::R13);
+                a.load(R::Rax, R::Rdx, OFF_CI_TOP);
+                a.store(R::R12, OFF_TOP, R::Rax);
+                if let Home::G(d) = dst {
+                    a.load(d, R::Rdx, OFF_CI_FUNC);
+                    a.load(d, d, 0);
+                }
+            }
             Op::Random { state } => {
                 // PCG32 twice (see `lmathlib::pcg32_random`): lo, hi
                 const MUL: u64 = 6364136223846793005;
@@ -1626,6 +1656,48 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             if !matches!(t.inst(e.value).op, Op::Sunk) {
                 store_value(&mut a, &home, t, e.value, R::R13, e.slot as i32 * TV)?;
             }
+        }
+        if let Some(pf) = t.push {
+            // up-recursion: the call's frame, as the interpreter builds it
+            // (no CallInfo or stack room: exit before the call)
+            let fail = stubs[back_snap.0 as usize];
+            // (the function's trace gone: exit before the call)
+            if let End::Cell(cell) = end {
+                a.mov_ri64(R::Rax, cell as u64);
+                a.load(R::Rax, R::Rax, 0);
+                a.test_rr(R::Rax, R::Rax);
+                a.jcc(Cond::E, fail);
+            }
+            a.load(R::Rcx, R::R12, OFF_CI);
+            a.cmp_rm(R::Rcx, R::R12, OFF_END_CI);
+            a.jcc(Cond::E, fail);
+            a.lea(R::R8, R::R13, (pf.ra as i32 + 1 + pf.nargs as i32) * TV);
+            a.load(R::R9, R::R12, OFF_STACK_LAST);
+            a.sub_rr(R::R9, R::R8);
+            a.cmp_ri(R::R9, pf.stacksize as i32 * TV);
+            a.jcc(Cond::LE, fail);
+            a.mov_ri64(R::R11, pf.ret as u64);
+            a.store(R::Rcx, OFF_CI_SAVEDPC, R::R11);
+            // (the callee's proto: this frame's)
+            a.load(R::Rdx, R::Rcx, OFF_CI_P);
+            a.add_ri(R::Rcx, SIZE_CI);
+            a.store(R::R12, OFF_CI, R::Rcx);
+            a.lea(R::R9, R::R13, pf.ra as i32 * TV);
+            a.store(R::Rcx, OFF_CI_FUNC, R::R9);
+            a.store(R::Rcx, OFF_CI_P, R::Rdx);
+            a.add_ri(R::R9, TV);
+            a.store(R::Rcx, OFF_CI_BASE, R::R9);
+            a.lea(R::R10, R::R8, pf.stacksize as i32 * TV);
+            a.store(R::Rcx, OFF_CI_TOP, R::R10);
+            a.store64_i(R::Rcx, OFF_CI_SAVEDPC, 0);
+            a.store32_i(R::Rcx, OFF_CI_FLAGS, 0);
+            a.store32_i(R::Rcx, OFF_CI_NRESULTS, pf.nres as u32);
+            a.store(R::R12, OFF_BASE, R::R9);
+            for k in pf.nargs..pf.numparams {
+                a.store64_i(R::R9, k as i32 * TV + OFF_TAGWORD, 0);
+            }
+            a.store(R::R12, OFF_TOP, R::R10);
+            a.mov_rr(R::R13, R::R9);
         }
         match end {
             End::Root(root) => {

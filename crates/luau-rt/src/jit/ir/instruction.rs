@@ -110,6 +110,12 @@ pub enum Op {
     /// `math.random()`: the next number of the PCG32 generator whose state
     /// is at `state` (two steps, as the library function)
     Random { state: usize },
+    /// a function trace's RETURN into another call of the same function
+    /// (down-recursion): exits unless the frame returns to the caller
+    /// whose savedpc is `ret` (one of this function's call sites) and isn't
+    /// a call from C; then pops the frame - `L->ci`, `L->base`, `L->top` and
+    /// the trace's base become the caller's. The caller's closure.
+    PopFrame { ret: usize, snap: SnapId },
 
     // ---- vectors (3 x f32, in an xmm register; lane 3 is junk) -----------
     /// lane-wise `a op b` in single precision (`op`: 0x58 add, 0x5c sub,
@@ -319,7 +325,7 @@ impl Inst {
             XLoad { p, .. } => vec![*p],
             XStore { p, v } => vec![*p, *v],
             GuardPlainTable { t, .. } => vec![*t],
-            FrameFunc | Random { .. } | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } | GuardTop { .. } | Sunk => vec![],
+            FrameFunc | Random { .. } | PopFrame { .. } | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } | GuardTop { .. } | Sunk => vec![],
             UStore { cl, v, .. } => vec![*cl, *v],
             Not(a) | LudToI32(a) | I32ToLud(a) => vec![*a],
             TMeta { t, .. } => vec![*t],
@@ -351,7 +357,7 @@ impl Inst {
         use Op::*;
         match &self.op {
             SLoad { guarded: true, snap, .. } => Some(*snap),
-            Guard { snap, .. } | NumToI64 { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } | GuardVecEq { snap, .. } | VargLoad { snap, .. } | CloseUpvals { snap, .. } | CallC { snap, .. } | UPtr { snap, .. } | GuardTop { snap, .. } => {
+            Guard { snap, .. } | NumToI64 { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } | GuardVecEq { snap, .. } | VargLoad { snap, .. } | CloseUpvals { snap, .. } | CallC { snap, .. } | UPtr { snap, .. } | GuardTop { snap, .. } | PopFrame { snap, .. } => {
                 Some(*snap)
             }
             _ => None,

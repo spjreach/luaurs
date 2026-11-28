@@ -3382,6 +3382,24 @@ unsafe fn translate_pass(
     }
     // instructions skipped because a builtin was expanded inline
     let mut skipped = vec![false; n];
+    // function traces (recursion): a counter at the entry of a function
+    // that calls something and has a plain entry
+    let fhook = crate::jit::state::trace_enabled()
+        && !dbg_off(1 << 29)
+        && (*p).is_vararg == 0
+        && (*p).codeentry == (*p).code
+        && !loop_heads[0]
+        && tr.entry[0]
+        && {
+            let mut j = 0;
+            let mut any = false;
+            while j < n {
+                let o = op_of(*(*p).code.add(j));
+                any |= o == O::Call as u8 || o == O::CallFb as u8;
+                j += O::try_from(o).map_or(1, |x| get_op_length(x) as usize);
+            }
+            any
+        };
 
     // L->top as left by a builtin expanded in the previous instruction
     let mut top_known: Option<usize> = None;
@@ -3444,6 +3462,14 @@ unsafe fn translate_pass(
             tr.a.align(32);
         }
         tr.a.bind(tr.labels[i]);
+        if i == 0 && fhook {
+            // (a function that may call itself: see emit_func_hook)
+            let cell = crate::jit::new_func_cell(p);
+            let start = tr.a.pos();
+            let pc0 = tr.pc(0);
+            emit_func_hook(&mut tr.a, &tr.cx, pc0, op, cell as usize);
+            (*cell).skip = tr.a.pos() - start;
+        }
         tr.st.begin_insn();
         // entry stubs of carried loops (loop head, and FORNLOOP entered from
         // the interpreter): check and load the carried registers

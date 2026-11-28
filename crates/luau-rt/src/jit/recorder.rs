@@ -118,11 +118,31 @@ pub struct Recorder {
     /// an if-converted branch: its arms run in the interpreter unrecorded
     /// until this pc (where they join)
     skip_to: Option<u32>,
+    /// a function trace (recursion; see `trace::FUNC_HEADER`)
+    func: bool,
+    /// (function traces) a RETURN popped the trace's frame
+    popped: bool,
+    /// the instruction just recorded ends the trace (function traces)
+    close_at: Option<FuncClose>,
+    /// a function root trace's key (`FUNC_HEADER` or `CONT_FLAG | pc`)
+    fkey: u32,
 }
 
 /// `Snapshot::top` of an exit that keeps the L->top the trace left (after
 /// a call returning a variable number of results).
 pub const KEEP_TOP: u16 = u16::MAX;
+
+/// How a function trace ends.
+#[derive(Clone, Copy)]
+enum FuncClose {
+    /// up-recursion: CALL at `pc` of the function itself
+    Call { pc: u32, len: u32, ra: usize, nargs: usize, nres: i32 },
+    /// a RETURN out of the recursion at `pc`
+    Return { pc: u32 },
+    /// a RETURN into a call of the function itself, whose caller goes on at
+    /// `cont` (down-recursion; its continuation trace)
+    Pop { cont: u32 },
+}
 
 /// `Recorder::mm` result slot of a comparison metamethod.
 const CMP_RESULT: usize = usize::MAX;
@@ -207,6 +227,10 @@ impl Recorder {
             deferred_call: None,
             cmp_fix: None,
             skip_to: None,
+            func: false,
+            popped: false,
+            close_at: None,
+            fkey: 0,
         };
         // snapshot 0: the entry (a trace that doesn't loop exits there from
         // its entry checks)
@@ -233,6 +257,7 @@ impl Recorder {
         let mut r = Recorder::new(id, proto, cl, start_pc, base, max_len);
         r.loop_end = loop_end;
         r.side = Some((header, parent));
+        r.func = super::trace::is_func_header(header);
         // the slots' types on entry: what the parent's exit writes (its
         // snapshot), and what it checked and left alone - unless something
         // in it writes stack slots outside the IR (calls, concatenation)
@@ -247,7 +272,8 @@ impl Recorder {
                 known[slot] = ty;
             }
             let limit = sn.ref_limit.index().min(t.insts.len());
-            let opaque = t.insts.iter().any(|x| matches!(x.op, Op::CCall { .. } | Op::CallC { .. } | Op::Concat { .. }));
+            // (a popped frame: the slots before it were another frame's)
+            let opaque = t.insts.iter().any(|x| matches!(x.op, Op::CCall { .. } | Op::CallC { .. } | Op::Concat { .. } | Op::PopFrame { .. }));
             if !opaque {
                 for x in &t.insts[..limit] {
                     if let Op::SLoad { slot, guarded: true, .. } = x.op {
@@ -320,7 +346,32 @@ impl Recorder {
 
     /// The loop header the trace belongs to.
     pub fn header(&self) -> u32 {
+        if self.func && self.side.is_none() {
+            return self.fkey;
+        }
         self.side.map_or(self.start_pc, |(h, _)| h)
+    }
+
+    /// Starts recording a function trace: `proto`'s code from `start_pc` (0:
+    /// its entry, in the frame just called; else a continuation, `key`
+    /// `CONT_FLAG | start_pc`) in the frame at `base`.
+    pub unsafe fn new_func(id: TraceId, proto: *mut Proto, cl: *mut Closure, base: StkId, max_len: usize, start_pc: u32, key: u32) -> Recorder {
+        let mut r = Recorder::new(id, proto, cl, start_pc, base, max_len);
+        r.func = true;
+        r.fkey = key;
+        r.loop_end = (*proto).sizecode as u32;
+        r
+    }
+
+    /// After an instruction was recorded: a function trace may end there.
+    fn after_record(&mut self) -> Step {
+        match self.close_at.take() {
+            None => Step::Continue,
+            Some(c) => match self.close_func(c) {
+                Ok(t) => Step::Closed(t),
+                Err(e) => Step::Abort(e),
+            },
+        }
     }
 
     /// Whether the interpreter is in the frame the recorder expects next
@@ -475,7 +526,7 @@ impl Recorder {
         }
         let inlined = self.funcs.len() > 1;
         // another loop's header with a compiled trace: run that one next
-        if self.steps > 0 && !inlined && pc != self.header() && self.top.is_none() && self.pending.is_none() {
+        if self.steps > 0 && !inlined && !self.func && pc != self.header() && self.top.is_none() && self.pending.is_none() {
             let p = self.proto as usize;
             if state_has_trace(p, pc) {
                 return match self.close_link(pc) {
@@ -498,11 +549,11 @@ impl Recorder {
                 return Step::Abort(AbortReason::TooLong);
             }
             return match self.record(pc, base) {
-                Ok(()) => Step::Continue,
+                Ok(()) => self.after_record(),
                 Err(e) => Step::Abort(e),
             };
         }
-        if pc == self.start_pc && self.steps > 0 && !inlined {
+        if pc == self.start_pc && self.steps > 0 && !inlined && !self.func {
             if self.exits_next(pc, base) && !crate::trace_flag!("LUAU_TRACE_NOLASTITER") {
                 // the loop's own test is about to end it: this was its last
                 // iteration, often a path no other iteration takes (a
@@ -524,7 +575,7 @@ impl Recorder {
             return Step::Abort(AbortReason::TooLong);
         }
         match self.record(pc, base) {
-            Ok(()) => Step::Continue,
+            Ok(()) => self.after_record(),
             Err(e) => Step::Abort(e),
         }
     }
@@ -734,6 +785,9 @@ impl Recorder {
         let (a, bb, c) = (a_of(insn), b_of(insn), c_of(insn));
         // a guard taken now resumes at this instruction (it hasn't run yet)
         self.b.pc = pc;
+        if self.func && (o(O::JumpBack) || o(O::ForNPrep) || o(O::ForNLoop) || o(O::ForGPrep) || o(O::ForGPrepInext) || o(O::ForGPrepNext) || o(O::ForGLoop)) {
+            return Err(AbortReason::UnsupportedControlFlow);
+        }
         if o(O::JumpIf) || o(O::JumpIfNot) || o(O::JumpIfEq) || o(O::JumpIfNotEq) || o(O::JumpIfLe) || o(O::JumpIfNotLe) || o(O::JumpIfLt) || o(O::JumpIfNotLt) || o(O::JumpXEqKN) || o(O::JumpXEqKNil) || o(O::JumpXEqKB) || o(O::JumpXEqKS) {
             let len = op_len(op) as u32;
             self.cmp_fix = Some((pc + len, (pc as i64 + 1 + d_of(insn) as i64) as u32, Vec::new()));
@@ -1174,6 +1228,26 @@ impl Recorder {
             if target != self.header() {
                 return Err(AbortReason::UnsupportedControlFlow);
             }
+        } else if o(O::GetTableN)
+            && (*base.add(bb)).tt == LUA_TTABLE
+            && (*hvalue(base.add(bb))).metatable.is_null()
+            && c >= (*hvalue(base.add(bb))).sizearray as usize
+            && (*hvalue(base.add(bb))).node == crate::ltable::dummynode()
+            && !crate::trace_flag!("LUAU_TRACE_NOAMISS")
+        {
+            // past the array part of a table with no hash part and no
+            // metatable: nil (checked: the size, no hash part, no metatable)
+            let t = self.read(bb, base)?;
+            let snap = self.b.snapshot();
+            self.b.emit(Op::GuardPlainTable { t, store: false, snap }, IrType::Nil);
+            let size = self.b.emit(Op::ASize(t), IrType::I32);
+            let k1 = self.b.ki32(c as i32 + 1);
+            self.b.emit(Op::Guard { cmp: Cmp::ULt, a: size, b: k1, snap }, IrType::Nil);
+            let node = self.b.emit(Op::HSlot { t, idx: 0 }, IrType::Ptr);
+            let dummy = self.b.kptr(crate::ltable::dummynode() as usize, IrType::Ptr);
+            self.b.emit(Op::GuardSame { a: node, k: dummy, snap }, IrType::Nil);
+            let v = self.b.knil();
+            self.b.set_slot(a, v);
         } else if o(O::GetTableN) && Self::observe_array(base, bb, c, false).is_err() {
             let h = if (*base.add(bb)).tt == LUA_TTABLE { hvalue(base.add(bb)) } else { return Err(unsupported_type("indexing a non-table")) };
             let val = crate::ltable::luaH_getnum(h, c as i32 + 1);
@@ -1668,6 +1742,8 @@ impl Recorder {
             }
         } else if o(O::Call) || o(O::CallFb) {
             self.record_call(pc, insn, base)?;
+        } else if o(O::Return) && self.func && self.funcs.len() == 1 {
+            self.func_return(pc, insn, base)?;
         } else if o(O::Return) {
             self.record_return(insn, base)?;
         } else if o(O::FastCall1) || o(O::FastCall2) || o(O::FastCall2K) || o(O::FastCall3) {
@@ -1979,6 +2055,24 @@ impl Recorder {
             return self.record_c_call(pc, insn, base, cl);
         }
         let p = Closure::proto(cl);
+        if self.func && self.funcs.len() == 1 && p == self.proto {
+            // up-recursion: the trace ends with this call's frame pushed,
+            // running the function's trace again
+            if bb == 0 || c == 0 || (*p).is_vararg != 0 {
+                return Err(unsupported_type("recursive call with variable arguments or results"));
+            }
+            let f = self.read(a, base)?;
+            let k = self.b.kptr(p as usize, IrType::Ptr);
+            let snap = self.b.snapshot();
+            self.b.emit(Op::GuardProto { f, p: k, snap }, IrType::Nil);
+            let len = if op_of(insn) == O::CallFb as u8 { 2 } else { 1 };
+            self.close_at = Some(FuncClose::Call { pc, len, ra: a, nargs: bb - 1, nres: c as i32 - 1 });
+            return Ok(());
+        }
+        if self.func && self.popped {
+            // (calls after a frame was popped: not inlined)
+            return Err(AbortReason::UnsupportedControlFlow);
+        }
         if self.funcs.len() >= MAX_INLINE_DEPTH {
             return Err(AbortReason::UnsupportedControlFlow);
         }
@@ -2638,6 +2732,97 @@ impl Recorder {
     }
 
     /// RETURN from an inlined frame: its results go to the caller's slots.
+    /// A function trace's RETURN from its own frame: into another call of
+    /// the function (one of its CALLs with fixed results) the trace goes
+    /// on in the caller's frame (down-recursion); anywhere else it ends.
+    unsafe fn func_return(&mut self, pc: u32, insn: u32, base: StkId) -> R<()> {
+        let (a, bb) = (a_of(insn), b_of(insn));
+        if bb == 0 {
+            return Err(unsupported_type("variable results"));
+        }
+        let nret = bb - 1;
+        let l = self.l;
+        let ci = (*l).ci;
+        let code = (*self.proto).code;
+        let mut site = None;
+        if ci > (*l).base_ci && (*ci).flags & LUA_CALLINFO_RETURN == 0 && self.b.frames.is_empty() {
+            let caller = ci.sub(1);
+            if (*caller).p == self.proto && !(*caller).savedpc.is_null() {
+                let spc = (*caller).savedpc.offset_from(code);
+                // (the CALL before the savedpc: CALL, or CALL_FB and its aux)
+                let call = if spc >= 2 && op_of(*code.add(spc as usize - 2)) == O::CallFb as u8 {
+                    Some(*code.add(spc as usize - 2))
+                } else if spc >= 1 && spc <= (*self.proto).sizecode as isize && op_of(*code.add(spc as usize - 1)) == O::Call as u8 {
+                    Some(*code.add(spc as usize - 1))
+                } else {
+                    None
+                };
+                if let Some(call) = call {
+                    if c_of(call) >= 1 && b_of(call) != 0 {
+                        site = Some((caller, a_of(call), c_of(call) as i32 - 1, spc as u32));
+                    }
+                }
+            }
+        }
+        let Some((caller, ra, nres, cont)) = site.filter(|_| !crate::trace_flag!("LUAU_TRACE_NODOWNREC")) else {
+            // out of the recursion: the trace ends here (the hook runs the
+            // RETURN natively)
+            for i in 0..nret {
+                self.read(a + i, base)?;
+            }
+            self.close_at = Some(FuncClose::Return { pc });
+            return Ok(());
+        };
+        let mut vals = Vec::with_capacity(nres as usize);
+        for i in 0..nres as usize {
+            vals.push(if i < nret { self.read(a + i, base)? } else { self.b.knil() });
+        }
+        let snap = self.b.snapshot();
+        let pf = self.b.emit(Op::PopFrame { ret: (*caller).savedpc as usize, snap }, IrType::Function);
+        self.b.rebase();
+        self.root_base = (*caller).base;
+        self.funcs[0] = (self.proto, clvalue((*caller).func), Some(pf));
+        self.top = None;
+        self.popped = true;
+        for (i, v) in vals.into_iter().enumerate() {
+            self.b.set_slot(ra + i, v);
+        }
+        // (the caller goes on in its continuation's trace)
+        self.close_at = Some(FuncClose::Pop { cont });
+        Ok(())
+    }
+
+    /// Ends a function trace (see `FuncClose`).
+    fn close_func(&mut self, c: FuncClose) -> R<Trace> {
+        let root = self.side.is_none();
+        let (pc, push) = match c {
+            FuncClose::Call { pc, len, ra, nargs, nres } => {
+                let p = self.proto;
+                let push = unsafe {
+                    super::trace::PushFrame { ra: ra as u16, nargs: nargs as u16, nres, ret: (*p).code.add((pc + len) as usize) as usize, stacksize: (*p).maxstacksize as u16, numparams: (*p).numparams as u16 }
+                };
+                (pc, Some(push))
+            }
+            FuncClose::Return { pc } => (pc, None),
+            FuncClose::Pop { cont } => (cont, None),
+        };
+        let target = match c {
+            FuncClose::Call { .. } => super::trace::FUNC_HEADER,
+            FuncClose::Return { .. } => super::trace::RET_HEADER,
+            FuncClose::Pop { cont } => super::trace::CONT_FLAG | cont,
+        };
+        let mut t = self.close_link(target)?;
+        // (its last snapshot: before the CALL / RETURN - a failed push, or
+        // the end, resumes the interpreter there)
+        t.snapshots.last_mut().unwrap().pc = pc;
+        t.push = push;
+        t.func = true;
+        if root {
+            t.start_pc = self.start_pc;
+        }
+        Ok(t)
+    }
+
     unsafe fn record_return(&mut self, insn: u32, base: StkId) -> R<()> {
         if self.funcs.len() == 1 {
             // returning from the loop's function: the loop is left
@@ -3506,7 +3691,7 @@ pub(crate) fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *pre = rm(*pre);
             *back = rm(*back);
         }
-        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | KI64(_) | SLoad { .. } | Loop | Nop | FrameFunc | Random { .. } | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } | GuardTop { .. } | Sunk => {}
+        KNil | KBool(_) | KNum(_) | KInt(_) | KPtr(_) | KI32(_) | KI64(_) | SLoad { .. } | Loop | Nop | FrameFunc | Random { .. } | PopFrame { .. } | NewTable { .. } | CCall { .. } | SReload { .. } | Concat { .. } | CloseUpvals { .. } | CallC { .. } | GuardTop { .. } | Sunk => {}
         UStore { cl, v, .. } => {
             *cl = rm(*cl);
             *v = rm(*v);
@@ -3557,6 +3742,7 @@ pub(crate) fn set_snapshot(op: &mut Op, s: SnapId) {
         | NumToI64 { snap, .. }
         | UPtr { snap, .. }
         | GuardTop { snap, .. }
+        | PopFrame { snap, .. }
         | UStore { snap, .. } => *snap = s,
         _ => {}
     }

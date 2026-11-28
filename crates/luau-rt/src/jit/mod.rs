@@ -611,16 +611,25 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
                 })
                 .collect();
             s.remove_root(root_key);
+            if let Some((_, h)) = t.link.filter(|l| l.1 == trace::RET_HEADER || (l.1 & 0xC000_0000) == trace::CONT_FLAG) {
+                set_end_exit(tag, t.snapshots.len() as u32 - 1, h);
+            }
             s.by_tag.insert(tag, state::TraceKey::Root(root_key.0, root_key.1));
             s.traces.insert(root_key, t);
             // traces linking to this loop run this one from now on
             s.set_links(root_key, native.reentry);
+            if root_key.1 == trace::FUNC_HEADER {
+                set_func_cells(root_key.0, native.entry);
+            }
         }
         Some((ptag, k)) => {
             // link: the parent's exit stub jumps here from now on
             let Some(parent) = s.by_tag_mut(ptag) else { return };
             let slot = (parent.link_table as *mut usize).wrapping_add(k as usize);
             unsafe { *slot = native.entry };
+            if let Some((_, h)) = t.link.filter(|l| l.1 == trace::RET_HEADER || (l.1 & 0xC000_0000) == trace::CONT_FLAG) {
+                set_end_exit(tag, t.snapshots.len() as u32 - 1, h);
+            }
             s.by_tag.insert(tag, state::TraceKey::Side(tag));
             s.sides.insert(tag, t);
             if let Some(r) = s.traces.get_mut(&root_key) {
@@ -736,6 +745,10 @@ thread_local! {
     static STOP_L: Cell<usize> = const { Cell::new(0) };
     /// the single-step run stopped (instead of leaving the VM)
     static STOPPED: Cell<bool> = const { Cell::new(false) };
+    /// the innermost single-step run stops at any frame, as soon as native
+    /// code can take over (and nothing is being recorded): runs started by
+    /// a function trace's hook, whose frames come and go
+    static STOP_NATIVE: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Exits through one snapshot that take the full path before native code's
@@ -811,7 +824,11 @@ pub unsafe fn should_stop(L: *mut lua_State, p: *mut Proto, pc: *const crate::lo
         return false;
     }
     let cur = ci_depth(L);
-    let stop = if cur < d {
+    let stop = if STOP_NATIVE.with(|s| s.get()) {
+        // (not inside a call from C made during the run: that call must
+        // return to its C caller)
+        !is_recording() && native_entry(p, pc) && (d + 1..=cur).all(|j| (*(*L).base_ci.offset(j)).flags & crate::lobject::LUA_CALLINFO_RETURN == 0)
+    } else if cur < d {
         // the frame returned: its caller continues in the interpreter
         true
     } else {
@@ -1039,6 +1056,231 @@ pub unsafe extern "sysv64-unwind" fn native_loop_hook(
         note_run(&mut *(ctr as *mut LoopCell), ran);
     }
     r
+}
+
+// ---------------------------------------------------------------------------
+// Function traces (recursion): native code counts the entries of each
+// function that may call itself (its first instruction decrements a
+// `FuncCell`); at zero it calls `func_hook`, which runs the function's
+// trace or, once the function calls itself often enough, records one. The
+// trace runs whole recursions: a call of the function pushes the frame and
+// runs the trace again, a return into another call of it pops the frame and
+// goes on in the caller (see `recorder::FuncClose`).
+
+/// Per compiled function that may recurse.
+#[repr(C)]
+pub struct FuncCell {
+    /// entries until `func_hook` is called (native code decrements it)
+    pub ctr: u32,
+    /// bytes of native code at the function's entry that call the hook
+    /// (the function's own code starts after them)
+    pub skip: u32,
+    entry: usize,
+    gen: u64,
+    proto: usize,
+}
+
+/// `func_hook` result: go on with the function's native code.
+const FUNC_GO_ON: usize = 3;
+
+thread_local! {
+    /// the cells of each function's native code (by proto)
+    static FUNC_CELLS: std::cell::RefCell<state::HashMap<usize, Vec<usize>>> = std::cell::RefCell::new(state::HashMap::default());
+    /// per trace tag: the exit that ends it as a function trace: (snapshot,
+    /// RET_HEADER - a RETURN out of the recursion - or a continuation's key)
+    static END_EXIT: std::cell::RefCell<Vec<(u32, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A new cell for native code of `p` (lives as long as the code).
+pub fn new_func_cell(p: *mut Proto) -> *mut FuncCell {
+    let c = Box::leak(Box::new(FuncCell { ctr: 1, skip: 0, entry: 0, gen: 0, proto: p as usize })) as *mut FuncCell;
+    FUNC_CELLS.with(|m| m.borrow_mut().entry(p as usize).or_default().push(c as usize));
+    c
+}
+
+/// The function trace of `p` was installed: native code runs it from now.
+fn set_func_cells(p: usize, entry: usize) {
+    let gen = state::generation();
+    FUNC_CELLS.with(|m| {
+        if let Some(cells) = m.borrow().get(&p) {
+            for &c in cells {
+                let c = unsafe { &mut *(c as *mut FuncCell) };
+                c.entry = entry;
+                c.gen = gen;
+                c.ctr = 1;
+            }
+        }
+    });
+}
+
+fn set_end_exit(tag: u16, k: u32, h: u32) {
+    END_EXIT.with(|r| {
+        let mut r = r.borrow_mut();
+        if r.len() <= tag as usize {
+            r.resize(tag as usize + 1, (u32::MAX, 0));
+        }
+        r[tag as usize] = (k, h);
+    });
+}
+
+/// Called by native code at the entry of a function that may recurse when
+/// its cell's counter reaches zero (the frame is set up). Returns what
+/// `native_call` does, or FUNC_GO_ON.
+#[cfg(all(target_arch = "x86_64", windows))]
+pub unsafe extern "sysv64-unwind" fn func_hook(L: *mut lua_State, pc: *const crate::lobject::Instruction, base: StkId, _k: *mut crate::lobject::TValue, cell: *mut FuncCell) -> usize {
+    let cell = &mut *cell;
+    let p = cell.proto as *mut Proto;
+    if is_recording() || (*(*L).ci).p != p {
+        cell.ctr = 64;
+        return FUNC_GO_ON;
+    }
+    if cell.entry == 0 || cell.gen != state::generation() {
+        cell.entry = 0;
+        if let Some(e) = state::with(|s| s.traces.get(&(p as usize, trace::FUNC_HEADER)).and_then(|t| t.native.map(|n| n.entry))) {
+            cell.entry = e;
+            cell.gen = state::generation();
+        }
+    }
+    if cell.entry != 0 {
+        cell.ctr = 1;
+        if (*L).stack_last.offset_from(base) < (*p).maxstacksize as isize {
+            return FUNC_GO_ON;
+        }
+        let depth = ci_depth(L);
+        let f: compiler::TraceFn = std::mem::transmute(cell.entry);
+        let t0 = cycles();
+        let ex = f(base, L);
+        LAST_RUN.with(|c| c.set(cycles().wrapping_sub(t0)));
+        return func_exit(L, p, ex, cell, depth);
+    }
+    // recorded once the function calls itself often enough
+    let ci = (*L).ci;
+    if ci <= (*L).base_ci || (*ci.sub(1)).p != p {
+        cell.ctr = 16;
+        return FUNC_GO_ON;
+    }
+    let start = state::with(|s| {
+        if !s.enabled || s.traces.len() >= s.max_traces || s.hot.is_blacklisted(p, trace::FUNC_HEADER) {
+            return Err(());
+        }
+        Ok(if s.hot.tick(p, trace::FUNC_HEADER, s.hotloop) { Some((s.new_id(), s.max_trace_len)) } else { None })
+    });
+    match start {
+        Err(()) => {
+            cell.ctr = u32::MAX;
+            FUNC_GO_ON
+        }
+        Ok(None) => {
+            cell.ctr = 1;
+            FUNC_GO_ON
+        }
+        Ok(Some((id, max_len))) => {
+            cell.ctr = 1;
+            debug::log(debug::Event::TraceStart { id: id.0, pc: 0 });
+            let mut rec = recorder::Recorder::new_func(id, p, crate::lobject::clvalue((*ci).func), base, max_len, 0, trace::FUNC_HEADER);
+            rec.set_state(L);
+            RECORDER.with(|r| *r.borrow_mut() = Some((rec, base)));
+            begin_recording(L);
+            func_interp(L, pc, ci_depth(L))
+        }
+    }
+}
+
+/// Runs the single-step interpreter (recording) from `pc` in `L->ci` until
+/// native code can take over, in whatever frame. Returns what
+/// `native_call` does.
+#[cfg(all(target_arch = "x86_64", windows))]
+unsafe fn func_interp(L: *mut lua_State, pc: *const crate::lobject::Instruction, depth: isize) -> usize {
+    (*(*L).ci).savedpc = pc;
+    let _n = StopNativeGuard(STOP_NATIVE.with(|s| s.replace(true)));
+    let _g = StopGuard::set(L, depth);
+    STOPPED.with(|s| s.set(false));
+    crate::lvmexecute::execute_single_step(L);
+    if STOPPED.with(|s| s.replace(false)) {
+        func_resume(L)
+    } else {
+        crate::lvmexecute::NATIVE_LEAVE
+    }
+}
+
+struct StopNativeGuard(bool);
+impl Drop for StopNativeGuard {
+    fn drop(&mut self) {
+        STOP_NATIVE.with(|s| s.set(self.0));
+    }
+}
+
+/// Native code continues `L->ci` at its savedpc (or the interpreter does).
+#[cfg(all(target_arch = "x86_64", windows))]
+unsafe fn func_resume(L: *mut lua_State) -> usize {
+    let ci = (*L).ci;
+    let t = crate::lvmexecute::native_addr((*ci).p, (*ci).savedpc);
+    if t != 0 { t } else { crate::lvmexecute::NATIVE_INTERP }
+}
+
+/// After function trace of `p` returned `ex`: where things go on.
+#[cfg(all(target_arch = "x86_64", windows))]
+unsafe fn func_exit(L: *mut lua_State, p: *mut Proto, ex: u32, cell: &FuncCell, depth: isize) -> usize {
+    use crate::lvmexecute::{NATIVE_EXIT, NATIVE_INTERP, NATIVE_LEAVE};
+    if ex == trace::EXIT_LEFT_VM {
+        return NATIVE_LEAVE;
+    }
+    let (tag, k) = (((ex >> 16) & 0x7fff) as u16, ex & 0xffff);
+    let end = END_EXIT.with(|r| r.borrow().get(tag as usize).copied());
+    if let (0, Some((ek, h))) = (ex & 0x8000_0000, end) {
+        if ek == k && !crate::trace_flag!("LUAU_TRACE_NOFASTRET") {
+            let pc = state::with(|s| s.by_tag_mut(tag).map(|t| t.snapshots[k as usize].pc));
+            if let Some(pc) = pc {
+                let ci = (*L).ci;
+                let at = (*(*ci).p).code.add(pc as usize);
+                (*ci).savedpc = at;
+                if h == trace::RET_HEADER {
+                    // the end of the recursion: the RETURN, natively (the
+                    // trace stored its values)
+                    let r = crate::lvmexecute::native_return(L, at, (*L).base, std::ptr::null_mut());
+                    return if r == NATIVE_EXIT { NATIVE_INTERP } else { r };
+                }
+                // a frame popped into a continuation without a trace yet:
+                // native code goes on there - and the trace is recorded
+                // when it's hot
+                let start = state::with(|s| {
+                    if !s.enabled || s.traces.contains_key(&(p as usize, h)) || s.traces.len() >= s.max_traces || s.hot.is_blacklisted(p, h) {
+                        return None;
+                    }
+                    s.hot.tick(p, h, s.hotloop).then(|| (s.new_id(), s.max_trace_len))
+                });
+                if let Some((id, max_len)) = start {
+                    debug::log(debug::Event::TraceStart { id: id.0, pc });
+                    let mut rec = recorder::Recorder::new_func(id, p, crate::lobject::clvalue((*ci).func), (*L).base, max_len, pc, h);
+                    rec.set_state(L);
+                    RECORDER.with(|r| *r.borrow_mut() = Some((rec, (*L).base)));
+                    begin_recording(L);
+                    return func_interp(L, at, depth);
+                }
+                return func_resume(L);
+            }
+        }
+    }
+    let key = state::with(|s| s.root_key_of(tag).map(|x| x.0));
+    let header = key.map_or(trace::FUNC_HEADER, |k| k.1);
+    let id = state::with(|s| s.traces.get(&(p as usize, header)).map(|t| t.id)).unwrap_or(trace::TraceId(0));
+    let r = handle_exit(L, p, header, (*L).base, id, ex, true);
+    if r == Some(LEFT_VM) {
+        return NATIVE_LEAVE;
+    }
+    let ci = (*L).ci;
+    if is_recording() {
+        // a side trace is recorded from the exit
+        return func_interp(L, (*ci).savedpc, depth);
+    }
+    // (an exit at the function's entry: its own code, after the hook)
+    if (*ci).p == p && (*ci).savedpc == (*p).code as *const _ {
+        let t = crate::lvmexecute::native_addr(p, (*ci).savedpc);
+        if t != 0 {
+            return t + cell.skip as usize;
+        }
+    }
+    func_resume(L)
 }
 
 /// A trace run from native code took `ran` cycles: is it worth entering
