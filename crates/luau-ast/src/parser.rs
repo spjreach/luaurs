@@ -68,14 +68,19 @@ pub struct ParseResult {
     pub errors: Vec<ParseError>,
     /// `--!directive` comments (`ParseResult::hotcomments`).
     pub hot_comments: Vec<HotComment>,
-    /// Rough upper bound on the number of expressions (from the source
-    /// size), used to pre-size the compiler's per-expression maps.
+    /// Expected number of expressions (a quarter of the token count), used
+    /// to pre-size the compiler's per-expression maps.
     pub size_hint: usize,
+    /// Number of locals declared (pre-sizes the compiler's per-local maps).
+    pub local_hint: usize,
+    /// Number of calls (pre-sizes the per-call builtin map).
+    pub call_hint: usize,
     /// `ParseResult::lines`: line count of the chunk (0 after an error).
     pub lines: usize,
-    /// False when no name `getfenv` / `setfenv` occurs anywhere in the
-    /// source (lets the compiler skip its fenv-use scan).
-    pub may_use_fenv: bool,
+    /// Whether the chunk references the globals `getfenv` / `setfenv`
+    /// (outside type annotations), when the parser could tell exactly;
+    /// `None` means the compiler must scan the AST itself.
+    pub fenv_use: Option<(bool, bool)>,
 }
 
 /// C++ `HotComment`: a `--!` comment; `header` is set for the ones before
@@ -130,17 +135,19 @@ impl ParseResult {
 /// Parse a chunk of Luau source.
 pub fn parse(source: &[u8], names: &mut AstNameTable) -> ParseResult {
     let hot_comments = scan_hot_comments(source, names);
-    let size_hint = (source.len() / 2).min(1 << 18);
     let mut parser = Parser::new(source, names);
     let result = parser.parse_chunk();
     let end_line = parser.lexer.current().location.end.line as usize;
+    let fenv_use = (!parser.fenv_hidden).then_some((parser.fenv_get, parser.fenv_set));
+    // (on typical code about a quarter of the tokens get an entry in the
+    // compiler's per-expression maps)
+    let (size_hint, local_hint, call_hint) = (parser.n_tokens / 4, parser.n_locals, parser.n_calls);
     drop(parser);
-    let may_use_fenv = names.get("getfenv").is_some() || names.get("setfenv").is_some();
     match result {
         Ok(root) => {
             let lines = end_line
                 + (!source.is_empty() && source[source.len() - 1] != b'\n') as usize;
-            ParseResult { root, errors: Vec::new(), hot_comments, size_hint, lines, may_use_fenv }
+            ParseResult { root, errors: Vec::new(), hot_comments, size_hint, local_hint, call_hint, lines, fenv_use }
         }
         Err(err) => ParseResult {
             root: AstStatBlock {
@@ -152,8 +159,10 @@ pub fn parse(source: &[u8], names: &mut AstNameTable) -> ParseResult {
             errors: vec![err],
             hot_comments,
             size_hint: 0,
+            local_hint: 0,
+            call_hint: 0,
             lines: 0,
-            may_use_fenv,
+            fenv_use: None,
         },
     }
 }
@@ -162,6 +171,18 @@ type PResult<T> = Result<T, ParseError>;
 
 pub struct Parser<'src, 'names> {
     source: &'src [u8],
+    /// Node counts for [`ParseResult::size_hint`] and friends.
+    n_tokens: usize,
+    n_locals: usize,
+    n_calls: usize,
+    /// `getfenv` / `setfenv` global references outside type annotations and
+    /// attribute arguments; `fenv_hidden` when one occurs inside them (the
+    /// compiler's walk skips those, so the counts are then not its answer).
+    fenv_get: bool,
+    fenv_set: bool,
+    fenv_hidden: bool,
+    /// Nesting of `typeof(...)` and attribute arguments.
+    hidden_depth: u32,
     lexer: Lexer<'src, 'names>,
     function_depth: usize,
     loop_depth: usize,
@@ -244,6 +265,13 @@ impl<'src, 'names> Parser<'src, 'names> {
             loop_depth: 0,
             scopes: vec![Vec::new()],
             local_map: std::collections::HashMap::with_hasher(NameHash),
+            n_tokens: 0,
+            n_locals: 0,
+            n_calls: 0,
+            fenv_get: false,
+            fenv_set: false,
+            fenv_hidden: false,
+            hidden_depth: 0,
             in_class_method_body: false,
             export_pending: false,
             declared_exports: Vec::new(),
@@ -272,7 +300,22 @@ impl<'src, 'names> Parser<'src, 'names> {
     }
 
     #[inline]
+    #[inline]
+    fn note_global(&mut self, name: AstName) {
+        let n = name.0;
+        if n.len() == 7 && (n == "getfenv" || n == "setfenv") {
+            if self.hidden_depth != 0 {
+                self.fenv_hidden = true;
+            } else if n == "getfenv" {
+                self.fenv_get = true;
+            } else {
+                self.fenv_set = true;
+            }
+        }
+    }
+
     fn advance(&mut self) -> Lexeme {
+        self.n_tokens += 1;
         self.lexer.next()
     }
 
@@ -476,6 +519,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         is_const: bool,
         annotation: Option<Box<AstType>>,
     ) -> Arc<AstLocal> {
+        self.n_locals += 1;
         let shadow = self.find_shadow(name);
         let local = Arc::new(AstLocal {
             name,
@@ -1341,7 +1385,10 @@ impl<'src, 'names> Parser<'src, 'names> {
                         let mut location = name_loc;
                         if matches!(self.cur(), LexemeType::RawString | LexemeType::QuotedString | LexemeType::Char(b'{' | b'(')) {
                             let args_begin = self.cur_lexeme().location;
-                            args = self.parse_call_args(name_loc, false)?;
+                            self.hidden_depth += 1;
+                            let parsed_args = self.parse_call_args(name_loc, false);
+                            self.hidden_depth -= 1;
+                            args = parsed_args?;
                             let args_loc = Location::new(args_begin.end, self.lexer.previous_location().end);
                             for a in &args {
                                 if !a.is_constant_literal() && !a.is_literal_table() {
@@ -1468,6 +1515,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         let mut expr = if let Some(local) = self.resolve_local(first) {
             AstExpr::Local(Box::new(AstExprLocal { location: first_loc, local, upvalue: false }))
         } else {
+            self.note_global(first);
             AstExpr::Global(Box::new(AstExprGlobal { location: first_loc, name: first }))
         };
 
@@ -2068,6 +2116,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                         return self.ambiguous_call();
                     }
                     let args = self.parse_call_args(func.location(), true)?;
+                    self.n_calls += 1;
                     expr = AstExpr::Call(Box::new(AstExprCall {
                         location: Location::new(func.location().begin, arg_loc.end),
                         func: func,
@@ -2116,6 +2165,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                     let is_table = self.cur() == LexemeType::Char(b'{');
                     let args = self.parse_call_args(expr.location(), false)?;
                     let end = self.lexer.previous_location().end;
+                    self.n_calls += 1;
                     expr = AstExpr::Call(Box::new(AstExprCall {
                         location: Location::new(expr.location().begin, end),
                         func: expr,
@@ -2299,6 +2349,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                         upvalue,
                     })))
                 } else {
+                    self.note_global(name);
                     Ok(AstExpr::Global(Box::new(AstExprGlobal { location: lex.location, name })))
                 }
             }
@@ -3018,7 +3069,10 @@ impl<'src, 'names> Parser<'src, 'names> {
                 if name.0 == "typeof" && self.cur() != LexemeType::Char(b'.') {
                     let open = self.cur_lexeme();
                     self.expect_char(b'(', "typeof type")?;
-                    let expr = self.parse_expr()?;
+                    self.hidden_depth += 1;
+                    let expr = self.parse_expr();
+                    self.hidden_depth -= 1;
+                    let expr = expr?;
                     let end = self.cur_lexeme().location;
                     self.expect_match(b')', &open)?;
                     return Ok(AstType::Typeof(Box::new(AstTypeTypeof {

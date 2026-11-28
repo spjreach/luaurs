@@ -39,7 +39,8 @@ pub enum Constant {
     Number(f64),
     Integer(i64),
     Vectorf([f32; 4]),
-    Vectord([f64; 4]),
+    /// (boxed: keeps `Constant` at 24 bytes)
+    Vectord(Box<[f64; 4]>),
     String(Rc<[u8]>),
     /// Index into the constant-table property list.
     Table(usize),
@@ -99,7 +100,7 @@ fn fold_unary(op: AstExprUnaryOp, arg: &Constant) -> Constant {
         AstExprUnaryOp::Minus => match arg {
             Constant::Number(n) => Constant::Number(-n),
             Constant::Vectorf(v) => Constant::Vectorf([-v[0], -v[1], -v[2], -v[3]]),
-            Constant::Vectord(v) => Constant::Vectord([-v[0], -v[1], -v[2], -v[3]]),
+            Constant::Vectord(v) => Constant::Vectord(Box::new([-v[0], -v[1], -v[2], -v[3]])),
             _ => Constant::Unknown,
         },
         AstExprUnaryOp::Len => match arg {
@@ -136,15 +137,15 @@ fn fold_vec_f(la: &Constant, ra: &Constant, f: fn(f32, f32) -> f32, w_rule: bool
 
 fn fold_vec_d(la: &Constant, ra: &Constant, f: fn(f64, f64) -> f64, w_rule: bool) -> Constant {
     let (a, b, a_had, b_had): ([f64; 4], [f64; 4], bool, bool) = match (la, ra) {
-        (Constant::Vectord(a), Constant::Vectord(b)) => (*a, *b, a[3] != 0.0, b[3] != 0.0),
-        (Constant::Number(n), Constant::Vectord(b)) => ([*n; 4], *b, false, b[3] != 0.0),
-        (Constant::Vectord(a), Constant::Number(n)) => (*a, [*n; 4], a[3] != 0.0, false),
+        (Constant::Vectord(a), Constant::Vectord(b)) => (**a, **b, a[3] != 0.0, b[3] != 0.0),
+        (Constant::Number(n), Constant::Vectord(b)) => ([*n; 4], **b, false, b[3] != 0.0),
+        (Constant::Vectord(a), Constant::Number(n)) => (**a, [*n; 4], a[3] != 0.0, false),
         _ => return Constant::Unknown,
     };
     let had_w = a_had || b_had;
     let w = f(a[3], b[3]);
     if !w_rule || w == 0.0 || had_w {
-        Constant::Vectord([f(a[0], b[0]), f(a[1], b[1]), f(a[2], b[2]), w])
+        Constant::Vectord(Box::new([f(a[0], b[0]), f(a[1], b[1]), f(a[2], b[2]), w]))
     } else {
         Constant::Unknown
     }
@@ -657,7 +658,7 @@ pub fn fold_builtin(bfid: i32, args: &[Constant], vector_double: bool) -> Consta
                     if n <= 4 {
                         if let (Some(z), Some(w)) = (z, w) {
                             return if vector_double {
-                                C::Vectord([x, y, z, w])
+                                C::Vectord(Box::new([x, y, z, w]))
                             } else {
                                 C::Vectorf([x as f32, y as f32, z as f32, w as f32])
                             };
@@ -1025,19 +1026,27 @@ pub fn get_builtin(
 
 /// Host vector options (`CompileOptions::vectorLib`, `vectorCtor`,
 /// `vectorType`) for the compilation running on this thread.
-#[derive(Clone, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct HostVector {
     pub lib: Option<&'static str>,
     pub ctor: Option<&'static str>,
     pub ty: Option<&'static str>,
 }
 
-thread_local! {
-    pub static HOST_VECTOR: std::cell::RefCell<HostVector> = std::cell::RefCell::new(HostVector::default());
+// (a native thread-local: `thread_local!` goes through an OS TLS key on
+// this target, with a guard call on every access)
+#[thread_local]
+static mut HOST_VECTOR: HostVector = HostVector { lib: None, ctor: None, ty: None };
+
+#[inline]
+pub fn host_vector() -> HostVector {
+    // SAFETY: thread-local, plain Copy data
+    unsafe { *std::ptr::addr_of!(HOST_VECTOR) }
 }
 
-pub fn host_vector() -> HostVector {
-    HOST_VECTOR.with(|h| h.borrow().clone())
+pub fn set_host_vector(hv: HostVector) {
+    // SAFETY: as above
+    unsafe { *std::ptr::addr_of_mut!(HOST_VECTOR) = hv };
 }
 
 pub fn get_builtin_function_id(b: &Builtin) -> i32 {
@@ -1293,7 +1302,7 @@ pub fn analyze_builtins(
             true
         }
     }
-    let mut v = V { globals, variables, result: HashMap::default() };
+    let mut v = V { globals, variables, result: luau_common::fasthash::map_hinted_for(luau_common::fasthash::HINT_CALLS) };
     walk_block(&mut v, root);
     v.result
 }

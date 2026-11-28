@@ -88,19 +88,36 @@ pub fn map_with_capacity<K, V>(n: usize) -> HashMap<K, V> {
     HashMap::with_capacity_and_hasher(n, Default::default())
 }
 
-thread_local! {
-    static SIZE_HINT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
+// (native thread-local: see `fastalloc`)
+#[thread_local]
+static SIZE_HINT: std::cell::Cell<[usize; 3]> = std::cell::Cell::new([0; 3]);
+
+/// [`map_hinted`] kinds: maps keyed per expression, per local, per call.
+pub const HINT_EXPRS: usize = 0;
+pub const HINT_LOCALS: usize = 1;
+pub const HINT_CALLS: usize = 2;
 
 /// Sets the expected number of AST expressions for the chunk being compiled
 /// (maps keyed per expression are created with this capacity, avoiding
 /// repeated rehashing while they grow).
 pub fn set_size_hint(n: usize) {
-    SIZE_HINT.with(|h| h.set(n));
+    set_size_hints([n, 0, 0]);
+}
+
+/// Sets the expected numbers of expressions, locals and calls (see
+/// [`HINT_EXPRS`] ...) for the chunk being compiled.
+pub fn set_size_hints(h: [usize; 3]) {
+    SIZE_HINT.set(h);
 }
 
 /// A map pre-sized with the current [`set_size_hint`].
 #[inline]
 pub fn map_hinted<K, V>() -> HashMap<K, V> {
-    map_with_capacity(SIZE_HINT.with(|h| h.get()))
+    map_with_capacity(SIZE_HINT.get()[HINT_EXPRS])
+}
+
+/// A map pre-sized with the current hint of the given kind.
+#[inline]
+pub fn map_hinted_for<K, V>(kind: usize) -> HashMap<K, V> {
+    map_with_capacity(SIZE_HINT.get()[kind])
 }

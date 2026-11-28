@@ -1,3 +1,4 @@
+#![feature(thread_local)]
 //! `luau-compiler` — Rust port of Luau's Compiler module (AST to bytecode).
 
 pub mod analysis;

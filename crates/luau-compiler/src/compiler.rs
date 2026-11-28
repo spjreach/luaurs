@@ -302,6 +302,10 @@ struct Compiler<'a> {
     setfenv_used: bool,
 
     local_stack: Vec<Arc<AstLocal>>,
+    /// Per `local_stack` entry: its variable's last use as a packed position
+    /// (-1 when never used) and whether `pop_stat_locals` is done with it
+    /// (released, or never releasable).
+    local_meta: Vec<(i64, bool)>,
     reg_captured: [bool; 256],
     active_locals: usize,
     upvals: Vec<Arc<AstLocal>>,
@@ -434,7 +438,7 @@ impl<'a> Compiler<'a> {
             functions: HashMap::default(),
             locals: HashMap::default(),
             globals: HashMap::default(),
-            variables: HashMap::default(),
+            variables: luau_common::fasthash::map_hinted_for(luau_common::fasthash::HINT_LOCALS),
             constants: luau_common::fasthash::map_hinted(),
             locstants: HashMap::default(),
             expr_changes: ChangeLog::new(),
@@ -454,6 +458,7 @@ impl<'a> Compiler<'a> {
             getfenv_used: false,
             setfenv_used: false,
             local_stack: Vec::new(),
+            local_meta: Vec::new(),
             reg_captured: [false; 256],
             active_locals: 0,
             upvals: Vec::new(),
@@ -4049,6 +4054,11 @@ impl<'a> Compiler<'a> {
             );
         }
         self.local_stack.push(local.clone());
+        let end = match self.variables.get(&local_key(local)).and_then(|v| v.last_used) {
+            Some(e) => pack_pos(e),
+            None => -1,
+        };
+        self.local_meta.push((end, false));
         self.active_locals += 1;
         let debugpc = self.bytecode.get_debug_pc();
         let l = self.locals.entry(local_key(local)).or_default();
@@ -4123,6 +4133,7 @@ impl<'a> Compiler<'a> {
             }
         }
         self.local_stack.truncate(start);
+        self.local_meta.truncate(start);
     }
 
     fn pop_stat_locals(&mut self, owner: &AstStatBlock, before: &AstStat, start: usize) {
@@ -4130,22 +4141,34 @@ impl<'a> Compiler<'a> {
             return;
         }
         let owner_key = key(owner);
-        let stat_start = before.location().begin;
+        let stat_start = pack_pos(before.location().begin);
         for i in start..self.local_stack.len() {
+            // (a local is released at the first statement after its last
+            // use: test that first, without the map lookups)
+            let (end, done) = self.local_meta[i];
+            if done || stat_start <= end {
+                continue;
+            }
             let k = local_key(&self.local_stack[i]);
             let l = *self.locals.get(&k).unwrap();
             if !l.allocated || l.reused || l.captured {
+                // (all permanent while the local is on the stack)
+                self.local_meta[i].1 = true;
                 continue;
             }
-            let Some(var) = self.variables.get(&k) else { continue };
-            if var.owner != owner_key || var.non_lexical_use {
+            let Some(var) = self.variables.get(&k) else {
+                self.local_meta[i].1 = true;
                 continue;
-            }
-            let released = match var.last_used {
-                None => true,
-                Some(end) => stat_start.line > end.line || (stat_start.line == end.line && stat_start.column > end.column),
             };
-            if released {
+            if var.non_lexical_use {
+                self.local_meta[i].1 = true;
+                continue;
+            }
+            if var.owner != owner_key {
+                continue;
+            }
+            self.local_meta[i].1 = true;
+            {
                 let ast_local = self.local_stack[i].clone();
                 if self.release_local(k) {
                     let l = *self.locals.get(&k).unwrap();
@@ -4323,10 +4346,16 @@ fn uses_fenv(root: &AstStatBlock) -> (bool, bool) {
     (v.get, v.set)
 }
 
+/// A source position as one number ordered like (line, column).
+#[inline]
+fn pack_pos(p: luau_ast::location::Position) -> i64 {
+    ((p.line as i64) << 32) | p.column as i64
+}
+
 fn compile_or_throw(
     root: &AstStatBlock,
     hot_comments: &[HotComment],
-    may_use_fenv: bool,
+    fenv_use: Option<(bool, bool)>,
     mut options: CompileOptions,
     bcb: BytecodeBuilder,
 ) -> (Vec<u8>, BytecodeBuilder) {
@@ -4375,8 +4404,9 @@ fn compile_or_throw(
     }
     phase("values");
 
-    if options.optimization_level >= 1 && may_use_fenv {
-        let (g, s) = uses_fenv(root);
+    if options.optimization_level >= 1 {
+        // (the parser usually knows: then the AST walk is skipped)
+        let (g, s) = fenv_use.unwrap_or_else(|| uses_fenv(root));
         c.getfenv_used = g;
         c.setfenv_used = s;
     }
@@ -4420,6 +4450,13 @@ fn compile_or_throw(
         c.expr_types = tm.expr_types;
     }
     phase("type_map");
+    if timing {
+        eprintln!(
+            "[CT] sizes: constants {} expr_types {} variables {} builtins {} table_shapes {} locstants {} hint {}",
+            c.constants.len(), c.expr_types.len(), c.variables.len(), c.builtins.len(), c.table_shapes.len(), c.locstants.len(),
+            c.constants.capacity()
+        );
+    }
 
     c.bytecode.classes = options.classes;
     if options.classes {
@@ -4462,8 +4499,8 @@ fn compile_or_throw(
 /// Compiles a parsed chunk to serialized bytecode (`Luau::compile`),
 /// honouring its `--!optimize` / `--!native` hot comments.
 pub fn compile_parsed(parsed: &ParseResult, options: CompileOptions) -> Result<Vec<u8>, CompileError> {
-    luau_common::fasthash::set_size_hint(parsed.size_hint);
-    let r = compile_impl(&parsed.root, &parsed.hot_comments, parsed.may_use_fenv, options);
+    luau_common::fasthash::set_size_hints([parsed.size_hint, parsed.local_hint, parsed.call_hint]);
+    let r = compile_impl(&parsed.root, &parsed.hot_comments, parsed.fenv_use, options);
     luau_common::fasthash::set_size_hint(0);
     r
 }
@@ -4519,11 +4556,11 @@ pub fn compile_source(source: &[u8], options: CompileOptions) -> Vec<u8> {
 
 /// Compiles a chunk body to serialized bytecode.
 pub fn compile(root: &AstStatBlock, options: CompileOptions) -> Result<Vec<u8>, CompileError> {
-    compile_impl(root, &[], true, options)
+    compile_impl(root, &[], None, options)
 }
 
-fn compile_impl(root: &AstStatBlock, hot_comments: &[HotComment], may_use_fenv: bool, options: CompileOptions) -> Result<Vec<u8>, CompileError> {
-    compile_impl_with(root, hot_comments, may_use_fenv, options, BytecodeBuilder::new()).map(|r| r.0)
+fn compile_impl(root: &AstStatBlock, hot_comments: &[HotComment], fenv_use: Option<(bool, bool)>, options: CompileOptions) -> Result<Vec<u8>, CompileError> {
+    compile_impl_with(root, hot_comments, fenv_use, options, BytecodeBuilder::new()).map(|r| r.0)
 }
 
 /// Like [`compile_parsed`], but compiles into a caller-configured builder
@@ -4534,8 +4571,8 @@ pub fn compile_parsed_with(
     options: CompileOptions,
     bcb: BytecodeBuilder,
 ) -> Result<(Vec<u8>, BytecodeBuilder), CompileError> {
-    luau_common::fasthash::set_size_hint(parsed.size_hint);
-    let r = compile_impl_with(&parsed.root, &parsed.hot_comments, parsed.may_use_fenv, options, bcb);
+    luau_common::fasthash::set_size_hints([parsed.size_hint, parsed.local_hint, parsed.call_hint]);
+    let r = compile_impl_with(&parsed.root, &parsed.hot_comments, parsed.fenv_use, options, bcb);
     luau_common::fasthash::set_size_hint(0);
     r
 }
@@ -4543,7 +4580,7 @@ pub fn compile_parsed_with(
 fn compile_impl_with(
     root: &AstStatBlock,
     hot_comments: &[HotComment],
-    may_use_fenv: bool,
+    fenv_use: Option<(bool, bool)>,
     options: CompileOptions,
     bcb: BytecodeBuilder,
 ) -> Result<(Vec<u8>, BytecodeBuilder), CompileError> {
@@ -4552,11 +4589,11 @@ fn compile_impl_with(
     let hv = crate::analysis::HostVector { lib: leak(&options.vector_lib), ctor: leak(&options.vector_ctor), ty: leak(&options.vector_type) };
     let has_hv = hv.lib.is_some() || hv.ctor.is_some() || hv.ty.is_some();
     if has_hv {
-        crate::analysis::HOST_VECTOR.with(|h| *h.borrow_mut() = hv);
+        crate::analysis::set_host_vector(hv);
     }
-    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| compile_or_throw(root, hot_comments, may_use_fenv, options, bcb)));
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| compile_or_throw(root, hot_comments, fenv_use, options, bcb)));
     if has_hv {
-        crate::analysis::HOST_VECTOR.with(|h| *h.borrow_mut() = Default::default());
+        crate::analysis::set_host_vector(Default::default());
     }
     match r {
         Ok(r) => Ok(r),
