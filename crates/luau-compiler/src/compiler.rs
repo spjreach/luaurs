@@ -937,7 +937,7 @@ impl<'a> Compiler<'a> {
         let mut found: Option<&'a AstExpr> = None;
         for item in &table.items {
             if matches!(item.kind, AstExprTableItemKind::Record | AstExprTableItemKind::General) {
-                let k = item.key.as_deref()?;
+                let k = item.key.as_ref()?;
                 match self.constants.get(&key(k)) {
                     None => found = None,
                     Some(Constant::String(sv)) if !sv.is_empty() => {
@@ -1056,7 +1056,7 @@ impl<'a> Compiler<'a> {
 
     fn cost_model_inlined_call(&mut self, call: &'a AstExprCall, func: &'a AstExprFunction) -> u64 {
         for (i, var) in func.args.iter().enumerate() {
-            let arg = call.args.get(i).map(|b| &**b);
+            let arg = call.args.get(i).map(|b| &*b);
             // last expression is a multret: no constant for it, it fills all values
             if i + 1 == call.args.len() && func.args.len() > call.args.len() && arg.is_some_and(|a| self.is_expr_mult_ret(a)) {
                 break;
@@ -1208,7 +1208,7 @@ impl<'a> Compiler<'a> {
         let mut args: Vec<InlineArg<'a>> = Vec::with_capacity(func.args.len());
 
         for (i, var) in func.args.iter().enumerate() {
-            let arg: Option<&'a AstExpr> = call.args.get(i).map(|b| &**b);
+            let arg: Option<&'a AstExpr> = call.args.get(i).map(|b| &*b);
             let can_use_parameter_target = fi.return_kind == ReturnKind::Parameter
                 && fi.return_local.as_ref().is_some_and(|l| Arc::ptr_eq(l, var))
                 && !no_target_move_elision;
@@ -1650,7 +1650,7 @@ impl<'a> Compiler<'a> {
         self.set_debug_line(call.location);
 
         if !call.self_ {
-            if let AstExpr::Global(g) = &*call.func {
+            if let AstExpr::Global(g) = &call.func {
                 if g.name.0 == "require" {
                     self.has_require = true;
                 }
@@ -1776,7 +1776,7 @@ impl<'a> Compiler<'a> {
 
         let mut fast_pcall_id = -1;
         if self.options.optimization_level >= 1 && !call.self_ {
-            if let AstExpr::Global(g) = &*call.func {
+            if let AstExpr::Global(g) = &call.func {
                 if self.can_import(g) {
                     if g.name.0 == "pcall" && !call.args.is_empty() {
                         fast_pcall_id = 0;
@@ -1788,7 +1788,7 @@ impl<'a> Compiler<'a> {
         }
 
         if call.self_ {
-            let AstExpr::IndexName(fi) = &*call.func else { unreachable!() };
+            let AstExpr::IndexName(fi) = &call.func else { unreachable!() };
             let reg = self.get_expr_local_reg(&fi.expr);
             if reg >= 0 {
                 selfreg = reg as u8;
@@ -1803,7 +1803,7 @@ impl<'a> Compiler<'a> {
         let mut mult_call = false;
         let mut construct_call = false;
         if self.options.classes && !call.self_ && call.table_call && bfid < 0 && fast_pcall_id < 0 {
-            let AstExpr::Table(t) = &*call.args[0] else { unreachable!("construct call takes a table") };
+            let AstExpr::Table(t) = &call.args[0] else { unreachable!("construct call takes a table") };
             let arg = regs + 1;
             let old = self.reg_top;
             self.reg_top = arg as u32 + 1;
@@ -1824,7 +1824,7 @@ impl<'a> Compiler<'a> {
         self.set_debug_line_end(call.func.location());
 
         if call.self_ {
-            let AstExpr::IndexName(fi) = &*call.func else { unreachable!() };
+            let AstExpr::IndexName(fi) = &call.func else { unreachable!() };
             self.set_debug_line(fi.index_location);
             if self.options.classes && fi.private_access {
                 self.compile_private_field_access(fi, regs, selfreg, true);
@@ -2153,7 +2153,7 @@ impl<'a> Compiler<'a> {
     fn compile_expr_and_or(&mut self, expr: &'a AstExprBinary, target: u8, target_temp: bool) {
         let and = expr.op == AstExprBinaryOp::And;
         scoped!(self, {
-            if let Some(cl) = self.constants.get(&key(&*expr.left)).cloned().filter(|c| c.is_known()) {
+            if let Some(cl) = self.constants.get(&key(&expr.left)).cloned().filter(|c| c.is_known()) {
                 let e: &'a AstExpr = if and == cl.is_truthful() { &expr.right } else { &expr.left };
                 self.compile_expr(e, target, target_temp);
                 return;
@@ -2189,7 +2189,7 @@ impl<'a> Compiler<'a> {
     fn compile_expr_unary(&mut self, expr: &'a AstExprUnary, target: u8) {
         scoped!(self, {
             if expr.op == AstExprUnaryOp::Minus {
-                if let AstExpr::ConstantInteger(ci) = &*expr.expr {
+                if let AstExpr::ConstantInteger(ci) = &expr.expr {
                     let cid = self.bytecode.add_constant_integer((!(ci.value as u64)).wrapping_add(1) as i64);
                     if cid < 0 {
                         const_limit(expr.location);
@@ -2355,7 +2355,7 @@ impl<'a> Compiler<'a> {
         for (idx, s) in expr.strings.iter().enumerate() {
             escape_and_append(&mut format, s);
             if let Some(e) = expr.expressions.get(idx) {
-                if let Some(Constant::String(c)) = self.constants.get(&key(&**e)).cloned() {
+                if let Some(Constant::String(c)) = self.constants.get(&key(&*e)).cloned() {
                     escape_and_append(&mut format, &c);
                     skipped_sub += 1;
                 } else {
@@ -2379,7 +2379,7 @@ impl<'a> Compiler<'a> {
             self.emit_load_k(base_reg, format_index);
             let mut skipped = 0;
             for (index, sub) in expr.expressions.iter().enumerate() {
-                if matches!(self.constants.get(&key(&**sub)), Some(Constant::String(_))) {
+                if matches!(self.constants.get(&key(&*sub)), Some(Constant::String(_))) {
                     skipped += 1;
                 } else {
                     self.compile_expr_temp_top(sub, base_reg + 2 + (index - skipped) as u8);
@@ -2422,7 +2422,7 @@ impl<'a> Compiler<'a> {
         if array_size == 0 && hash_size > 0 {
             for item in &expr.items {
                 let k = item.key.as_ref().unwrap();
-                if let Some(Constant::Number(n)) = self.constants.get(&key(&**k)) {
+                if let Some(Constant::Number(n)) = self.constants.get(&key(&*k)) {
                     if *n == (index_size + 1) as f64 {
                         index_size += 1;
                     }
@@ -2450,7 +2450,7 @@ impl<'a> Compiler<'a> {
             {
                 for item in &expr.items {
                     let Some(k) = &item.key else { unreachable!() };
-                    let AstExpr::ConstantString(ck) = &**k else { unreachable!() };
+                    let AstExpr::ConstantString(ck) = &*k else { unreachable!() };
                     let key_cid = self.bytecode.add_constant_string(&ck.value);
                     if key_cid < 0 {
                         const_limit(ck.location);
@@ -2496,7 +2496,7 @@ impl<'a> Compiler<'a> {
                 let trailing_varargs = expr
                     .items
                     .last()
-                    .is_some_and(|l| l.kind == AstExprTableItemKind::List && matches!(&*l.value, AstExpr::Varargs(_)));
+                    .is_some_and(|l| l.kind == AstExprTableItemKind::List && matches!(&l.value, AstExpr::Varargs(_)));
                 let array_allocation = array_size - trailing_varargs as u32 + index_size;
                 if self.bytecode.needs_debug_remarks() {
                     self.bytecode.add_debug_remark(if hash_size == 0 {
@@ -2518,7 +2518,7 @@ impl<'a> Compiler<'a> {
             let mut mult_ret = false;
 
             for (i, item) in expr.items.iter().enumerate() {
-                let k = item.key.as_deref();
+                let k = item.key.as_ref();
                 let value: &'a AstExpr = &item.value;
 
                 if !last_key_val.is_empty() {
@@ -2544,7 +2544,7 @@ impl<'a> Compiler<'a> {
                     chunk_current = 0;
                 }
 
-                if let Some(k) = item.key.as_deref() {
+                if let Some(k) = item.key.as_ref() {
                     scoped!(self, {
                         let lv = self.compile_lvalue_index(reg, k);
                         let rv = self.compile_expr_auto(value);
@@ -2584,9 +2584,9 @@ impl<'a> Compiler<'a> {
         self.set_debug_line(expr.location);
 
         let (import_root, import1, import2): (Option<&AstExprGlobal>, &AstExprIndexName, Option<&AstExprIndexName>) =
-            match &*expr.expr {
+            match &expr.expr {
                 AstExpr::IndexName(index) => (
-                    match &*index.expr {
+                    match &index.expr {
                         AstExpr::Global(g) => Some(g),
                         _ => None,
                     },
@@ -2916,7 +2916,7 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn compile_expr_list_temp(&mut self, list: &'a [Box<AstExpr>], target: u8, target_count: u8, target_top: bool) {
+    fn compile_expr_list_temp(&mut self, list: &'a [AstExpr], target: u8, target_count: u8, target_top: bool) {
         let n = list.len();
         let tc = target_count as usize;
         if n == tc {
@@ -3260,7 +3260,7 @@ impl<'a> Compiler<'a> {
             }
             return;
         }
-        if let AstExpr::Binary(cand) = &*stat.condition {
+        if let AstExpr::Binary(cand) = &stat.condition {
             if cand.op == AstExprBinaryOp::And && self.is_constant_false(&cand.right) {
                 self.compile_expr_side(&cand.left);
                 if let Some(e) = &stat.elsebody {
@@ -3654,7 +3654,7 @@ impl<'a> Compiler<'a> {
             let mut skip_op = Opcode::ForGPrep;
             if self.options.optimization_level >= 1 && stat.vars.len() <= 2 {
                 if stat.values.len() == 1 {
-                    if let AstExpr::Call(c) = &*stat.values[0] {
+                    if let AstExpr::Call(c) = &stat.values[0] {
                         let b = get_builtin(&c.func, &self.globals, &self.variables);
                         if b.is_global("ipairs") {
                             skip_op = Opcode::ForGPrepInext;
@@ -3696,7 +3696,7 @@ impl<'a> Compiler<'a> {
         })
     }
 
-    fn resolve_assign_conflicts(&mut self, loc: Location, vars: &mut [(LValue, u8, u8)], values: &'a [Box<AstExpr>]) {
+    fn resolve_assign_conflicts(&mut self, loc: Location, vars: &mut [(LValue, u8, u8)], values: &'a [AstExpr]) {
         struct V<'c> {
             locals: &'c HashMap<LocalKey, Local>,
             conflict: [bool; 256],
@@ -3802,7 +3802,7 @@ impl<'a> Compiler<'a> {
             for (pos, (lv, _, value_reg)) in vars.iter().enumerate() {
                 if lv.kind != LValueKind::Local {
                     self.set_debug_line(lv.location);
-                    self.compile_assign(lv, *value_reg, stat.vars.get(pos).map(|v| &**v));
+                    self.compile_assign(lv, *value_reg, stat.vars.get(pos).map(|v| &*v));
                 }
             }
             for (lv, _, value_reg) in &vars {
@@ -3933,7 +3933,7 @@ impl<'a> Compiler<'a> {
                 }
             }
             AstStat::Expr(s) => {
-                if let AstExpr::Call(call) = &*s.expr {
+                if let AstExpr::Call(call) = &s.expr {
                     let target = self.reg_top as u8;
                     self.compile_expr_call(&s.expr, call, target, 0, false, false);
                 } else {
@@ -4326,6 +4326,7 @@ fn uses_fenv(root: &AstStatBlock) -> (bool, bool) {
 fn compile_or_throw(
     root: &AstStatBlock,
     hot_comments: &[HotComment],
+    may_use_fenv: bool,
     mut options: CompileOptions,
     bcb: BytecodeBuilder,
 ) -> (Vec<u8>, BytecodeBuilder) {
@@ -4342,7 +4343,19 @@ fn compile_or_throw(
             options.type_info_level = 1;
         }
     }
+    // (LUAU_COMPILE_TIME: time per phase, on stderr)
+    static TIMING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let timing = *TIMING.get_or_init(|| std::env::var_os("LUAU_COMPILE_TIME").is_some());
+    let mut t0 = std::time::Instant::now();
+    let mut phase = |name: &str| {
+        if timing {
+            let now = std::time::Instant::now();
+            eprintln!("[CT] {:<22} {:.2} ms", name, (now - t0).as_secs_f64() * 1000.0);
+            t0 = now;
+        }
+    };
     let functions = collect_functions(root);
+    phase("collect_functions");
     if functions.iter().any(|f| f.attributes.iter().any(|a| a.kind == AstAttrKind::Native)) {
         options.optimization_level = 2;
         options.type_info_level = 1;
@@ -4360,12 +4373,14 @@ fn compile_or_throw(
         c.exports.exported_functions = exported_functions;
         c.exports.exported_variables = exported_variables;
     }
+    phase("values");
 
-    if options.optimization_level >= 1 {
+    if options.optimization_level >= 1 && may_use_fenv {
         let (g, s) = uses_fenv(root);
         c.getfenv_used = g;
         c.setfenv_used = s;
     }
+    phase("uses_fenv");
 
     // builtin folding is enabled on optimization level 2 since we can't de-optimize folding at runtime
     if options.optimization_level >= 2 && !c.getfenv_used && !c.setfenv_used {
@@ -4377,7 +4392,9 @@ fn compile_or_throw(
 
     if options.optimization_level >= 1 {
         c.builtins = analyze_builtins(root, &c.globals, &c.variables);
+        phase("builtins");
         c.table_constants = build_table_constant_map(&c.variables, root);
+        phase("table_constants");
         ConstantFolder::run(
             &mut c.constants,
             &mut c.variables,
@@ -4388,7 +4405,9 @@ fn compile_or_throw(
             &c.table_constants,
             root,
         );
+        phase("constant_folder");
         c.table_shapes = predict_table_shapes(root);
+        phase("table_shapes");
     }
 
     // `setCompileOptionsForNativeCompilation` (type info part): native
@@ -4400,6 +4419,7 @@ fn compile_or_throw(
         c.local_types = tm.local_types;
         c.expr_types = tm.expr_types;
     }
+    phase("type_map");
 
     c.bytecode.classes = options.classes;
     if options.classes {
@@ -4432,8 +4452,10 @@ fn compile_or_throw(
         native: false,
     };
     let mainid = c.compile_function(main, &mut main_flags);
+    phase("codegen");
     c.bytecode.set_main_function(mainid);
     let bytes = c.bytecode.finalize();
+    phase("finalize");
     (bytes, std::mem::take(&mut c.bytecode))
 }
 
@@ -4441,7 +4463,7 @@ fn compile_or_throw(
 /// honouring its `--!optimize` / `--!native` hot comments.
 pub fn compile_parsed(parsed: &ParseResult, options: CompileOptions) -> Result<Vec<u8>, CompileError> {
     luau_common::fasthash::set_size_hint(parsed.size_hint);
-    let r = compile_impl(&parsed.root, &parsed.hot_comments, options);
+    let r = compile_impl(&parsed.root, &parsed.hot_comments, parsed.may_use_fenv, options);
     luau_common::fasthash::set_size_hint(0);
     r
 }
@@ -4497,11 +4519,11 @@ pub fn compile_source(source: &[u8], options: CompileOptions) -> Vec<u8> {
 
 /// Compiles a chunk body to serialized bytecode.
 pub fn compile(root: &AstStatBlock, options: CompileOptions) -> Result<Vec<u8>, CompileError> {
-    compile_impl(root, &[], options)
+    compile_impl(root, &[], true, options)
 }
 
-fn compile_impl(root: &AstStatBlock, hot_comments: &[HotComment], options: CompileOptions) -> Result<Vec<u8>, CompileError> {
-    compile_impl_with(root, hot_comments, options, BytecodeBuilder::new()).map(|r| r.0)
+fn compile_impl(root: &AstStatBlock, hot_comments: &[HotComment], may_use_fenv: bool, options: CompileOptions) -> Result<Vec<u8>, CompileError> {
+    compile_impl_with(root, hot_comments, may_use_fenv, options, BytecodeBuilder::new()).map(|r| r.0)
 }
 
 /// Like [`compile_parsed`], but compiles into a caller-configured builder
@@ -4513,7 +4535,7 @@ pub fn compile_parsed_with(
     bcb: BytecodeBuilder,
 ) -> Result<(Vec<u8>, BytecodeBuilder), CompileError> {
     luau_common::fasthash::set_size_hint(parsed.size_hint);
-    let r = compile_impl_with(&parsed.root, &parsed.hot_comments, options, bcb);
+    let r = compile_impl_with(&parsed.root, &parsed.hot_comments, parsed.may_use_fenv, options, bcb);
     luau_common::fasthash::set_size_hint(0);
     r
 }
@@ -4521,6 +4543,7 @@ pub fn compile_parsed_with(
 fn compile_impl_with(
     root: &AstStatBlock,
     hot_comments: &[HotComment],
+    may_use_fenv: bool,
     options: CompileOptions,
     bcb: BytecodeBuilder,
 ) -> Result<(Vec<u8>, BytecodeBuilder), CompileError> {
@@ -4531,7 +4554,7 @@ fn compile_impl_with(
     if has_hv {
         crate::analysis::HOST_VECTOR.with(|h| *h.borrow_mut() = hv);
     }
-    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| compile_or_throw(root, hot_comments, options, bcb)));
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| compile_or_throw(root, hot_comments, may_use_fenv, options, bcb)));
     if has_hv {
         crate::analysis::HOST_VECTOR.with(|h| *h.borrow_mut() = Default::default());
     }

@@ -847,7 +847,7 @@ impl<'a, 'm> ValueVisitor<'a, 'm> {
             AstStat::Block(b) => self.block(b),
             AstStat::Local(n) => {
                 for (i, v) in n.vars.iter().enumerate() {
-                    let init = n.values.get(i).map(|e| Init::Expr(&**e));
+                    let init = n.values.get(i).map(|e| Init::Expr(&*e));
                     self.var(v).init = init;
                 }
                 for v in &n.vars {
@@ -982,13 +982,13 @@ pub fn get_builtin(
             _ => Builtin::default(),
         },
         AstExpr::IndexName(e) => {
-            if let AstExpr::Local(object) = &*e.expr {
+            if let AstExpr::Local(object) = &e.expr {
                 if let Some(v) = variables.get(&local_key(&object.local)) {
                     if !v.written {
                         if let Some(Init::Expr(init)) = v.init {
                             let g = match init {
                                 AstExpr::Global(g) => Some(g.name.0),
-                                AstExpr::Binary(b) if b.op == AstExprBinaryOp::Or => match &*b.left {
+                                AstExpr::Binary(b) if b.op == AstExprBinaryOp::Or => match &b.left {
                                     AstExpr::Global(g) => Some(g.name.0),
                                     _ => None,
                                 },
@@ -1005,7 +1005,7 @@ pub fn get_builtin(
                     }
                 }
             }
-            if let AstExpr::Global(object) = &*e.expr {
+            if let AstExpr::Global(object) = &e.expr {
                 if global_state(globals, object.name.0) == Global::Default {
                     return Builtin { object: Some(object.name.0), method: Some(e.index.0) };
                 }
@@ -1283,7 +1283,7 @@ pub fn analyze_builtins(
                     return true;
                 }
                 let mut bfid = get_builtin_function_id(&b);
-                if bfid == lbf::SELECT_VARARG && !(call.args.len() == 2 && matches!(&*call.args[1], AstExpr::Varargs(_))) {
+                if bfid == lbf::SELECT_VARARG && !(call.args.len() == 2 && matches!(&call.args[1], AstExpr::Varargs(_))) {
                     bfid = -1;
                 }
                 if bfid >= 0 {
@@ -1598,7 +1598,7 @@ impl<'m, 'a> ConstantFolder<'m, 'a> {
                     },
                     _ => {
                         if self.fold_library_k {
-                            if let AstExpr::Global(g) = &*e.expr {
+                            if let AstExpr::Global(g) = &e.expr {
                                 if g.name.0 == "math" {
                                     fold_builtin_math(e.index.0)
                                 } else {
@@ -1753,7 +1753,7 @@ impl<'z> Visitor<'z> for ConstantFolder<'_, '_> {
                     let mult = n
                         .values
                         .last()
-                        .is_some_and(|l| matches!(&**l, AstExpr::Call(_) | AstExpr::Varargs(_)));
+                        .is_some_and(|l| matches!(&*l, AstExpr::Call(_) | AstExpr::Varargs(_)));
                     if !mult {
                         for v in &n.vars[n.values.len()..] {
                             self.record_value(v, &Constant::Nil);
@@ -1799,7 +1799,7 @@ pub fn predict_table_shapes(root: &AstStatBlock) -> HashMap<usize, Shape> {
     fn table_hint(e: &AstExpr) -> Option<&AstExprTable> {
         match e {
             AstExpr::Table(t) => Some(t),
-            AstExpr::Call(c) if !c.self_ && c.args.len() == 2 => match (&*c.func, &*c.args[0]) {
+            AstExpr::Call(c) if !c.self_ && c.args.len() == 2 => match (&c.func, &c.args[0]) {
                 (AstExpr::Global(g), AstExpr::Table(t)) if g.name.0 == "setmetatable" => Some(t),
                 _ => None,
             },
@@ -1880,7 +1880,7 @@ pub fn predict_table_shapes(root: &AstStatBlock) -> HashMap<usize, Shape> {
                     false
                 }
                 AstStat::For(n) => {
-                    if let (AstExpr::ConstantNumber(from), AstExpr::ConstantNumber(to)) = (&*n.from, &*n.to) {
+                    if let (AstExpr::ConstantNumber(from), AstExpr::ConstantNumber(to)) = (&n.from, &n.to) {
                         if from.value == 1.0 && to.value >= 1.0 && to.value <= MAX_LOOP_BOUND && n.step.is_none() {
                             self.loops.insert(local_key(&n.var), to.value as u32);
                         }
@@ -2196,7 +2196,7 @@ impl<'z> Visitor<'z> for CostVisitor<'_> {
             }
             AstStat::CompoundAssign(n) => {
                 self.assign(&n.var);
-                let c = if matches!(&*n.var, AstExpr::Local(_)) { 1 } else { 2 };
+                let c = if matches!(&n.var, AstExpr::Local(_)) { 1 } else { 2 };
                 self.result.add_assign(Cost::c(c));
                 true
             }
@@ -2264,7 +2264,7 @@ pub fn always_terminates(constants: &HashMap<ExprKey, Constant>, node: &AstStat)
         AstStat::Block(b) => always_terminates_block(constants, b),
         AstStat::Return(_) | AstStat::Break(_) | AstStat::Continue(_) => true,
         AstStat::If(n) => {
-            let c = constants.get(&key(&*n.condition));
+            let c = constants.get(&key(&n.condition));
             let known = c.is_some_and(|c| c.is_known());
             if known && c.unwrap().is_truthful() {
                 return always_terminates_block(constants, &n.thenbody);

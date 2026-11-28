@@ -424,7 +424,7 @@ impl<'a> Visitor<'a> for TypeMapVisitor<'a, '_> {
                     walk_expr(self, e);
                 }
                 if n.vars.len() == 2 && n.values.len() == 1 {
-                    match &*n.values[0] {
+                    match &n.values[0] {
                         AstExpr::Call(call) if call.args.len() == 1 => {
                             let arg = &call.args[0];
                             if self.is_global(&call.func, "ipairs") {
@@ -473,7 +473,7 @@ impl<'a> Visitor<'a> for TypeMapVisitor<'a, '_> {
                 for (i, v) in n.vars.iter().enumerate() {
                     if v.annotation.is_none() {
                         if let Some(val) = n.values.get(i) {
-                            if let Some(t) = self.out.expr_types.get(&key(&**val)).map(|x| x.r) {
+                            if let Some(t) = self.out.expr_types.get(&key(&*val)).map(|x| x.r) {
                                 self.resolved_locals.insert(lkey(v), t);
                             }
                         }
@@ -484,7 +484,7 @@ impl<'a> Visitor<'a> for TypeMapVisitor<'a, '_> {
             AstStat::If(n) => {
                 if let Some(cl) = n.condition_local.as_ref().filter(|cl| cl.annotation.is_none()) {
                     walk_expr(self, &n.condition);
-                    if let Some(t) = self.out.expr_types.get(&key(&*n.condition)).map(|x| x.r) {
+                    if let Some(t) = self.out.expr_types.get(&key(&n.condition)).map(|x| x.r) {
                         self.resolved_locals.insert(lkey(cl), t);
                     }
                     walk_block(self, &n.thenbody);
@@ -526,7 +526,7 @@ impl<'a> Visitor<'a> for TypeMapVisitor<'a, '_> {
             }
             AstExpr::IndexName(n) => {
                 walk_expr(self, &n.expr);
-                if let Some(R::Ast(AstType::Table(t))) = self.out.expr_types.get(&key(&*n.expr)).map(|x| x.r) {
+                if let Some(R::Ast(AstType::Table(t))) = self.out.expr_types.get(&key(&n.expr)).map(|x| x.r) {
                     for prop in &t.props {
                         if prop.name.0 == n.index.0 {
                             self.record_expr(e, R::Ast(&prop.ty));
@@ -534,11 +534,11 @@ impl<'a> Visitor<'a> for TypeMapVisitor<'a, '_> {
                         }
                     }
                 }
-                if self.out.expr_types.get(&key(&*n.expr)).map(|x| x.bty) == Some(VECTOR) && matches!(n.index.0, "X" | "Y" | "Z" | "x" | "y" | "z") {
+                if self.out.expr_types.get(&key(&n.expr)).map(|x| x.bty) == Some(VECTOR) && matches!(n.index.0, "X" | "Y" | "Z" | "x" | "y" | "z") {
                     self.record_expr(e, R::Builtin("number"));
                     return false;
                 }
-                if let AstExpr::Global(g) = &*n.expr {
+                if let AstExpr::Global(g) = &n.expr {
                     if g.name.0 == "vector"
                         && matches!(n.index.0, "zero" | "one")
                         && crate::analysis::global_state(self.globals, "vector") == crate::analysis::Global::Default
@@ -556,8 +556,8 @@ impl<'a> Visitor<'a> for TypeMapVisitor<'a, '_> {
                         self.record_expr(e, R::Builtin("boolean"));
                     }
                     AstExprUnaryOp::Minus => {
-                        let t = self.out.expr_types.get(&key(&*n.expr)).map(|x| x.r);
-                        let bt = self.out.expr_types.get(&key(&*n.expr)).map(|x| x.bty);
+                        let t = self.out.expr_types.get(&key(&n.expr)).map(|x| x.r);
+                        let bt = self.out.expr_types.get(&key(&n.expr)).map(|x| x.bty);
                         if let (Some(t), Some(bt)) = (t, bt) {
                             if bt == VECTOR || bt == NUMBER {
                                 self.record_expr(e, t);
@@ -583,12 +583,12 @@ impl<'a> Visitor<'a> for TypeMapVisitor<'a, '_> {
                     _ => {}
                 }
                 let (Some(lt), Some(lb)) =
-                    (self.out.expr_types.get(&key(&*n.left)).map(|x| x.r), self.out.expr_types.get(&key(&*n.left)).map(|x| x.bty))
+                    (self.out.expr_types.get(&key(&n.left)).map(|x| x.r), self.out.expr_types.get(&key(&n.left)).map(|x| x.bty))
                 else {
                     return false;
                 };
                 let (Some(rt), Some(rb)) =
-                    (self.out.expr_types.get(&key(&*n.right)).map(|x| x.r), self.out.expr_types.get(&key(&*n.right)).map(|x| x.bty))
+                    (self.out.expr_types.get(&key(&n.right)).map(|x| x.r), self.out.expr_types.get(&key(&n.right)).map(|x| x.bty))
                 else {
                     return false;
                 };
@@ -603,7 +603,7 @@ impl<'a> Visitor<'a> for TypeMapVisitor<'a, '_> {
             }
             AstExpr::Group(g) => {
                 walk_expr(self, &g.expr);
-                if let Some(t) = self.out.expr_types.get(&key(&*g.expr)).map(|x| x.r) {
+                if let Some(t) = self.out.expr_types.get(&key(&g.expr)).map(|x| x.r) {
                     self.record_expr(e, t);
                 }
                 false
@@ -632,15 +632,15 @@ impl<'a> Visitor<'a> for TypeMapVisitor<'a, '_> {
             AstExpr::IfElse(n) => {
                 walk_expr(self, &n.condition);
                 if let Some(cl) = n.condition_local.as_ref().filter(|cl| cl.annotation.is_none()) {
-                    if let Some(t) = self.out.expr_types.get(&key(&*n.condition)).map(|x| x.r) {
+                    if let Some(t) = self.out.expr_types.get(&key(&n.condition)).map(|x| x.r) {
                         self.resolved_locals.insert(lkey(cl), t);
                     }
                 }
                 walk_expr(self, &n.true_expr);
                 walk_expr(self, &n.false_expr);
-                let tt = self.out.expr_types.get(&key(&*n.true_expr)).map(|x| x.r);
-                let tb = self.out.expr_types.get(&key(&*n.true_expr)).map(|x| x.bty);
-                let fb = self.out.expr_types.get(&key(&*n.false_expr)).map(|x| x.bty);
+                let tt = self.out.expr_types.get(&key(&n.true_expr)).map(|x| x.r);
+                let tb = self.out.expr_types.get(&key(&n.true_expr)).map(|x| x.bty);
+                let fb = self.out.expr_types.get(&key(&n.false_expr)).map(|x| x.bty);
                 if let (Some(tt), Some(tb), Some(fb)) = (tt, tb, fb) {
                     if tb == fb {
                         self.record_expr(e, tt);
@@ -653,7 +653,7 @@ impl<'a> Visitor<'a> for TypeMapVisitor<'a, '_> {
                     if let Some(name) = Self::call_result(bfid) {
                         self.record_expr(e, R::Builtin(name));
                     }
-                } else if let AstExpr::Local(l) = &*c.func {
+                } else if let AstExpr::Local(l) = &c.func {
                     if let Some(&t) = self.function_return_types.get(&lkey(&l.local)) {
                         self.record_expr(e, R::Ast(t));
                     }

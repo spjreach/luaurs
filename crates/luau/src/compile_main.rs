@@ -12,6 +12,11 @@
 mod vfs;
 
 use std::io::Write;
+
+use luau_common::fastalloc;
+
+#[global_allocator]
+static GLOBAL: fastalloc::FastAlloc = fastalloc::FastAlloc;
 use std::process::ExitCode;
 use std::time::Instant;
 
@@ -152,8 +157,34 @@ fn compile_file(name: &str, format: Format, stats: &mut Stats, opts: &Options, o
     }
     stats.misc_time += delta(&mut t);
 
+    // The AST is bump-allocated in a scoped arena and released wholesale
+    // afterwards (like `compile_source`), instead of node by node.
+    let arena = fastalloc::arena_begin();
     let mut names = luau_ast::name_table::AstNameTable::new();
     let parsed = luau_ast::parser::parse(&source, &mut names);
+    fastalloc::arena_end();
+    let ok = compile_parsed_file(name, format, stats, opts, out, &parsed, bcb, &mut t);
+    if arena {
+        std::mem::forget(parsed);
+        std::mem::forget(names);
+        // SAFETY: the AST and name table were forgotten; nothing else was
+        // allocated while the arena was on
+        unsafe { fastalloc::arena_reset() };
+    }
+    ok
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_parsed_file(
+    name: &str,
+    format: Format,
+    stats: &mut Stats,
+    opts: &Options,
+    out: &mut Vec<u8>,
+    parsed: &luau_ast::parser::ParseResult,
+    bcb: BytecodeBuilder,
+    t: &mut Instant,
+) -> bool {
     if !parsed.errors.is_empty() {
         for e in &parsed.errors {
             report(name, &e.location, "SyntaxError", &e.message);
@@ -161,13 +192,13 @@ fn compile_file(name: &str, format: Format, stats: &mut Stats, opts: &Options, o
         return false;
     }
     stats.lines += parsed.lines;
-    stats.parse_time += delta(&mut t);
+    stats.parse_time += delta(t);
 
     if opts.only_parse {
         return true;
     }
 
-    let (bytecode, bcb) = match luau_compiler::compile_parsed_with(&parsed, opts.copts.clone(), bcb) {
+    let (bytecode, bcb) = match luau_compiler::compile_parsed_with(parsed, opts.copts.clone(), bcb) {
         Ok(r) => r,
         Err(e) => {
             report(name, &e.location, "CompileError", &e.message);
@@ -176,7 +207,7 @@ fn compile_file(name: &str, format: Format, stats: &mut Stats, opts: &Options, o
     };
     stats.bytecode += bytecode.len();
     stats.bytecode_instruction_count = bcb.get_total_instruction_count();
-    stats.compile_time += delta(&mut t);
+    stats.compile_time += delta(t);
 
     match format {
         Format::Text => out.extend_from_slice(&dump::to_bytes(&bcb.dump_everything())),
@@ -184,7 +215,7 @@ fn compile_file(name: &str, format: Format, stats: &mut Stats, opts: &Options, o
         Format::Binary => out.extend_from_slice(&bytecode),
         Format::CodegenNull => {
             stats.codegen += codegen_size(name, &bytecode);
-            stats.codegen_time += delta(&mut t);
+            stats.codegen_time += delta(t);
         }
         Format::Null => {}
         Format::Codegen | Format::CodegenAsm | Format::CodegenIr | Format::CodegenVerbose => unreachable!(),

@@ -13,6 +13,39 @@
 
 use std::sync::Arc;
 
+/// FxHash for names (short strings; no DoS concern in a parser).
+#[derive(Clone, Copy, Default)]
+pub struct NameHash;
+impl std::hash::BuildHasher for NameHash {
+    type Hasher = NameHasher;
+    fn build_hasher(&self) -> NameHasher {
+        NameHasher(0)
+    }
+}
+pub struct NameHasher(u64);
+impl std::hash::Hasher for NameHasher {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut w = [0u8; 8];
+            w[..chunk.len()].copy_from_slice(chunk);
+            self.0 = (self.0.rotate_left(5) ^ u64::from_le_bytes(w)).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+        }
+    }
+    #[inline]
+    fn write_u8(&mut self, i: u8) {
+        self.0 = (self.0.rotate_left(5) ^ i as u64).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.0 = (self.0.rotate_left(5) ^ i as u64).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
 use crate::ast::*;
 use crate::lexeme::{Lexeme, LexemeType, QuoteStyle};
 use crate::lexer::{fixup_multiline_string, fixup_quoted_string, Lexer};
@@ -40,6 +73,9 @@ pub struct ParseResult {
     pub size_hint: usize,
     /// `ParseResult::lines`: line count of the chunk (0 after an error).
     pub lines: usize,
+    /// False when no name `getfenv` / `setfenv` occurs anywhere in the
+    /// source (lets the compiler skip its fenv-use scan).
+    pub may_use_fenv: bool,
 }
 
 /// C++ `HotComment`: a `--!` comment; `header` is set for the ones before
@@ -96,11 +132,15 @@ pub fn parse(source: &[u8], names: &mut AstNameTable) -> ParseResult {
     let hot_comments = scan_hot_comments(source, names);
     let size_hint = (source.len() / 2).min(1 << 18);
     let mut parser = Parser::new(source, names);
-    match parser.parse_chunk() {
+    let result = parser.parse_chunk();
+    let end_line = parser.lexer.current().location.end.line as usize;
+    drop(parser);
+    let may_use_fenv = names.get("getfenv").is_some() || names.get("setfenv").is_some();
+    match result {
         Ok(root) => {
-            let lines = parser.lexer.current().location.end.line as usize
+            let lines = end_line
                 + (!source.is_empty() && source[source.len() - 1] != b'\n') as usize;
-            ParseResult { root, errors: Vec::new(), hot_comments, size_hint, lines }
+            ParseResult { root, errors: Vec::new(), hot_comments, size_hint, lines, may_use_fenv }
         }
         Err(err) => ParseResult {
             root: AstStatBlock {
@@ -113,6 +153,7 @@ pub fn parse(source: &[u8], names: &mut AstNameTable) -> ParseResult {
             hot_comments,
             size_hint: 0,
             lines: 0,
+            may_use_fenv,
         },
     }
 }
@@ -126,6 +167,9 @@ pub struct Parser<'src, 'names> {
     loop_depth: usize,
     /// Lexical scopes, innermost last, used for `shadow` links.
     scopes: Vec<Vec<Arc<AstLocal>>>,
+    /// The local each name refers to now (C++ `localMap`): a declaration
+    /// replaces it, leaving its scope restores the one it shadowed.
+    local_map: std::collections::HashMap<AstName, Arc<AstLocal>, NameHash>,
     /// Inside a class method body: `_name` indexes are private accesses.
     in_class_method_body: bool,
     /// Locals declared next are exported (`export local` / `export function`).
@@ -199,6 +243,7 @@ impl<'src, 'names> Parser<'src, 'names> {
             function_depth: 0,
             loop_depth: 0,
             scopes: vec![Vec::new()],
+            local_map: std::collections::HashMap::with_hasher(NameHash),
             in_class_method_body: false,
             export_pending: false,
             declared_exports: Vec::new(),
@@ -405,18 +450,23 @@ impl<'src, 'names> Parser<'src, 'names> {
     }
 
     fn pop_scope(&mut self) {
-        self.scopes.pop();
-    }
-
-    fn find_shadow(&self, name: AstName) -> Option<Arc<AstLocal>> {
-        for scope in self.scopes.iter().rev() {
+        if let Some(scope) = self.scopes.pop() {
             for local in scope.iter().rev() {
-                if local.name == name {
-                    return Some(local.clone());
+                match &local.shadow {
+                    Some(prev) => {
+                        self.local_map.insert(local.name, prev.clone());
+                    }
+                    None => {
+                        self.local_map.remove(&local.name);
+                    }
                 }
             }
         }
-        None
+    }
+
+    /// The innermost visible local named `name`.
+    fn find_shadow(&self, name: AstName) -> Option<Arc<AstLocal>> {
+        self.local_map.get(&name).cloned()
     }
 
     fn declare_local(
@@ -439,6 +489,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         });
         if let Some(scope) = self.scopes.last_mut() {
             scope.push(local.clone());
+            self.local_map.insert(name, local.clone());
         }
         local
     }
@@ -697,7 +748,7 @@ impl<'src, 'names> Parser<'src, 'names> {
     fn parse_if_statement(&mut self) -> PResult<AstStat> {
         let begin = self.cur_lexeme().location.begin;
         self.advance();
-        self.scopes.push(Vec::new());
+        self.push_scope();
 
         let (condition, condition_local, condition_is_const, condition_keyword_location, condition_equals_location) =
             self.parse_condition("if")?;
@@ -715,7 +766,7 @@ impl<'src, 'names> Parser<'src, 'names> {
 
         // The condition binding (`if local x = ...`) is visible in the then
         // branch only, so drop its scope before parsing `elseif`/`else`.
-        self.scopes.pop();
+        self.pop_scope();
 
         let mut elsebody: Option<Box<AstStat>> = None;
         let mut else_location = None;
@@ -747,7 +798,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         Ok(AstStat::If(Box::new(AstStatIf {
             location: Location::new(begin, end),
             has_semicolon,
-            condition: Box::new(condition),
+            condition: condition,
             thenbody: Box::new(thenbody),
             elsebody,
             then_location,
@@ -763,7 +814,7 @@ impl<'src, 'names> Parser<'src, 'names> {
     fn parse_if_statement_from_elseif(&mut self) -> PResult<AstStat> {
         let begin = self.cur_lexeme().location.begin;
         self.advance();
-        self.scopes.push(Vec::new());
+        self.push_scope();
 
         let (condition, condition_local, condition_is_const, condition_keyword_location, condition_equals_location) =
             self.parse_condition("if")?;
@@ -781,7 +832,7 @@ impl<'src, 'names> Parser<'src, 'names> {
 
         // As in `parse_if_statement`: the elseif binding is scoped to its own
         // then-branch.
-        self.scopes.pop();
+        self.pop_scope();
 
         let mut elsebody: Option<Box<AstStat>> = None;
         let mut else_location = None;
@@ -813,7 +864,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         Ok(AstStat::If(Box::new(AstStatIf {
             location: Location::new(begin, end),
             has_semicolon,
-            condition: Box::new(condition),
+            condition: condition,
             thenbody: Box::new(thenbody),
             elsebody,
             then_location,
@@ -828,7 +879,7 @@ impl<'src, 'names> Parser<'src, 'names> {
     fn parse_while_statement(&mut self) -> PResult<AstStat> {
         let begin = self.cur_lexeme().location.begin;
         self.advance();
-        self.scopes.push(Vec::new());
+        self.push_scope();
 
         let (condition, condition_local, condition_is_const, condition_keyword_location, condition_equals_location) =
             self.parse_condition("while")?;
@@ -845,7 +896,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         self.loop_depth -= 1;
 
         self.expect_match_end("end", &match_do)?;
-        self.scopes.pop();
+        self.pop_scope();
 
         let has_semicolon = self.skip_semicolon();
         let end = self.lexer.previous_location().end;
@@ -853,7 +904,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         Ok(AstStat::While(Box::new(AstStatWhile {
             location: Location::new(begin, end),
             has_semicolon,
-            condition: Box::new(condition),
+            condition: condition,
             body: Box::new(body),
             has_do,
             do_location,
@@ -885,7 +936,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         Ok(AstStat::Repeat(Box::new(AstStatRepeat {
             location: Location::new(begin, self.lexer.previous_location().end),
             has_semicolon,
-            condition: Box::new(condition),
+            condition: condition,
             body: Box::new(body),
             deprecated_has_until: true,
         })))
@@ -929,9 +980,9 @@ impl<'src, 'names> Parser<'src, 'names> {
                 location: Location::new(begin, self.lexer.previous_location().end),
                 has_semicolon,
                 var,
-                from: Box::new(from),
-                to: Box::new(to),
-                step: step.map(Box::new),
+                from: from,
+                to: to,
+                step,
                 body: Box::new(body),
                 has_do,
                 do_location,
@@ -1091,7 +1142,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         }
 
         // `isEnoughValues`: a multret last value may provide the rest
-        let enough = values.last().is_some_and(|v| matches!(**v, AstExpr::Call(_) | AstExpr::Varargs(_))) || values.len() == vars.len();
+        let enough = values.last().is_some_and(|v| matches!(*v, AstExpr::Call(_) | AstExpr::Varargs(_))) || values.len() == vars.len();
         if !enough {
             let end = match values.last() {
                 Some(v) => v.location().end,
@@ -1132,7 +1183,7 @@ impl<'src, 'names> Parser<'src, 'names> {
 
         let mut super_ = None;
         if self.accept_contextual("extends") {
-            super_ = Some(Box::new(self.parse_expr()?));
+            super_ = Some(self.parse_expr()?);
         }
 
         let mut members = Vec::new();
@@ -1233,19 +1284,19 @@ impl<'src, 'names> Parser<'src, 'names> {
     }
 
     /// `deprecatedArgsValidator`.
-    fn check_deprecated_args(&self, loc: Location, args: &[Box<AstExpr>]) -> PResult<()> {
+    fn check_deprecated_args(&self, loc: Location, args: &[AstExpr]) -> PResult<()> {
         if args.is_empty() {
             return Ok(());
         }
         if args.len() > 1 {
             return self.fail(loc, "@deprecated can be parametrized only by 1 argument");
         }
-        let AstExpr::Table(t) = &*args[0] else {
+        let AstExpr::Table(t) = &args[0] else {
             return self.fail(args[0].location(), "Unknown argument type for @deprecated");
         };
         for item in &t.items {
             if item.kind == AstExprTableItemKind::Record {
-                let key = item.key.as_deref().unwrap();
+                let key = item.key.as_ref().unwrap();
                 let AstExpr::ConstantString(k) = key else { continue };
                 let ks = String::from_utf8_lossy(&k.value).into_owned();
                 if ks != "use" && ks != "reason" {
@@ -1253,7 +1304,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                         key.location(),
                         format!("Unknown argument '{ks}' for @deprecated. Only string constants for 'use' and 'reason' are allowed"),
                     );
-                } else if !matches!(*item.value, AstExpr::ConstantString(_)) {
+                } else if !matches!(item.value, AstExpr::ConstantString(_)) {
                     return self.fail(item.value.location(), format!("Only constant string allowed as value for '{ks}'"));
                 }
             } else {
@@ -1390,7 +1441,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         Ok(AstStat::Function(Box::new(AstStatFunction {
             location: Location::new(begin, self.lexer.previous_location().end),
             has_semicolon,
-            name: Box::new(name),
+            name: name,
             func: Arc::new(func),
         })))
     }
@@ -1403,7 +1454,7 @@ impl<'src, 'names> Parser<'src, 'names> {
         Ok(AstStat::Function(Box::new(AstStatFunction {
             location: Location::new(begin, self.lexer.previous_location().end),
             has_semicolon,
-            name: Box::new(name),
+            name: name,
             func: Arc::new(func),
         })))
     }
@@ -1434,7 +1485,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                 let (name, loc) = self.expect_name("field name")?;
                 expr = AstExpr::IndexName(Box::new(AstExprIndexName {
                     location: Location::new(expr.location().begin, loc.end),
-                    expr: Box::new(expr),
+                    expr: expr,
                     index: name,
                     index_location: loc,
                     op_position: loc.begin,
@@ -1448,7 +1499,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                 let (name, loc) = self.expect_name("method name")?;
                 expr = AstExpr::IndexName(Box::new(AstExprIndexName {
                     location: Location::new(expr.location().begin, loc.end),
-                    expr: Box::new(expr),
+                    expr: expr,
                     index: name,
                     index_location: loc,
                     op_position,
@@ -1592,7 +1643,7 @@ impl<'src, 'names> Parser<'src, 'names> {
 
     /// `parseFunctionArgs` (argument list only); `func` is the callee's
     /// location for diagnostics.
-    fn parse_call_args(&mut self, func: Location, self_: bool) -> PResult<Vec<Box<AstExpr>>> {
+    fn parse_call_args(&mut self, func: Location, self_: bool) -> PResult<Vec<AstExpr>> {
         match self.cur() {
             LexemeType::Char(b'(') => {
                 let match_paren = self.cur_lexeme();
@@ -1604,8 +1655,8 @@ impl<'src, 'names> Parser<'src, 'names> {
                 self.expect_match(b')', &match_paren)?;
                 Ok(args)
             }
-            LexemeType::Char(b'{') => Ok(vec![Box::new(self.parse_table_constructor()?)]),
-            LexemeType::QuotedString | LexemeType::RawString => Ok(vec![Box::new(self.parse_string_literal()?)]),
+            LexemeType::Char(b'{') => Ok(vec![self.parse_table_constructor()?]),
+            LexemeType::QuotedString | LexemeType::RawString => Ok(vec![self.parse_string_literal()?]),
             _ => {
                 let cur = self.cur_lexeme().location;
                 if self_ && cur.begin.line != func.end.line {
@@ -1645,18 +1696,18 @@ impl<'src, 'names> Parser<'src, 'names> {
             return Ok(AstStat::Expr(Box::new(AstStatExpr {
                 location: Location::new(begin, self.lexer.previous_location().end),
                 has_semicolon,
-                expr: Box::new(first),
+                expr: first,
             })));
         }
 
         // assignment?
         if self.cur() == LexemeType::Char(b'=') || self.cur() == LexemeType::Char(b',') {
             Self::check_lvalue(&first)?;
-            let mut vars = vec![Box::new(first)];
+            let mut vars = vec![first];
             while self.accept_char(b',') {
                 let v = self.parse_suffixed_expr(true)?;
                 Self::check_lvalue(&v)?;
-                vars.push(Box::new(v));
+                vars.push(v);
             }
             self.expect_char(b'=', "assignment")?;
             let values = self.parse_expr_list()?;
@@ -1679,8 +1730,8 @@ impl<'src, 'names> Parser<'src, 'names> {
                 location: Location::new(begin, self.lexer.previous_location().end),
                 has_semicolon,
                 op,
-                var: Box::new(first),
-                value: Box::new(value),
+                var: first,
+                value: value,
             })));
         }
 
@@ -1839,13 +1890,13 @@ impl<'src, 'names> Parser<'src, 'names> {
     // Expressions
     // -----------------------------------------------------------------
 
-    fn parse_expr_list(&mut self) -> PResult<Vec<Box<AstExpr>>> {
-        let mut list = vec![Box::new(self.parse_expr()?)];
+    fn parse_expr_list(&mut self) -> PResult<Vec<AstExpr>> {
+        let mut list = vec![self.parse_expr()?];
         while self.accept_char(b',') {
             if self.cur() == LexemeType::Char(b')') {
                 return self.fail(self.cur_lexeme().location, "Expected expression after ',' but got ')' instead");
             }
-            list.push(Box::new(self.parse_expr()?));
+            list.push(self.parse_expr()?);
         }
         Ok(list)
     }
@@ -1916,8 +1967,8 @@ impl<'src, 'names> Parser<'src, 'names> {
             left = AstExpr::Binary(Box::new(AstExprBinary {
                 location: Location::new(left.location().begin, right.location().end),
                 op,
-                left: Box::new(left),
-                right: Box::new(right),
+                left: left,
+                right: right,
             }));
             self.enter("expression")?;
         }
@@ -1948,7 +1999,7 @@ impl<'src, 'names> Parser<'src, 'names> {
             return Ok(AstExpr::Unary(Box::new(AstExprUnary {
                 location: Location::new(begin, expr.location().end),
                 op,
-                expr: Box::new(expr),
+                expr: expr,
             })));
         }
 
@@ -1967,7 +2018,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                     let (name, loc) = self.parse_index_name("", op_pos)?;
                     expr = AstExpr::IndexName(Box::new(AstExprIndexName {
                         location: Location::new(expr.location().begin, loc.end),
-                        expr: Box::new(expr),
+                        expr: expr,
                         index: name,
                         index_location: loc,
                         op_position: loc.begin,
@@ -1984,8 +2035,8 @@ impl<'src, 'names> Parser<'src, 'names> {
                     self.expect_match(b']', &match_bracket)?;
                     expr = AstExpr::IndexExpr(Box::new(AstExprIndexExpr {
                         location: Location::new(expr.location().begin, end.end),
-                        expr: Box::new(expr),
-                        index: Box::new(index),
+                        expr: expr,
+                        index: index,
                     }));
                 }
 
@@ -1995,7 +2046,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                     let (name, name_loc) = self.parse_index_name("method name", op_position)?;
                     let func = AstExpr::IndexName(Box::new(AstExprIndexName {
                         location: Location::new(expr.location().begin, name_loc.end),
-                        expr: Box::new(expr),
+                        expr: expr,
                         index: name,
                         index_location: name_loc,
                         op_position,
@@ -2019,7 +2070,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                     let args = self.parse_call_args(func.location(), true)?;
                     expr = AstExpr::Call(Box::new(AstExprCall {
                         location: Location::new(func.location().begin, arg_loc.end),
-                        func: Box::new(func),
+                        func: func,
                         type_arguments,
                         args,
                         self_: true,
@@ -2036,7 +2087,7 @@ impl<'src, 'names> Parser<'src, 'names> {
 
                     expr = AstExpr::Instantiate(Box::new(AstExprInstantiate {
                         location: Location::new(begin, close.end),
-                        expr: Box::new(expr),
+                        expr: expr,
                         type_arguments,
                     }));
                 }
@@ -2046,7 +2097,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                     let annotation = self.parse_type()?;
                     expr = AstExpr::TypeAssertion(Box::new(AstExprTypeAssertion {
                         location: Location::new(expr.location().begin, annotation.location().end),
-                        expr: Box::new(expr),
+                        expr: expr,
                         annotation: Box::new(annotation),
                     }));
                 }
@@ -2067,7 +2118,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                     let end = self.lexer.previous_location().end;
                     expr = AstExpr::Call(Box::new(AstExprCall {
                         location: Location::new(expr.location().begin, end),
-                        func: Box::new(expr),
+                        func: expr,
                         type_arguments: Vec::new(),
                         args,
                         self_: false,
@@ -2217,7 +2268,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                 self.advance();
                 Ok(AstExpr::Group(Box::new(AstExprGroup {
                     location: Location::new(begin, end.end),
-                    expr: Box::new(expr),
+                    expr: expr,
                 })))
             }
             LexemeType::Dot3 => {
@@ -2274,11 +2325,11 @@ impl<'src, 'names> Parser<'src, 'names> {
             let nested = self.parse_if_expr_from_elseif()?;
             return Ok(AstExpr::IfElse(Box::new(AstExprIfElse {
                 location: Location::new(begin, nested.location().end),
-                condition: Box::new(condition),
+                condition: condition,
                 has_then: true,
-                true_expr: Box::new(true_expr),
+                true_expr: true_expr,
                 has_else: true,
-                false_expr: Box::new(nested),
+                false_expr: nested,
                 condition_local,
                 condition_is_const,
                 condition_keyword_location,
@@ -2293,11 +2344,11 @@ impl<'src, 'names> Parser<'src, 'names> {
 
         Ok(AstExpr::IfElse(Box::new(AstExprIfElse {
             location: Location::new(begin, false_expr.location().end),
-            condition: Box::new(condition),
+            condition: condition,
             has_then: true,
-            true_expr: Box::new(true_expr),
+            true_expr: true_expr,
             has_else: true,
-            false_expr: Box::new(false_expr),
+            false_expr: false_expr,
             condition_local,
             condition_is_const,
             condition_keyword_location,
@@ -2320,11 +2371,11 @@ impl<'src, 'names> Parser<'src, 'names> {
             let nested = self.parse_if_expr_from_elseif()?;
             return Ok(AstExpr::IfElse(Box::new(AstExprIfElse {
                 location: Location::new(begin, nested.location().end),
-                condition: Box::new(condition),
+                condition: condition,
                 has_then: true,
-                true_expr: Box::new(true_expr),
+                true_expr: true_expr,
                 has_else: true,
-                false_expr: Box::new(nested),
+                false_expr: nested,
                 condition_local,
                 condition_is_const,
                 condition_keyword_location,
@@ -2338,11 +2389,11 @@ impl<'src, 'names> Parser<'src, 'names> {
         let false_expr = self.parse_expr()?;
         Ok(AstExpr::IfElse(Box::new(AstExprIfElse {
             location: Location::new(begin, false_expr.location().end),
-            condition: Box::new(condition),
+            condition: condition,
             has_then: true,
-            true_expr: Box::new(true_expr),
+            true_expr: true_expr,
             has_else: true,
-            false_expr: Box::new(false_expr),
+            false_expr: false_expr,
             condition_local,
             condition_is_const,
             condition_keyword_location,
@@ -2411,7 +2462,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                 LexemeType::BrokenString => {
                     return self.fail(end, "Malformed interpolated string; did you forget to add a '`'?");
                 }
-                _ => expressions.push(Box::new(self.parse_expr()?)),
+                _ => expressions.push(self.parse_expr()?),
             }
 
             match self.cur() {
@@ -2466,8 +2517,8 @@ impl<'src, 'names> Parser<'src, 'names> {
                 let value = self.parse_expr()?;
                 AstExprTableItem {
                     kind: AstExprTableItemKind::General,
-                    key: Some(Box::new(key)),
-                    value: Box::new(value),
+                    key: Some(key),
+                    value: value,
                 }
             } else if self.cur() == LexemeType::Name && self.peek_is_equals() {
                 let lex = self.cur_lexeme();
@@ -2490,15 +2541,15 @@ impl<'src, 'names> Parser<'src, 'names> {
                 }));
                 AstExprTableItem {
                     kind: AstExprTableItemKind::Record,
-                    key: Some(Box::new(key)),
-                    value: Box::new(value),
+                    key: Some(key),
+                    value: value,
                 }
             } else {
                 let value = self.parse_expr()?;
                 AstExprTableItem {
                     kind: AstExprTableItemKind::List,
                     key: None,
-                    value: Box::new(value),
+                    value: value,
                 }
             };
 
@@ -2972,7 +3023,7 @@ impl<'src, 'names> Parser<'src, 'names> {
                     self.expect_match(b')', &open)?;
                     return Ok(AstType::Typeof(Box::new(AstTypeTypeof {
                         location: Location::new(begin, end.end),
-                        expr: Box::new(expr),
+                        expr: expr,
                     })));
                 }
 
@@ -3255,6 +3306,23 @@ pub fn parse_integer_literal(text: &[u8]) -> (i64, ConstantNumberParseResult) {
 
 #[cfg(test)]
 mod tests {
+    // (children that used to be boxed are inline now)
+    trait AsRefExpr {
+        type T: ?Sized;
+        fn as_ref_expr(&self) -> &Self::T;
+    }
+    impl AsRefExpr for AstExpr {
+        type T = AstExpr;
+        fn as_ref_expr(&self) -> &AstExpr {
+            self
+        }
+    }
+    impl<U: ?Sized> AsRefExpr for Box<U> {
+        type T = U;
+        fn as_ref_expr(&self) -> &U {
+            self
+        }
+    }
     use super::*;
 
     fn parse_ok(src: &str) -> AstStatBlock {
@@ -3283,7 +3351,7 @@ mod tests {
         let root = parse_ok("local x = 1 + 2 * 3\nreturn x");
         assert_eq!(root.body.len(), 2);
 
-        let AstStat::Local(local) = root.body[0].as_ref() else {
+        let AstStat::Local(local) = root.body[0].as_ref_expr() else {
             panic!("expected local");
         };
         assert_eq!(local.vars.len(), 1);
@@ -3295,31 +3363,31 @@ mod tests {
     fn precedence_matches_lua() {
         // 1 + 2 * 3 => 1 + (2 * 3)
         let root = parse_ok("return 1 + 2 * 3");
-        let AstStat::Return(ret) = root.body[0].as_ref() else { panic!() };
-        let AstExpr::Binary(add) = ret.list[0].as_ref() else { panic!() };
+        let AstStat::Return(ret) = root.body[0].as_ref_expr() else { panic!() };
+        let AstExpr::Binary(add) = ret.list[0].as_ref_expr() else { panic!() };
         assert_eq!(add.op, AstExprBinaryOp::Add);
-        assert!(matches!(add.right.as_ref(), AstExpr::Binary(b) if b.op == AstExprBinaryOp::Mul));
+        assert!(matches!(add.right.as_ref_expr(), AstExpr::Binary(b) if b.op == AstExprBinaryOp::Mul));
 
         // -2 ^ 2 => -(2 ^ 2)
         let root = parse_ok("return -2 ^ 2");
-        let AstStat::Return(ret) = root.body[0].as_ref() else { panic!() };
-        let AstExpr::Unary(un) = ret.list[0].as_ref() else { panic!() };
+        let AstStat::Return(ret) = root.body[0].as_ref_expr() else { panic!() };
+        let AstExpr::Unary(un) = ret.list[0].as_ref_expr() else { panic!() };
         assert_eq!(un.op, AstExprUnaryOp::Minus);
-        assert!(matches!(un.expr.as_ref(), AstExpr::Binary(b) if b.op == AstExprBinaryOp::Pow));
+        assert!(matches!(un.expr.as_ref_expr(), AstExpr::Binary(b) if b.op == AstExprBinaryOp::Pow));
 
         // a .. b .. c is right associative
         let root = parse_ok("return a .. b .. c");
-        let AstStat::Return(ret) = root.body[0].as_ref() else { panic!() };
-        let AstExpr::Binary(concat) = ret.list[0].as_ref() else { panic!() };
+        let AstStat::Return(ret) = root.body[0].as_ref_expr() else { panic!() };
+        let AstExpr::Binary(concat) = ret.list[0].as_ref_expr() else { panic!() };
         assert_eq!(concat.op, AstExprBinaryOp::Concat);
-        assert!(matches!(concat.right.as_ref(), AstExpr::Binary(b) if b.op == AstExprBinaryOp::Concat));
+        assert!(matches!(concat.right.as_ref_expr(), AstExpr::Binary(b) if b.op == AstExprBinaryOp::Concat));
     }
 
     #[test]
     fn parses_functions_and_calls() {
         let root = parse_ok("function t:m(a, b, ...)\n  return a + b\nend");
-        let AstStat::Function(func) = root.body[0].as_ref() else { panic!() };
-        assert!(matches!(func.name.as_ref(), AstExpr::IndexName(i) if i.op == ':'));
+        let AstStat::Function(func) = root.body[0].as_ref_expr() else { panic!() };
+        assert!(matches!(func.name.as_ref_expr(), AstExpr::IndexName(i) if i.op == ':'));
         assert!(func.func.self_local.is_some());
         assert_eq!(func.func.args.len(), 2);
         assert!(func.func.vararg);
@@ -3337,12 +3405,12 @@ mod tests {
     fn parses_tables_and_interp() {
         parse_ok("local t = { 1, 2, x = 3, [4] = 5 }");
         let root = parse_ok("return `hello {name}!`");
-        let AstStat::Return(ret) = root.body[0].as_ref() else { panic!() };
-        let AstExpr::InterpString(interp) = ret.list[0].as_ref() else { panic!() };
+        let AstStat::Return(ret) = root.body[0].as_ref_expr() else { panic!() };
+        let AstExpr::InterpString(interp) = ret.list[0].as_ref_expr() else { panic!() };
         assert_eq!(interp.strings.len(), 2);
         assert_eq!(interp.expressions.len(), 1);
-        assert_eq!(interp.strings[0].as_ref(), b"hello ");
-        assert_eq!(interp.strings[1].as_ref(), b"!");
+        assert_eq!(interp.strings[0].as_ref_expr(), b"hello ");
+        assert_eq!(interp.strings[1].as_ref_expr(), b"!");
     }
 
     #[test]

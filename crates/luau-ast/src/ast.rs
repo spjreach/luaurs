@@ -167,7 +167,7 @@ pub struct AstAttr {
     pub location: Location,
     /// C++ field `type`.
     pub kind: AstAttrKind,
-    pub args: Vec<Box<AstExpr>>,
+    pub args: Vec<AstExpr>,
     /// Deprecated attributes can carry a name (second C++ constructor).
     pub name: AstName,
 }
@@ -184,7 +184,7 @@ impl AstAttr {
         };
 
         if info.deprecated && !self.args.is_empty() {
-            if let AstExpr::Table(table) = self.args[0].as_ref() {
+            if let AstExpr::Table(table) = &self.args[0] {
                 if let Some(expr) = table.get_record(b"use") {
                     if let AstExpr::ConstantString(value) = expr {
                         info.use_ = Some(String::from_utf8_lossy(&value.value).into_owned());
@@ -380,7 +380,7 @@ impl std::fmt::Display for AstExprBinaryOp {
 #[derive(Debug, Clone)]
 pub struct AstExprGroup {
     pub location: Location,
-    pub expr: Box<AstExpr>,
+    pub expr: AstExpr,
 }
 
 /// C++ `AstExprConstantNil`.
@@ -473,12 +473,12 @@ pub struct AstExprVarargs {
 #[derive(Debug, Clone)]
 pub struct AstExprCall {
     pub location: Location,
-    pub func: Box<AstExpr>,
+    pub func: AstExpr,
     /// Only filled specifically for `t:f<<A, B>>()`; in `f<<A, B>>()` the
     /// annotation is parsed as the `f<<A, B>>` expression, which is then
     /// called (see C++ comment).
     pub type_arguments: Vec<AstTypeOrPack>,
-    pub args: Vec<Box<AstExpr>>,
+    pub args: Vec<AstExpr>,
     /// Method call with implicit self (`m:foo()`) (C++ field `self`).
     pub self_: bool,
     /// Direct table call (`{...}()`); set post-construction in C++.
@@ -490,7 +490,7 @@ pub struct AstExprCall {
 #[derive(Debug, Clone)]
 pub struct AstExprIndexName {
     pub location: Location,
-    pub expr: Box<AstExpr>,
+    pub expr: AstExpr,
     pub index: AstName,
     pub index_location: Location,
     pub op_position: Position,
@@ -504,8 +504,8 @@ pub struct AstExprIndexName {
 #[derive(Debug, Clone)]
 pub struct AstExprIndexExpr {
     pub location: Location,
-    pub expr: Box<AstExpr>,
-    pub index: Box<AstExpr>,
+    pub expr: AstExpr,
+    pub index: AstExpr,
 }
 
 /// C++ `AstExprFunction`.
@@ -546,8 +546,8 @@ pub enum AstExprTableItemKind {
 pub struct AstExprTableItem {
     pub kind: AstExprTableItemKind,
     /// C++ comment: "can be nullptr!"
-    pub key: Option<Box<AstExpr>>,
-    pub value: Box<AstExpr>,
+    pub key: Option<AstExpr>,
+    pub value: AstExpr,
 }
 
 /// C++ `AstExprTable`.
@@ -566,9 +566,9 @@ impl AstExprTable {
             if item.kind != AstExprTableItemKind::Record {
                 return None;
             }
-            match item.key.as_deref() {
+            match item.key.as_ref() {
                 Some(AstExpr::ConstantString(value)) if value.value.as_ref() == key => {
-                    Some(item.value.as_ref())
+                    Some(&item.value)
                 }
                 _ => None,
             }
@@ -581,7 +581,7 @@ impl AstExprTable {
 pub struct AstExprUnary {
     pub location: Location,
     pub op: AstExprUnaryOp,
-    pub expr: Box<AstExpr>,
+    pub expr: AstExpr,
 }
 
 /// C++ `AstExprBinary`.
@@ -589,15 +589,15 @@ pub struct AstExprUnary {
 pub struct AstExprBinary {
     pub location: Location,
     pub op: AstExprBinaryOp,
-    pub left: Box<AstExpr>,
-    pub right: Box<AstExpr>,
+    pub left: AstExpr,
+    pub right: AstExpr,
 }
 
 /// C++ `AstExprTypeAssertion`: `expr :: annotation`.
 #[derive(Debug, Clone)]
 pub struct AstExprTypeAssertion {
     pub location: Location,
-    pub expr: Box<AstExpr>,
+    pub expr: AstExpr,
     pub annotation: Box<AstType>,
 }
 
@@ -605,11 +605,11 @@ pub struct AstExprTypeAssertion {
 #[derive(Debug, Clone)]
 pub struct AstExprIfElse {
     pub location: Location,
-    pub condition: Box<AstExpr>,
+    pub condition: AstExpr,
     pub has_then: bool,
-    pub true_expr: Box<AstExpr>,
+    pub true_expr: AstExpr,
     pub has_else: bool,
-    pub false_expr: Box<AstExpr>,
+    pub false_expr: AstExpr,
     /// Active for `if local` / `if const` expressions; `condition_local` is
     /// bound to `condition` and in scope for `true_expr` only.
     pub condition_local: Option<Arc<AstLocal>>,
@@ -626,14 +626,14 @@ pub struct AstExprIfElse {
 pub struct AstExprInterpString {
     pub location: Location,
     pub strings: Vec<Box<[u8]>>,
-    pub expressions: Vec<Box<AstExpr>>,
+    pub expressions: Vec<AstExpr>,
 }
 
 /// C++ `AstExprInstantiate`: `f<<T>>`.
 #[derive(Debug, Clone)]
 pub struct AstExprInstantiate {
     pub location: Location,
-    pub expr: Box<AstExpr>,
+    pub expr: AstExpr,
     pub type_arguments: Vec<AstTypeOrPack>,
 }
 
@@ -641,7 +641,7 @@ pub struct AstExprInstantiate {
 #[derive(Debug, Clone)]
 pub struct AstExprError {
     pub location: Location,
-    pub expressions: Vec<Box<AstExpr>>,
+    pub expressions: Vec<AstExpr>,
     pub message_index: u32,
 }
 
@@ -836,7 +836,7 @@ pub struct AstStatBlock {
 pub struct AstStatIf {
     pub location: Location,
     pub has_semicolon: bool,
-    pub condition: Box<AstExpr>,
+    pub condition: AstExpr,
     pub thenbody: Box<AstStatBlock>,
     /// The `else`/`elseif` body; absent for `if ... end`.
     pub elsebody: Option<Box<AstStat>>,
@@ -856,7 +856,7 @@ pub struct AstStatIf {
 pub struct AstStatWhile {
     pub location: Location,
     pub has_semicolon: bool,
-    pub condition: Box<AstExpr>,
+    pub condition: AstExpr,
     pub body: Box<AstStatBlock>,
     pub has_do: bool,
     pub do_location: Location,
@@ -874,7 +874,7 @@ pub struct AstStatWhile {
 pub struct AstStatRepeat {
     pub location: Location,
     pub has_semicolon: bool,
-    pub condition: Box<AstExpr>,
+    pub condition: AstExpr,
     pub body: Box<AstStatBlock>,
     /// C++ field `DEPRECATED_hasUntil`.
     pub deprecated_has_until: bool,
@@ -899,7 +899,7 @@ pub struct AstStatContinue {
 pub struct AstStatReturn {
     pub location: Location,
     pub has_semicolon: bool,
-    pub list: Vec<Box<AstExpr>>,
+    pub list: Vec<AstExpr>,
 }
 
 /// C++ `AstStatExpr`: expression statement.
@@ -907,7 +907,7 @@ pub struct AstStatReturn {
 pub struct AstStatExpr {
     pub location: Location,
     pub has_semicolon: bool,
-    pub expr: Box<AstExpr>,
+    pub expr: AstExpr,
 }
 
 /// C++ `AstStatLocal`.
@@ -916,7 +916,7 @@ pub struct AstStatLocal {
     pub location: Location,
     pub has_semicolon: bool,
     pub vars: Vec<Arc<AstLocal>>,
-    pub values: Vec<Box<AstExpr>>,
+    pub values: Vec<AstExpr>,
     pub is_const: bool,
     pub is_exported: bool,
     /// If this statement exports a binding, the location of `const`/`local`.
@@ -930,10 +930,10 @@ pub struct AstStatFor {
     pub location: Location,
     pub has_semicolon: bool,
     pub var: Arc<AstLocal>,
-    pub from: Box<AstExpr>,
-    pub to: Box<AstExpr>,
+    pub from: AstExpr,
+    pub to: AstExpr,
     /// Optional step expression (C++ `AstExpr* step`).
-    pub step: Option<Box<AstExpr>>,
+    pub step: Option<AstExpr>,
     pub body: Box<AstStatBlock>,
     pub has_do: bool,
     pub do_location: Location,
@@ -945,7 +945,7 @@ pub struct AstStatForIn {
     pub location: Location,
     pub has_semicolon: bool,
     pub vars: Vec<Arc<AstLocal>>,
-    pub values: Vec<Box<AstExpr>>,
+    pub values: Vec<AstExpr>,
     pub body: Box<AstStatBlock>,
     pub has_in: bool,
     pub in_location: Location,
@@ -958,8 +958,8 @@ pub struct AstStatForIn {
 pub struct AstStatAssign {
     pub location: Location,
     pub has_semicolon: bool,
-    pub vars: Vec<Box<AstExpr>>,
-    pub values: Vec<Box<AstExpr>>,
+    pub vars: Vec<AstExpr>,
+    pub values: Vec<AstExpr>,
 }
 
 /// C++ `AstStatCompoundAssign`.
@@ -969,8 +969,8 @@ pub struct AstStatCompoundAssign {
     pub has_semicolon: bool,
     /// C++ uses `AstExprBinary::Op` (`+=`, `-=` ...).
     pub op: AstExprBinaryOp,
-    pub var: Box<AstExpr>,
-    pub value: Box<AstExpr>,
+    pub var: AstExpr,
+    pub value: AstExpr,
 }
 
 /// C++ `AstStatFunction`.
@@ -978,7 +978,7 @@ pub struct AstStatCompoundAssign {
 pub struct AstStatFunction {
     pub location: Location,
     pub has_semicolon: bool,
-    pub name: Box<AstExpr>,
+    pub name: AstExpr,
     pub func: Arc<AstExprFunction>,
 }
 
@@ -1105,7 +1105,7 @@ pub struct AstStatClass {
     pub has_semicolon: bool,
     pub name: Arc<AstLocal>,
     /// Superclass expression; nullable in C++ (`AstExpr* super`).
-    pub super_: Option<Box<AstExpr>>,
+    pub super_: Option<AstExpr>,
     pub members: Vec<AstClassMember>,
     pub exported: bool,
     pub open: bool,
@@ -1150,7 +1150,7 @@ pub struct AstStatDeclareExternType {
 pub struct AstStatError {
     pub location: Location,
     pub has_semicolon: bool,
-    pub expressions: Vec<Box<AstExpr>>,
+    pub expressions: Vec<AstExpr>,
     pub statements: Vec<Box<AstStat>>,
     pub message_index: u32,
 }
@@ -1362,7 +1362,7 @@ pub struct AstTypeFunction {
 #[derive(Debug, Clone)]
 pub struct AstTypeTypeof {
     pub location: Location,
-    pub expr: Box<AstExpr>,
+    pub expr: AstExpr,
 }
 
 /// C++ `AstTypeOptional`: the `?` of `T?`, a `nil` member of the
