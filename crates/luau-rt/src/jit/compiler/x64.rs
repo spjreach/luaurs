@@ -53,6 +53,7 @@ const OFF_NODE_KEYTT: i32 = (offset_of!(LuaNode, key) + offset_of!(TKey, ttnext)
 const OFF_MARKED: i32 = offset_of!(GCheader, marked) as i32;
 const OFF_TS_LEN: i32 = offset_of!(TString, len) as i32;
 const OFF_TS_HASH: i32 = offset_of!(TString, hash) as i32;
+const OFF_TS_DATA: i32 = offset_of!(TString, data) as i32;
 const OFF_TOTALBYTES: i32 = offset_of!(global_State, totalbytes) as i32;
 const OFF_GCTHRESHOLD: i32 = offset_of!(global_State, GCthreshold) as i32;
 const OFF_T_META: i32 = offset_of!(LuaTable, metatable) as i32;
@@ -475,7 +476,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     };
     // a trace that allocates checks for GC work at its back edge (and exits
     // for the collector to run: nothing collects while a trace runs)
-    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::NumToStr(_) | Op::Builtin { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::MakeClosure { .. } | Op::CallC { .. }));
+    let allocates = t.insts.iter().any(|x| matches!(x.op, Op::NewTable { .. } | Op::DupTable { .. } | Op::NumToStr(_) | Op::StrSub { .. } | Op::Builtin { .. } | Op::TSet { .. } | Op::CCall { .. } | Op::Concat { .. } | Op::UStore { .. } | Op::MakeClosure { .. } | Op::CallC { .. }));
 
     // stores whose slot already holds the value's type: an earlier load of
     // that slot checked it, and nothing since could have changed any
@@ -1145,6 +1146,26 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 if let Home::G(d) = dst {
                     a.load(d, R::Rdx, OFF_CI_FUNC);
                     a.load(d, d, 0);
+                }
+            }
+            Op::StrByte { s, i: ix, snap } => {
+                let sr = g(*s)?;
+                let ir = g(*ix)?;
+                a.cmp32_rm(ir, sr, OFF_TS_LEN);
+                a.jcc(Cond::AE, stub(*snap));
+                a.mov_rr32(R::Rax, ir);
+                a.add_rr(R::Rax, sr);
+                a.movzx8(R::Rax, R::Rax, OFF_TS_DATA);
+                if let Home::F(d) = dst {
+                    a.cvtsi2sd64(d, R::Rax);
+                }
+            }
+            Op::StrSub { s, i: x, j: y } => {
+                let live = live_across(i);
+                let cache = Box::leak(Box::new([[0u64; 4]; 128])) as *mut _ as u64;
+                call_out(&mut a, &live, helpers::str_sub as usize, &[Arg::L, Arg::G(g(*s)?), Arg::F(f(*x)?), Arg::F(f(*y)?), Arg::Imm(cache)]);
+                if let Home::G(d) = dst {
+                    a.mov_rr(d, R::Rax);
                 }
             }
             Op::NumToStr(x) => {
@@ -2669,6 +2690,40 @@ mod helpers {
             (*L).top = res;
         }
         count
+    }
+
+    /// string.sub of a string and two numbers, as `lstrlib::str_sub`.
+    /// `cache`: (string, start | end << 32, GC_EPOCH, result), direct
+    /// mapped; an entry counts only in the epoch it was filled in (see
+    /// `num_tostring`).
+    pub unsafe extern "sysv64" fn str_sub(L: *mut lua_State, s: *mut TString, i: f64, j: f64, cache: *mut [[u64; 4]; 128]) -> *mut TString {
+        let epoch = crate::lgc::GC_EPOCH.load(std::sync::atomic::Ordering::Relaxed);
+        let (ib, jb) = (i.to_bits(), j.to_bits());
+        let h = ((s as u64 ^ ib.rotate_left(17) ^ jb.rotate_left(41)).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 57) as usize;
+        let e = &mut (*cache)[h];
+        let key = ib ^ jb.rotate_left(32);
+        if e[0] == s as u64 && e[1] == key && e[2] == epoch && e[3] != 0 {
+            return e[3] as *mut TString;
+        }
+        let r = str_sub_raw(L, s, i, j);
+        *e = [s as u64, key, epoch, r as u64];
+        r
+    }
+
+    unsafe fn str_sub_raw(L: *mut lua_State, s: *mut TString, i: f64, j: f64) -> *mut TString {
+        let bytes = crate::lobject::sbytes(s);
+        let l = bytes.len();
+        let rel = |pos: i32| -> i32 {
+            let pos = if pos < 0 { pos + l as i32 + 1 } else { pos };
+            if pos >= 0 { pos } else { 0 }
+        };
+        let start = rel(crate::lvmexecute::d2i_trunc(i)).max(1);
+        let end = rel(crate::lvmexecute::d2i_trunc(j)).min(l as i32);
+        if start <= end {
+            crate::lstring::luaS_newlstr(L, &bytes[start as usize - 1..end as usize])
+        } else {
+            crate::lstring::luaS_newlstr(L, b"")
+        }
     }
 
     /// tostring of a number. `cache`: (number bits, GC_EPOCH, string),

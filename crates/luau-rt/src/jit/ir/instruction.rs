@@ -112,6 +112,11 @@ pub enum Op {
     Random { state: usize },
     /// `tostring` of a number: its string (allocates)
     NumToStr(Ref),
+    /// byte `i` (0-based) of string `s`, as a number; exits when `i` is
+    /// outside the string
+    StrByte { s: Ref, i: Ref, snap: SnapId },
+    /// `string.sub(s, i, j)` of numbers i, j (allocates)
+    StrSub { s: Ref, i: Ref, j: Ref },
     /// a function trace's RETURN into another call of the same function
     /// (down-recursion): exits unless the frame returns to the caller
     /// whose savedpc is `ret` (one of this function's call sites) and isn't
@@ -314,6 +319,8 @@ impl Inst {
             GuardTruthy { a, .. } => vec![*a],
             GuardSame { a, k, .. } | GuardDiff { a, k, .. } => vec![*a, *k],
             StrCmp { a, b } => vec![*a, *b],
+            StrByte { s, i, .. } => vec![*s, *i],
+            StrSub { s, i, j } => vec![*s, *i, *j],
             Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) | Mod(a, b) | Pow(a, b) | IDiv(a, b) | AddI32(a, b) | AndI32(a, b) => {
                 vec![*a, *b]
             }
@@ -359,7 +366,7 @@ impl Inst {
         use Op::*;
         match &self.op {
             SLoad { guarded: true, snap, .. } => Some(*snap),
-            Guard { snap, .. } | NumToI64 { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } | GuardVecEq { snap, .. } | VargLoad { snap, .. } | CloseUpvals { snap, .. } | CallC { snap, .. } | UPtr { snap, .. } | GuardTop { snap, .. } | PopFrame { snap, .. } => {
+            Guard { snap, .. } | NumToI64 { snap, .. } | GuardTruthy { snap, .. } | GuardSame { snap, .. } | GuardDiff { snap, .. } | NumToI32 { snap, .. } | XLoad { snap, .. } | GuardPlainTable { snap, .. } | GuardFlag { snap, .. } | ULoad { snap, .. } | GuardProto { snap, .. } | HRef { snap, .. } | GuardUvSlot { snap, .. } | Builtin { snap, .. } | TMeta { snap, .. } | HMiss { snap, .. } | GuardCFunc { snap, .. } | TSet { snap, .. } | CCall { snap, .. } | SReload { snap, .. } | Concat { snap, .. } | UStore { snap, .. } | GuardVecEq { snap, .. } | VargLoad { snap, .. } | CloseUpvals { snap, .. } | CallC { snap, .. } | UPtr { snap, .. } | GuardTop { snap, .. } | PopFrame { snap, .. } | StrByte { snap, .. } => {
                 Some(*snap)
             }
             _ => None,

@@ -2055,6 +2055,31 @@ impl Recorder {
                 return Ok(());
             }
         }
+        if bfid == B::StringSub as u8 && nres == 1 && (nargs == 2 || nargs == 3) && self.b.trace.ty(args[0]) == IrType::String && args[1..nargs].iter().all(|a| self.b.trace.ty(*a) == IrType::Number) && !crate::trace_flag!("LUAU_TRACE_NOSTRSUB") {
+            self.guard_safeenv(clr);
+            let j = if nargs == 3 { args[2] } else { self.b.knum(-1.0) };
+            let v = self.b.emit(Op::StrSub { s: args[0], i: args[1], j }, IrType::String);
+            self.b.set_slot(ra, v);
+            self.pending = Some((None, 0, call_at as u32 + 1, false));
+            return Ok(());
+        }
+        if bfid == B::StringByte as u8 && nres == 1 && (nargs == 1 || nargs == 2) && self.b.trace.ty(args[0]) == IrType::String && (nargs == 1 || self.b.trace.ty(args[1]) == IrType::Number) && !crate::trace_flag!("LUAU_TRACE_NOSTRBYTE") {
+            // s:byte(i): one byte, inline (an index outside the string -
+            // also a negative one - exits before the FASTCALL)
+            self.guard_safeenv(clr);
+            let snap = self.b.snapshot();
+            let i0 = if nargs == 2 {
+                let i = self.b.emit(Op::NumToI32 { a: args[1], snap }, IrType::I32);
+                let m1 = self.b.ki32(-1);
+                self.b.emit(Op::AddI32(i, m1), IrType::I32)
+            } else {
+                self.b.ki32(0)
+            };
+            let v = self.b.emit(Op::StrByte { s: args[0], i: i0, snap }, IrType::Number);
+            self.b.set_slot(ra, v);
+            self.pending = Some((None, 0, call_at as u32 + 1, false));
+            return Ok(());
+        }
         if bfid == B::Tostring as u8 && nres == 1 && nargs == 1 && self.b.trace.ty(args[0]) == IrType::Number && !crate::trace_flag!("LUAU_TRACE_NOTOSTR") {
             // tostring(number): formatted and interned directly
             self.guard_safeenv(clr);
@@ -2532,6 +2557,28 @@ impl Recorder {
         let mut args = [Ref(0); 3];
         for k in 0..nargs {
             args[k] = self.read(a + 1 + k, base)?;
+        }
+        if bfid == luau_common::bytecode::BuiltinFunction::StringSub as u8 && nres == 1 && (nargs == 2 || nargs == 3) && self.b.trace.ty(args[0]) == IrType::String && args[1..nargs].iter().all(|a| self.b.trace.ty(*a) == IrType::Number) && !crate::trace_flag!("LUAU_TRACE_NOSTRSUB") {
+            // s:sub(i, j): the substring directly
+            let j = if nargs == 3 { args[2] } else { self.b.knum(-1.0) };
+            let v = self.b.emit(Op::StrSub { s: args[0], i: args[1], j }, IrType::String);
+            self.b.set_slot(a, v);
+            return Ok(());
+        }
+        if bfid == luau_common::bytecode::BuiltinFunction::StringByte as u8 && nres == 1 && (nargs == 1 || nargs == 2) && self.b.trace.ty(args[0]) == IrType::String && (nargs == 1 || self.b.trace.ty(args[1]) == IrType::Number) && !crate::trace_flag!("LUAU_TRACE_NOSTRBYTE") {
+            // s:byte(i): one byte, inline (outside the string: exit at the
+            // CALL)
+            let snap = self.b.snapshot();
+            let i0 = if nargs == 2 {
+                let i = self.b.emit(Op::NumToI32 { a: args[1], snap }, IrType::I32);
+                let m1 = self.b.ki32(-1);
+                self.b.emit(Op::AddI32(i, m1), IrType::I32)
+            } else {
+                self.b.ki32(0)
+            };
+            let v = self.b.emit(Op::StrByte { s: args[0], i: i0, snap }, IrType::Number);
+            self.b.set_slot(a, v);
+            return Ok(());
         }
         if nargs == 1 && nres != 0 && math1_supported(bfid) && self.b.trace.ty(args[0]) == IrType::Number {
             // sqrt / floor / ceil / abs of a number: inline (one result)
@@ -3697,6 +3744,15 @@ pub(crate) fn remap_operands(op: &mut Op, rm: &dyn Fn(Ref) -> Ref) {
             *a = rm(*a);
             *k = rm(*k);
         }
+        StrByte { s, i, .. } => {
+            *s = rm(*s);
+            *i = rm(*i);
+        }
+        StrSub { s, i, j } => {
+            *s = rm(*s);
+            *i = rm(*i);
+            *j = rm(*j);
+        }
         StrCmp { a, b } => {
             *a = rm(*a);
             *b = rm(*b);
@@ -3817,6 +3873,7 @@ pub(crate) fn set_snapshot(op: &mut Op, s: SnapId) {
         | UPtr { snap, .. }
         | GuardTop { snap, .. }
         | PopFrame { snap, .. }
+        | StrByte { snap, .. }
         | UStore { snap, .. } => *snap = s,
         _ => {}
     }

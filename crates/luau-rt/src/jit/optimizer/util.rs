@@ -60,6 +60,8 @@ pub fn map_op(op: &Op, map: &[Ref]) -> Op {
         Op::Neg(a) => Op::Neg(r(*a)),
         Op::Math1(k, a) => Op::Math1(*k, r(*a)),
         Op::NumToStr(a) => Op::NumToStr(r(*a)),
+        Op::StrByte { s, i, snap } => Op::StrByte { s: r(*s), i: r(*i), snap: *snap },
+        Op::StrSub { s, i, j } => Op::StrSub { s: r(*s), i: r(*i), j: r(*j) },
         Op::NumToI32 { a, snap } => Op::NumToI32 { a: r(*a), snap: *snap },
         Op::I32ToNum(a) => Op::I32ToNum(r(*a)),
         Op::AddI32(a, b) => Op::AddI32(r(*a), r(*b)),
