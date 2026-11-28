@@ -45,6 +45,59 @@ fn in_debug_range() -> bool {
     }
 }
 
+/// `Proto::exectarget` bit: compile to native code on the first call (see
+/// [`compile_lazy`]).
+pub const LAZY_BIT: usize = 1 << 30;
+
+/// Compiles `p` if it is still waiting for its first call; returns whether
+/// it has native code now.
+#[cold]
+#[inline(never)]
+pub unsafe fn lazy_compile(p: *mut Proto) -> bool {
+    (*p).exectarget &= !LAZY_BIT;
+    in_debug_range() && x64::compile_proto(p)
+}
+
+unsafe fn mark_tree(p: *mut Proto) {
+    if (*p).execdata.is_null() && (*p).sizecode != 0 {
+        (*p).exectarget |= LAZY_BIT;
+    }
+    for i in 0..(*p).sizep as usize {
+        mark_tree(*(*p).p.add(i));
+    }
+}
+
+/// Like [`compile`], but only the function itself is compiled now; nested
+/// functions are compiled on their first call (most functions of a large
+/// chunk never run, and compiling them all up front costs more than
+/// parsing and compiling the source). `LUAU_CODEGEN_EAGER=1` compiles
+/// everything at once instead.
+pub unsafe fn compile_lazy(L: *mut lua_State, idx: i32) -> (u32, u32) {
+    static EAGER: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *EAGER.get_or_init(|| std::env::var_os("LUAU_CODEGEN_EAGER").is_some_and(|v| v == "1")) {
+        return compile(L, idx);
+    }
+    let o = crate::lapi::luaA_toobject(L, idx);
+    if o.is_null() || !ttisfunction(o) {
+        return (0, 0);
+    }
+    let cl = clvalue(o);
+    if (*cl).isC != 0 {
+        return (0, 0);
+    }
+    let stub = mem::enter_stub();
+    if stub == 0 {
+        return (0, 0);
+    }
+    crate::lvmexecute::ENTER_STUB.store(stub, std::sync::atomic::Ordering::Relaxed);
+    let p = Closure::proto(cl);
+    for i in 0..(*p).sizep as usize {
+        mark_tree(*(*p).p.add(i));
+    }
+    let ok = in_debug_range() && x64::compile_proto(p);
+    (ok as u32, !ok as u32)
+}
+
 unsafe fn compile_tree(p: *mut Proto, stats: &mut (u32, u32)) {
     // (with the tracing JIT on, compiled loops count iterations and hand
     // hot ones to `jit::native_loop_hook`)
@@ -83,6 +136,7 @@ pub unsafe fn compile(L: *mut lua_State, idx: i32) -> (u32, u32) {
 /// suspended inside a helper call may still return into its code, so the
 /// record is kept alive (leaked) rather than freed.
 pub unsafe fn disable(p: *mut Proto) {
+    (*p).exectarget &= !LAZY_BIT;
     if !(*p).execdata.is_null() {
         // keep the code alive: chain it to a parked list freed at exit
         PARKED.lock().unwrap().push((*p).execdata as usize);

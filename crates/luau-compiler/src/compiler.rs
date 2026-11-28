@@ -4130,9 +4130,9 @@ impl<'a> Compiler<'a> {
             return;
         }
         let owner_key = key(owner);
+        let stat_start = before.location().begin;
         for i in start..self.local_stack.len() {
-            let ast_local = self.local_stack[i].clone();
-            let k = local_key(&ast_local);
+            let k = local_key(&self.local_stack[i]);
             let l = *self.locals.get(&k).unwrap();
             if !l.allocated || l.reused || l.captured {
                 continue;
@@ -4141,12 +4141,12 @@ impl<'a> Compiler<'a> {
             if var.owner != owner_key || var.non_lexical_use {
                 continue;
             }
-            let stat_start = before.location().begin;
             let released = match var.last_used {
                 None => true,
                 Some(end) => stat_start.line > end.line || (stat_start.line == end.line && stat_start.column > end.column),
             };
             if released {
+                let ast_local = self.local_stack[i].clone();
                 if self.release_local(k) {
                     let l = *self.locals.get(&k).unwrap();
                     let free = FreeLocal { reg: l.reg, local: l, ast_local: ast_local.clone(), is_argument: i < self.arg_count };

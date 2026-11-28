@@ -4433,7 +4433,7 @@ while argi < argend {
     argi = argi.add(1);
 }
 (*L).top = if (*p).is_vararg != 0 { argi } else { (*ci).top };
-if !(*p).execdata.is_null() {
+if !(*p).execdata.is_null() || lazy_native(p) {
     become native_enter(L, (*p).codeentry, nbase, (*p).k);
 }
 become dispatch(L, (*p).codeentry, nbase, (*p).k);
@@ -4773,7 +4773,7 @@ while argi < argend {
     argi = argi.add(1);
 }
 (*L).top = if (*p).is_vararg != 0 { argi } else { (*ci).top };
-if !(*p).execdata.is_null() {
+if !(*p).execdata.is_null() || lazy_native(p) {
     become native_enter(L, (*p).codeentry, nbase, (*p).k);
 }
 become dispatch(L, (*p).codeentry, nbase, (*p).k);

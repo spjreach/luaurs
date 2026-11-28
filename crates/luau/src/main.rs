@@ -52,7 +52,7 @@ pub unsafe fn maybe_codegen(L: *mut lua_State) {
     if GLOBAL_OPTIONS.codegen || std::env::var_os("LUAU_CODEGEN").is_some_and(|v| v == "1") {
         #[cfg(all(target_arch = "x86_64", windows))]
         {
-            let (ok, skipped) = luau_rt::codegen::compile(L, -1);
+            let (ok, skipped) = luau_rt::codegen::compile_lazy(L, -1);
             if std::env::var_os("LUAU_CODEGEN_STATS").is_some() {
                 eprintln!("codegen: {} functions compiled, {} skipped", ok, skipped);
             }

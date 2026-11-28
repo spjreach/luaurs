@@ -2141,7 +2141,7 @@ pub(crate) unsafe extern "sysv64-unwind" fn native_call(L: *mut lua_State, pc: *
         return if t != 0 { t } else { NATIVE_INTERP };
     }
     let p = Closure::proto(ccl);
-    if (*p).execdata.is_null() {
+    if (*p).execdata.is_null() && ((*p).exectarget & crate::codegen::LAZY_BIT == 0 || !crate::codegen::lazy_compile(p)) {
         return NATIVE_EXIT;
     }
     if ((*L).stack_last as usize).wrapping_sub(argtop as usize) as isize <= (*ccl).stacksize as isize * std::mem::size_of::<TValue>() as isize {
@@ -2319,10 +2319,25 @@ pub(crate) unsafe extern "sysv64-unwind" fn native_return(L: *mut lua_State, pc:
 /// function has it.
 #[inline(always)]
 unsafe extern "sysv64-unwind" fn dispatch_frame(L: *mut lua_State, pc: *const Instruction, base: StkId, k: *mut TValue) {
-    if !(*(*(*L).ci).p).execdata.is_null() {
+    if !(*(*(*L).ci).p).execdata.is_null() || lazy_native((*(*L).ci).p) {
         become native_enter(L, pc, base, k);
     }
     become dispatch(L, pc, base, k)
+}
+
+/// True when `p` was waiting to be compiled on its first call and now has
+/// native code.
+#[inline(always)]
+unsafe fn lazy_native(p: *mut Proto) -> bool {
+    #[cfg(all(target_arch = "x86_64", windows))]
+    {
+        (*p).exectarget & crate::codegen::LAZY_BIT != 0 && crate::codegen::lazy_compile(p)
+    }
+    #[cfg(not(all(target_arch = "x86_64", windows)))]
+    {
+        let _ = p;
+        false
+    }
 }
 
 include!("lvmthreaded.rs");
