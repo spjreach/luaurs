@@ -505,6 +505,7 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
         }
     };
     prepare(&mut t);
+    prune_dead_stores(&mut t);
     let _ = debug::dump_ir(&t);
     let mut link_to = link_to;
     if side_of.is_some() {
@@ -534,6 +535,10 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
             });
             if t.link.is_none() && n.body_entry != 0 && chain_ok && !crate::trace_flag!("LUAU_TRACE_NOBODY") && body_reentry_ok(&t, &reads, &phis, layout, mem) {
                 link_to = compiler::End::Root(n.body_entry);
+                if n.body_regs != 0 {
+                    link_to = compiler::End::RootRegs(n.body_regs, n.body_entry);
+                    t.regs_entry = n.phi_homes;
+                }
             }
             if crate::trace_flag!("LUAU_TRACE_BODYDBG") {
                 eprintln!("[BODY] side {:?} link={:?} body_entry={} layout={} mem={} ok={} reads={:?} phis={:?} last={:?}", side_of, t.link.is_some(), n.body_entry != 0, layout, mem, body_reentry_ok(&t, &reads, &phis, layout, mem), reads, phis, t.snapshots.last().map(|l| l.entries.iter().map(|e| e.slot).collect::<Vec<_>>()));
@@ -637,6 +642,84 @@ fn finish_trace(mut t: trace::Trace, id: trace::TraceId, header: u32, proto: *mu
             }
         }
     });
+}
+
+/// Register liveness of `p`'s bytecode (cached per function; None: not
+/// known). Registers captured by reference count as always live (other
+/// functions read them through their upvalues).
+#[cfg(all(target_arch = "x86_64", windows))]
+fn liveness(p: *mut Proto) -> Option<std::rc::Rc<Vec<crate::codegen::live::Mask>>> {
+    use luau_common::bytecode::{get_op_length, Opcode as O};
+    thread_local! {
+        static CACHE: std::cell::RefCell<state::HashMap<usize, Option<std::rc::Rc<Vec<crate::codegen::live::Mask>>>>> = std::cell::RefCell::new(state::HashMap::default());
+    }
+    if let Some(v) = CACHE.with(|c| c.borrow().get(&(p as usize)).cloned()) {
+        return v;
+    }
+    let r = unsafe {
+        let code = (*p).code;
+        let n = (*p).sizecode as usize;
+        let mut starts = vec![false; n];
+        let mut always: Vec<u8> = Vec::new();
+        let mut i = 0;
+        let mut ok = true;
+        while i < n {
+            starts[i] = true;
+            let insn = *code.add(i);
+            let Ok(o) = O::try_from((insn & 0xff) as u8) else {
+                ok = false;
+                break;
+            };
+            if o == O::Capture && (insn >> 8) & 0xff == 1 {
+                let r = ((insn >> 16) & 0xff) as u8;
+                if !always.contains(&r) {
+                    always.push(r);
+                }
+            }
+            i += get_op_length(o) as usize;
+        }
+        if ok { crate::codegen::live::analyze(code, n, &starts, &always).map(std::rc::Rc::new) } else { None }
+    };
+    CACHE.with(|c| c.borrow_mut().insert(p as usize, r.clone()));
+    r
+}
+
+/// Drops the snapshot entries (stack writes at exits and at the end) of
+/// slots dead where the snapshot resumes: nothing reads them before writing
+/// them again (the stack keeps their older value).
+fn prune_dead_stores(t: &mut trace::Trace) {
+    #[cfg(all(target_arch = "x86_64", windows))]
+    {
+        if t.proto.is_null() || crate::trace_flag!("LUAU_TRACE_NOPRUNE") {
+            return;
+        }
+        let Some(live) = liveness(t.proto) else { return };
+        // (only snapshots of plain guards and the end: an operation that
+        // calls out writes its snapshot to the stack for the code it calls)
+        use ir::instruction::Op;
+        let mut keep = vec![false; t.snapshots.len()];
+        for x in &t.insts {
+            let plain = matches!(
+                x.op,
+                Op::Guard { .. } | Op::GuardTruthy { .. } | Op::GuardSame { .. } | Op::GuardDiff { .. } | Op::NumToI32 { .. } | Op::NumToI64 { .. } | Op::XLoad { .. } | Op::GuardPlainTable { .. } | Op::GuardFlag { .. } | Op::GuardProto { .. } | Op::HRef { .. } | Op::GuardUvSlot { .. } | Op::TMeta { .. } | Op::HMiss { .. } | Op::GuardCFunc { .. } | Op::GuardVecEq { .. } | Op::SLoad { .. } | Op::PopFrame { .. }
+            );
+            if let Some(sid) = x.snapshot() {
+                if !plain {
+                    if let Some(k) = keep.get_mut(sid.0 as usize) {
+                        *k = true;
+                    }
+                }
+            }
+        }
+        let calls = t.insts.iter().any(|x| matches!(x.op, Op::CallC { .. } | Op::CCall { .. } | Op::Concat { .. }));
+        for (k, sn) in t.snapshots.iter_mut().enumerate() {
+            if !sn.frames.is_empty() || sn.top.is_some() || keep[k] || sn.stack_current || calls {
+                continue;
+            }
+            let Some(m) = live.get(sn.pc as usize) else { continue };
+            sn.entries.retain(|e| (e.slot as usize) >= 256 || crate::codegen::live::has(m, e.slot as usize));
+        }
+    }
 }
 
 /// What a root trace's body re-entry relies on (see `x64::compile`):

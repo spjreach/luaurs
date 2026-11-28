@@ -19,8 +19,14 @@ pub struct CompiledTrace {
     /// root trace: where a side trace may jump to run the loop body again
     /// without the pre-loop part (0: none; see `x64::compile`)
     pub body_entry: usize,
+    /// root trace: the body re-entry taking the PHIs' values in their homes
+    /// (`Trace::phi_homes`), not from the stack (0: none)
+    pub body_regs: usize,
     /// root trace: spill slots side traces must leave alone
     pub reserved: u32,
+    /// root trace: (slot, kind 0 gpr / 1 xmm / 2 spill, register or spill
+    /// slot, type) of each PHI - where `body_regs` expects its value
+    pub phi_homes: &'static [(u16, u8, u8, crate::jit::ir::types::IrType)],
 }
 
 pub type TraceFn = unsafe extern "sysv64" fn(*mut crate::lobject::TValue, *mut crate::lobject::lua_State) -> u32;
@@ -32,6 +38,10 @@ pub enum End {
     Loop,
     Root(usize),
     Cell(usize),
+    /// a side trace running its root's body again with the PHIs' values
+    /// moved into their homes: (the root's `body_regs`, its `body_entry` -
+    /// used when the values can't be moved)
+    RootRegs(usize, usize),
 }
 
 /// `t.tag` and `t.link_table` must be set. Side traces (`t.side_of`) have
@@ -48,7 +58,7 @@ pub fn compile(t: &Trace, end: End) -> Result<(CompiledTrace, Vec<Vec<(u16, u8, 
             let _ = std::fs::write(std::path::Path::new(&dir).join(format!("trace-{}{}.bin", t.id.0, if t.side_of.is_some() { "s" } else { "" })), &code.bytes);
         }
         let entry = crate::codegen::mem::with_code(|m| unsafe { m.place(&code.bytes) }).ok_or("out of executable memory")?;
-        Ok((CompiledTrace { entry, size: code.bytes.len(), reentry: entry + code.reentry, body_entry: code.body_entry.map_or(0, |o| entry + o), reserved: code.reserved }, code.exit_regs))
+        Ok((CompiledTrace { entry, size: code.bytes.len(), reentry: entry + code.reentry, body_entry: code.body_entry.map_or(0, |o| entry + o), body_regs: code.body_regs.map_or(0, |o| entry + o), reserved: code.reserved, phi_homes: code.phi_homes }, code.exit_regs))
     }
     #[cfg(not(all(target_arch = "x86_64", windows)))]
     {

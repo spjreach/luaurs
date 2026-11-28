@@ -101,6 +101,10 @@ pub struct Code {
     pub reentry: usize,
     /// offset of the root trace's body re-entry (if it has one)
     pub body_entry: Option<usize>,
+    /// offset of the body re-entry with the PHIs in their homes
+    pub body_regs: Option<usize>,
+    /// see `CompiledTrace::phi_homes`
+    pub phi_homes: &'static [(u16, u8, u8, IrType)],
     /// spill slots side traces must not use
     pub reserved: u32,
     /// see `Trace::exit_regs`
@@ -1652,10 +1656,64 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
         }
         let sn = &t.snapshots[back_snap.0 as usize];
         materialize(&mut a, &home, t, back_snap.0, sn)?;
-        for e in &sn.entries {
-            if !matches!(t.inst(e.value).op, Op::Sunk) {
-                store_value(&mut a, &home, t, e.value, R::R13, e.slot as i32 * TV)?;
+        // (into the root's body with the PHIs' values in registers: when
+        // every PHI's slot has a value here of its type, in a register, a
+        // spill slot, or a number constant)
+        let mut end = end;
+        if let End::RootRegs(regs, body) = end {
+            let mut moves: Vec<(Home, Home)> = Vec::new();
+            let mut consts: Vec<(Home, u64)> = Vec::new();
+            let mut ok = !t.regs_entry.is_empty();
+            for &(slot, kind, idx, ty) in t.regs_entry.iter() {
+                let dst = match kind {
+                    0 => Home::G(gpr_of(idx).ok_or("phi register")?),
+                    1 => Home::F(X(idx)),
+                    _ => Home::S(idx),
+                };
+                let Some(e) = sn.entries.iter().find(|e| e.slot == slot) else {
+                    ok = false;
+                    break;
+                };
+                if t.ty(e.value) != ty {
+                    ok = false;
+                    break;
+                }
+                match (home[e.value.index()], &t.inst(e.value).op) {
+                    (Home::G(_) | Home::F(_) | Home::S(_), _) => moves.push((dst, home[e.value.index()])),
+                    (Home::None, Op::KNum(n)) if ty == IrType::Number => consts.push((dst, n.to_bits())),
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                }
+                // (a gpr home and an xmm value, or the other way: no)
+                if let Some(&(d, s)) = moves.last() {
+                    if matches!((d, s), (Home::G(_), Home::F(_)) | (Home::F(_), Home::G(_))) {
+                        ok = false;
+                        break;
+                    }
+                }
             }
+            if ok {
+                let rest: Vec<crate::jit::snapshots::SnapEntry> = sn.entries.iter().filter(|e| !t.regs_entry.iter().any(|p| p.0 == e.slot)).cloned().collect();
+                store_entries(&mut a, &home, t, &rest)?;
+                parallel_move(&mut a, &moves)?;
+                for (d, bits) in consts {
+                    a.mov_ri64(R::Rax, bits);
+                    match d {
+                        Home::F(x) => a.movq_xr(x, R::Rax),
+                        Home::S(s) => a.store(R::Rsp, spill_off(s), R::Rax),
+                        Home::G(r) => a.mov_rr(r, R::Rax),
+                        Home::None => {}
+                    }
+                }
+                a.mov_ri64(R::Rax, regs as u64);
+                a.jmp_r(R::Rax);
+            }
+            end = if ok { End::RootRegs(regs, body) } else { End::Root(body) };
+        }
+        if !matches!(end, End::RootRegs(..)) {
+            store_entries(&mut a, &home, t, &sn.entries)?;
         }
         if let Some(pf) = t.push {
             // up-recursion: the call's frame, as the interpreter builds it
@@ -1700,6 +1758,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
             a.mov_rr(R::R13, R::R9);
         }
         match end {
+            End::RootRegs(..) => {}
             End::Root(root) => {
                 a.mov_ri64(R::Rax, root as u64);
                 a.jmp_r(R::Rax);
@@ -1804,6 +1863,39 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     } else {
         None
     };
+    // the same, with the PHIs' values already in their homes (a side
+    // trace moves them there): only the pre-loop values come back
+    let mut phi_homes: Vec<(u16, u8, u8, IrType)> = Vec::new();
+    let body_regs = if body_entry.is_some() && !crate::trace_flag!("LUAU_TRACE_NOREGENTRY") {
+        let mut ok = true;
+        for &(j, slot, twin) in &phi_loads {
+            let ty = t.insts[j].ty;
+            match home[j] {
+                _ if twin => ok = false,
+                Home::G(r) => phi_homes.push((slot, 0, r as u8, ty)),
+                Home::F(x) => phi_homes.push((slot, 1, x.0, ty)),
+                Home::S(s) => phi_homes.push((slot, 2, s, ty)),
+                Home::None => {}
+            }
+        }
+        if ok && !phi_homes.is_empty() {
+            let at = a.pos() as usize;
+            for &(v, s) in &saves {
+                match home[v] {
+                    Home::G(r) => a.load(r, R::Rsp, spill_off(s)),
+                    Home::F(x) => a.movups_load(x, R::Rsp, spill_off(s)),
+                    _ => {}
+                }
+            }
+            a.jmp(loop_top);
+            Some(at)
+        } else {
+            phi_homes.clear();
+            None
+        }
+    } else {
+        None
+    };
 
     // exit stubs: write the snapshot's slots back, return its index
     // exit codes: (tag << 16) | snapshot; the high bit: interrupted at the
@@ -1811,7 +1903,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
     let mut snaps: Vec<&Snapshot> = t.snapshots.iter().collect();
     // (a loop resumes at its header; a link where it was going)
     let interrupt_snap = if end == End::Loop { Snapshot { pc: t.start_pc, ..t.snapshots[back_snap.0 as usize].clone() } } else { t.snapshots[back_snap.0 as usize].clone() };
-    if !matches!(end, End::Root(_)) {
+    if !matches!(end, End::Root(_) | End::RootRegs(..)) {
         snaps.push(&interrupt_snap);
     }
     if t.snapshots.len() > 0xffff {
@@ -1826,11 +1918,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
         // (the interrupt exit stores the loop-close snapshot)
         let sid = if k == t.snapshots.len() { back_snap.0 } else { k as u32 };
         materialize(&mut a, &home, t, sid, sn)?;
-        for e in &sn.entries {
-            if !matches!(t.inst(e.value).op, Op::Sunk) {
-                store_value(&mut a, &home, t, e.value, R::R13, e.slot as i32 * TV)?;
-            }
-        }
+        store_entries(&mut a, &home, t, &sn.entries)?;
         if k == t.snapshots.len() {
             a.mov_ri(R::Rax, (0x8000_0000 | tag | back_snap.0) as u64);
         } else {
@@ -1881,7 +1969,7 @@ pub unsafe fn compile(t: &Trace, end: super::End) -> Result<Code, String> {
                 .collect()
         })
         .collect();
-    Ok(Code { bytes: a.code, reentry, body_entry, reserved: reserved as u32, exit_regs })
+    Ok(Code { bytes: a.code, reentry, body_entry, body_regs, phi_homes: Box::leak(phi_homes.into_boxed_slice()), reserved: reserved as u32, exit_regs })
 }
 
 /// 1/v when v is a power of two whose reciprocal is a normal double.
@@ -1933,6 +2021,35 @@ fn load_value(a: &mut Asm, h: Home, ty: IrType, base: R, disp: i32) -> Result<()
 /// Stores IR value `v` as a full TValue (payload + tag) at [base + disp].
 fn store_value(a: &mut Asm, home: &[Home], t: &Trace, v: Ref, base: R, disp: i32) -> Result<(), String> {
     store_value_tag(a, home, t, v, base, disp, true)
+}
+
+/// A snapshot's stores into the stack (sunk tables apart: built before),
+/// with each tag word loaded once for a run of same-typed values.
+fn store_entries(a: &mut Asm, home: &[Home], t: &Trace, entries: &[crate::jit::snapshots::SnapEntry]) -> Result<(), String> {
+    let mut rax: Option<u64> = None;
+    for e in entries {
+        if matches!(t.inst(e.value).op, Op::Sunk) {
+            continue;
+        }
+        let ty = t.ty(e.value);
+        let disp = e.slot as i32 * TV;
+        let plain = matches!(home[e.value.index()], Home::F(_) | Home::G(_)) && ty != IrType::Vector && !crate::trace_flag!("LUAU_TRACE_NOTAGRUN");
+        if !plain {
+            store_value(a, home, t, e.value, R::R13, disp)?;
+            rax = None;
+            continue;
+        }
+        store_value_tag(a, home, t, e.value, R::R13, disp, false)?;
+        let tag = ty.tag().ok_or_else(|| format!("store of a non-Lua value {:?}", ty))?;
+        let extra = if ty == IrType::LightUserdata { LU_TAG_ITERATOR as u32 as u64 } else { 0 };
+        let w = ((tag as u32 as u64) << 32) | extra;
+        if rax != Some(w) {
+            a.mov_ri64(R::Rax, w);
+            rax = Some(w);
+        }
+        a.store(R::R13, disp + OFF_TAGWORD, R::Rax);
+    }
+    Ok(())
 }
 
 /// `store_value`; without the tag word when `tag` is false (the slot holds
@@ -2141,6 +2258,11 @@ fn parallel_move(a: &mut Asm, moves: &[(Home, Home)]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The general register numbered `n`.
+fn gpr_of(n: u8) -> Option<R> {
+    [R::Rax, R::Rcx, R::Rdx, R::Rbx, R::Rsp, R::Rbp, R::Rsi, R::Rdi, R::R8, R::R9, R::R10, R::R11, R::R12, R::R13, R::R14, R::R15].get(n as usize).copied()
 }
 
 fn mov_home(a: &mut Asm, d: Home, s: Home) -> Result<(), String> {
