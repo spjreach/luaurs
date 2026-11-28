@@ -297,10 +297,74 @@ pub(super) fn emit_inline_call(a: &mut Asm, insn: u32, npc: usize, fallback: Lab
     a.jmp_table(R::Rdx, R::Rcx);
 }
 
+/// CALL of the running closure itself (recursion) with fixed arguments:
+/// the callee's proto is `p`, the one being compiled - its frame size,
+/// parameters, constants and entry (`entry`, the label of its first
+/// instruction) are known, so the frame is built without looking them up
+/// and the jump is direct. Another closure branches to `other`; no room
+/// (or an interrupt) to `fallback`, before changing any state.
+pub(super) unsafe fn emit_self_call(a: &mut Asm, insn: u32, npc: usize, p: *mut Proto, entry: Label, other: Label, fallback: Label) {
+    let ra = a_of(insn);
+    let nparams = b_of(insn) - 1;
+    let nresults = c_of(insn) - 1;
+    let stack = (*p).maxstacksize as i32 * 16;
+    let numparams = (*p).numparams as i32;
+    a.load(R::Rax, R::R12, OFF_GLOBAL);
+    a.cmp64_mi(R::Rax, OFF_INTERRUPT, 0);
+    a.jcc(Cond::NE, fallback);
+    a.cmp32_mi(R::R13, reg(ra) + TT, LUA_TFUNCTION);
+    a.jcc(Cond::NE, fallback);
+    a.load(R::Rax, R::R13, reg(ra));
+    a.cmp_rr(R::Rax, R::R15);
+    a.jcc(Cond::NE, other);
+    a.load(R::Rcx, R::R12, OFF_CI);
+    a.cmp_rm(R::Rcx, R::R12, OFF_END_CI);
+    a.jcc(Cond::E, fallback);
+    // r8 = argtop; stack room: stack_last - argtop > stacksize * 16
+    a.lea(R::R8, R::R13, reg(ra + 1 + nparams));
+    a.load(R::R9, R::R12, OFF_STACK_LAST);
+    a.sub_rr(R::R9, R::R8);
+    a.cmp_ri(R::R9, stack);
+    a.jcc(Cond::LE, fallback);
+    // commit: caller savedpc, new CallInfo (its proto: the caller's)
+    a.mov_ri(R::R11, npc as u64);
+    a.store(R::Rcx, OFF_CI_SAVEDPC, R::R11);
+    a.load(R::Rdx, R::Rcx, OFF_CI_P);
+    a.add_ri(R::Rcx, SIZE_CI);
+    a.store(R::R12, OFF_CI, R::Rcx);
+    a.lea(R::R9, R::R13, reg(ra));
+    a.store(R::Rcx, OFF_CI_FUNC, R::R9);
+    a.store(R::Rcx, OFF_CI_P, R::Rdx);
+    a.add_ri(R::R9, 16); // new base
+    a.store(R::Rcx, OFF_CI_BASE, R::R9);
+    a.lea(R::R10, R::R8, stack); // ci->top = argtop + stacksize
+    a.store(R::Rcx, OFF_CI_TOP, R::R10);
+    a.store64_i(R::Rcx, OFF_CI_SAVEDPC, 0);
+    a.store32_i(R::Rcx, OFF_CI_FLAGS, 0);
+    a.store32_i(R::Rcx, OFF_CI_NRESULTS, nresults as u32);
+    a.store(R::R12, OFF_BASE, R::R9);
+    a.add32_mi(R::Rdx, OFF_P_EXECCOUNT, 1);
+    // the missing parameters are nil
+    for k in nparams..numparams {
+        a.store64_i(R::R9, reg(k) + TAGWORD, 0);
+    }
+    a.store(R::R12, OFF_TOP, R::R10);
+    // (constants and closure: the same)
+    a.mov_rr(R::R13, R::R9);
+    a.jmp(entry);
+}
+
 /// RETURN with a fixed number of values to a caller with native code: pops
 /// the frame inline (as `native_return`); branches to `fallback` before
 /// changing state when the inline path doesn't apply.
 pub(super) fn emit_inline_return(a: &mut Asm, insn: u32, fallback: Label) {
+    emit_inline_return_to(a, insn, fallback, None)
+}
+
+/// `emit_inline_return`; `same`: this function's proto and its call sites'
+/// continuations (savedpc, label) - a return into this same function (its
+/// recursion) continues there directly, its constants already loaded.
+pub(super) fn emit_inline_return_to(a: &mut Asm, insn: u32, fallback: Label, same: Option<(*mut Proto, &[(usize, Label)])>) {
     let ra = a_of(insn);
     let nvals = b_of(insn) - 1;
     a.load(R::Rax, R::R12, OFF_GLOBAL);
@@ -355,6 +419,22 @@ pub(super) fn emit_inline_return(a: &mut Asm, insn: u32, fallback: Label) {
     a.bind(multret);
     a.store(R::R12, OFF_TOP, R::R11);
     a.bind(topset);
+    if let Some((p, sites)) = same.filter(|s| !s.1.is_empty()) {
+        // (the caller: this function - constants as they are)
+        let other = a.label();
+        a.mov_ri64(R::R11, p as u64);
+        a.cmp_rr(R::Rax, R::R11);
+        a.jcc(Cond::NE, other);
+        a.load(R::R15, R::Rdx, OFF_CI_FUNC);
+        a.load(R::R15, R::R15, 0);
+        a.load(R::Rcx, R::Rdx, OFF_CI_SAVEDPC);
+        for &(pc, l) in sites {
+            a.mov_ri64(R::R11, pc as u64);
+            a.cmp_rr(R::Rcx, R::R11);
+            a.jcc(Cond::E, l);
+        }
+        a.bind(other);
+    }
     // continue the caller at its savedpc
     a.load(R::R14, R::Rax, OFF_P_K);
     a.load(R::R15, R::Rdx, OFF_CI_FUNC);

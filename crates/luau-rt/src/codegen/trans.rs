@@ -75,6 +75,9 @@ struct Tr<'f> {
     /// resume points after the fallback CALL of an inlined builtin: entered
     /// from the interpreter only, which is sent straight back
     resume_exit: Vec<Option<Label>>,
+    /// (savedpc, label) after each CALL of this function that native code
+    /// resumes at (see `emit_inline_return_to`)
+    self_sites: Vec<(usize, Label)>,
     sites: Vec<Site>,
     site_start: usize,
     slow_cache: Option<(u32, bool, Label)>,
@@ -3312,6 +3315,7 @@ unsafe fn translate_pass(
         entry,
         jentry,
         resume_exit: vec![None; n],
+        self_sites: Vec::new(),
         sites: Vec::new(),
         site_start: 0,
         slow_cache: None,
@@ -3331,6 +3335,34 @@ unsafe fn translate_pass(
         generic,
         fb,
     };
+    // this function's own CALLs' continuations (not a builtin's fallback
+    // CALL: its continuation is a resume point of its own)
+    {
+        let mut fallback_calls = vec![false; n];
+        let mut calls = Vec::new();
+        let mut j = 0;
+        while j < n {
+            let w = *code.add(j);
+            let o = op_of(w);
+            let len = get_op_length(O::try_from(o).ok()?) as usize;
+            if [O::FastCall, O::FastCall1, O::FastCall2, O::FastCall2K, O::FastCall3].iter().any(|&x| x as u8 == o) {
+                let c = j + 1 + c_of(w) as usize;
+                if c < n {
+                    fallback_calls[c] = true;
+                }
+            }
+            if o == O::Call as u8 || o == O::CallFb as u8 {
+                calls.push((j, len));
+            }
+            j += len;
+        }
+        for (j, len) in calls {
+            let q = j + len;
+            if !fallback_calls[j] && q < n && tr.entry[q] && tr.self_sites.len() < 6 {
+                tr.self_sites.push((tr.pc(q), tr.labels[q]));
+            }
+        }
+    }
     // targets of backward jumps start loops: aligned for steady fetch
     let mut loop_heads = vec![false; n];
     if !dbg_off(128) {
@@ -3792,6 +3824,12 @@ unsafe fn translate_pass(
             if let Some(b) = nargs1.filter(|&b| b >= 1 && b <= 255) {
                 let fbl = tr.a.label();
                 let npc = tr.pc(i + len);
+                // (a call of this function itself: see emit_self_call)
+                if (*tr.p).is_vararg == 0 && (*tr.p).codeentry == (*tr.p).code && tr.entry[0] && tr.resume_exit[0].is_none() && !dbg_off(1 << 27) {
+                    let other = tr.a.label();
+                    emit_self_call(&mut tr.a, (insn & !0x00ff_0000) | ((b as u32) << 16), npc, tr.p, tr.labels[0], other, fbl);
+                    tr.a.bind(other);
+                }
                 emit_inline_call(&mut tr.a, (insn & !0x00ff_0000) | ((b as u32) << 16), npc, fbl, cpath);
                 cchecked = cpath;
                 tr.a.bind(fbl);
@@ -3810,7 +3848,7 @@ unsafe fn translate_pass(
             let nvals1 = if rb != 0 { Some(rb) } else { top_in.and_then(|t| t.checked_sub(ra)).map(|v| v + 1) };
             if let Some(b) = nvals1.filter(|&b| b >= 1 && b <= 255) {
                 let fbl = tr.a.label();
-                emit_inline_return(&mut tr.a, (insn & !0x00ff_0000) | ((b as u32) << 16), fbl);
+                emit_inline_return_to(&mut tr.a, (insn & !0x00ff_0000) | ((b as u32) << 16), fbl, if dbg_off(1 << 28) { None } else { Some((tr.p, &tr.self_sites)) });
                 tr.a.bind(fbl);
             }
             let pc = tr.pc(i);
